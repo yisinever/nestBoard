@@ -2,7 +2,7 @@
  * ID 生成（T1.08 依赖）。
  *
  * 为什么不用 `crypto.randomUUID()` / Node `crypto`：
- * ① 移动端（isDesktopOnly: false）不能引 Node 内置模块；
+ * ① 引 Node 内置模块会把插件绑死在桌面端（`eslint.config.mjs` 也禁止这么做）；
  * ② `randomUUID` 在旧 WebView 上不一定有；
  * ③ 我们需要**单调递增可排序**的 ID（ULID 思路），便于调试与 diff。
  *

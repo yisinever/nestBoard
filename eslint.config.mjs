@@ -3,7 +3,11 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 /**
- * 移动端不可用的模块（对应 manifest.isDesktopOnly = false）。
+ * 移动端不可用的模块。
+ *
+ * ★ 插件现在声明 `isDesktopOnly: true`（2026-09-18），这条限制**刻意保留**：
+ *   代码里本来就没用它们，留着是给"将来放开移动端"留一条护栏 —— 一旦有人
+ *   `import` 了 `fs`，那时再想改回 `false` 就得满仓库找。
  * 需要加密时用 Web API：globalThis.crypto.subtle（见 03 §4）。
  */
 const NODE_ONLY_MODULES = ['fs', 'path', 'os', 'crypto', 'child_process', 'electron'];

@@ -1,10 +1,10 @@
 {
   "id": "nestboard",
   "name": "Nestboard",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "minAppVersion": "1.5.0",
   "description": "Organize notes, images, links, and files on nested visual boards saved as plain files in your vault.",
   "author": "杨开来",
   "authorUrl": "https://github.com/yisinever",
-  "isDesktopOnly": false
+  "isDesktopOnly": true
 }
