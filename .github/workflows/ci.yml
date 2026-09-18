@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 代码风格
+        run: npm run format:check
+
+      - name: 静态检查
+        run: npm run lint
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm run test
+
+      - name: 构建产物
+        run: npm run build
+
+      - name: 移动端守卫 —— 产物中不得出现 Node 内置模块 / electron
+        run: |
+          if grep -nE "require\(\"(node:)?(fs|path|os|crypto|child_process|electron)\"" main.js; then
+            echo "::error file=main.js::产物引用了 Node 内置模块或 electron，移动端会崩溃"
+            exit 1
+          fi
+          echo "OK：main.js 无 Node 内置模块引用"

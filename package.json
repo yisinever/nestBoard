@@ -1,0 +1,46 @@
+{
+  "name": "nestboard",
+  "version": "2.0.1",
+  "description": "Organize notes, images, links, and files on nested visual boards saved as plain files in your vault.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "benchmark": "node scripts/generate-benchmark.mjs",
+    "perf": "node --expose-gc scripts/perf-baseline.mjs",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "whiteboard",
+    "canvas",
+    "notes"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "@types/node": "^20.14.10",
+    "@vitest/coverage-v8": "^2.0.5",
+    "esbuild": "^0.23.0",
+    "eslint": "^9.9.0",
+    "eslint-config-prettier": "^9.1.0",
+    "obsidian": "^1.5.7",
+    "prettier": "^3.3.3",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.0.1",
+    "vitest": "^2.0.5"
+  }
+}

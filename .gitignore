@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+
+# 构建产物（发版时作为 GitHub Release 附件上传，不进仓库）
+main.js
+main.js.map
+*.js.map
+
+# Obsidian 插件运行时数据（设置 / 缓存 / 快照）
+data.json
+.obsidian/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.iml
+.DS_Store
+
+# 测试覆盖率
+coverage/
+
+# Benchmark 生成物（T2.18，按需重新生成）：`npm run benchmark`
+benchmark/

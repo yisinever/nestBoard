@@ -1,0 +1,5 @@
+main.js
+main.js.map
+node_modules
+coverage
+package-lock.json
