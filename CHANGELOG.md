@@ -7,6 +7,24 @@ Nestboard 的所有重要变更都记录在此文件。
 
 ---
 
+## [2.1.2] — 2026-09-18
+
+按 Obsidian 社区目录审核给出的 CSS lint 建议收紧样式，**视觉与行为零变化**：
+
+- **色板卡色号那组规则改用「提高选择器权重」**（作用域提到 `.nestboard-root`）而不是 `!important` ——
+  审核明确要求优先这么写；`(0,3,0)` 已经压得住主题的 `button:focus` 那一档。
+- **两处「两段式兜底」的 `background-color`**（脑图框选虚影 `.nestboard-mind-marquee`、
+  缩略图导航器视口 `.nestboard-minimap__viewport`）改用 `@supports` 包裹现代写法，
+  消除「同一条规则里重复声明」。
+- 色号悬停的下划线由 `text-decoration` 简写改成 `text-decoration-line` +
+  `text-decoration-style` 长写法。
+
+其余 lint 提示为**刻意为之**、代码里都带注释，已在提交的 PR 里逐条回复：工具态光标用
+`*` + `!important` 压住子元素（卡片是 `grab`、缩放手柄是 `nwse-resize`）；`:has` 用于卡片
+状态样式（如白板卡迷你形态）；`clip-path` / `masks` / `scrollbar` 在 Obsidian 实际内核里可用；
+行为类的「库枚举 / 剪贴板 / localStorage」分别是选文件选择器、复制粘贴、读宿主语言 —— 前两者是
+插件本职，后者**只读不写**，插件数据全部走 `loadData` / `saveData`。
+
 ## [2.1.1] — 2026-09-18
 
 - **改为仅桌面端**（`manifest.json` 的 `isDesktopOnly: true`）：移动端至今未实测。与其声明一个

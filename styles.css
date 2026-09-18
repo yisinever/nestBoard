@@ -3920,14 +3920,16 @@
  * 背景色"）。基态与悬停早已是透明（上一批：文字不要有底色），这里再把 `:focus` /
  * `:focus-visible` / `:active` 一并钉死 —— 点一下色号（复制）之后，主题给
  * `button:focus` 的那层底色会留在色号上，看起来就像"色号有了一块背景"。
- * `!important`：这是**主题级**覆盖，不加重量压不住有些主题的 `button` 规则。
+ * ★ 覆盖手法是**提高选择器权重**（作用域提到 `.nestboard-root`）而不是 `!important` ——
+ *   社区审核明确要求优先这么写：`(0,3,0)` 已经压得住主题的 `button:focus` 那一档，
+ *   同时不污染库内其它视图。
  * ★ 与"不要改变这一格色"同一条铁律：底色是色卡唯一的信息，一个像素都不许遮。 */
-.nestboard-swatch-chip,
-.nestboard-swatch-chip:hover,
-.nestboard-swatch-chip:focus,
-.nestboard-swatch-chip:focus-visible,
-.nestboard-swatch-chip:active {
-  background: transparent !important;
+.nestboard-root .nestboard-swatch-chip,
+.nestboard-root .nestboard-swatch-chip:hover,
+.nestboard-root .nestboard-swatch-chip:focus,
+.nestboard-root .nestboard-swatch-chip:focus-visible,
+.nestboard-root .nestboard-swatch-chip:active {
+  background-color: transparent;
   box-shadow: none;
 }
 
@@ -6944,10 +6946,18 @@
   z-index: 6;
   border: 1px solid var(--interactive-accent);
   border-radius: 2px;
-  /* 兜底一句 + 一句现代写法：取得到 `color-mix` 就是半透明的主题色 */
+  /* 兜底：不认 `color-mix` 的内核退回一个固定的半透明蓝 */
   background-color: rgba(128, 128, 255, 0.08);
-  background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
   pointer-events: none;
+}
+
+/* 支持 `color-mix` 就换成真实的主题色。
+ * ★ 用 `@supports` 而不是"同一条规则里把 background-color 写两遍"：效果等价，
+ *   但后者会被 CSS lint 判成 duplicate property（社区审核会把它列出来）。 */
+@supports (background-color: color-mix(in srgb, red, blue)) {
+  .nestboard-mind-marquee {
+    background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  }
 }
 
 /* ── 拖拽（P3-b）─────────────────────────────────────────
@@ -8668,9 +8678,15 @@
   box-sizing: border-box;
   border: 1px solid var(--interactive-accent);
   border-radius: 1px;
-  /* 两段式兜底：不认 `color-mix` 的内核退回透明，仍有一圈描边可用 */
+  /* 兜底：不认 `color-mix` 的内核退回透明，仍有一圈描边可用 */
   background-color: transparent;
-  background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+}
+
+/* 同上：支持 `color-mix` 时铺一层半透明主题色（见 `.nestboard-mind-marquee` 那段注释） */
+@supports (background-color: color-mix(in srgb, red, blue)) {
+  .nestboard-minimap__viewport {
+    background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  }
 }
 
 /* 拖动中给一点手势反馈（`onPointerDown` 里没有额外的类，靠 `:active` 就够） */

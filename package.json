@@ -1,6 +1,6 @@
 {
   "name": "nestboard",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Organize notes, images, links, and files on nested visual boards saved as plain files in your vault.",
   "main": "main.js",
   "private": true,
