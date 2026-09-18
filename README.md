@@ -1,5 +1,95 @@
 # Nestboard
 
+**A nested whiteboard plugin for Obsidian.** Every board is a plain-text `.nboard` file
+(JSON, human-readable) that lives inside your vault — local-only, Git-friendly, and linked
+to your notes.
+
+- **Plugin ID:** `nestboard` · **Display name:** Nestboard
+- **File extension:** `.nboard` (JSON, human-readable)
+- **Platform:** desktop only (`isDesktopOnly: true`). Tested on desktop; mobile is **not**
+  verified yet.
+- **Network:** **no background network activity.** Only two features ever make a request, and
+  both only when you click: *fetch link preview* (on by default) and *map card static image*
+  (off by default). Rendering, exporting and opening boards issue zero requests.
+- **Data:** everything stays inside your vault. No cloud, no account, no telemetry.
+
+## Features
+
+- **Infinite canvas** with pan / zoom and a remembered viewport.
+- **Cards:** sticky note · synced note · note reference (can show a single *section*) · image ·
+  map · file · board card · link (with site name / favicon / final URL) · to-do · swatch ·
+  ink drawing · comment · title · gallery · video · audio.
+- **Connections:** straight or dashed, smart routing that avoids cards, adjustable curve
+  (drag the midpoint), labels, arrowheads, free endpoints. Either end can be a card **or**
+  a column.
+- **Columns:** split / collect / collapse / drag into; convert a whole column into a group;
+  columns work as connection endpoints too.
+- **Nested boards:** breadcrumbs, go-to-parent, back / forward, and four preview modes on a
+  board card (thumbnail / mini / live window / off).
+- **Drawing:** pen, highlighter, and a temporary annotation layer (`⌘⇧A`, `Esc` to clear,
+  never written to disk).
+- **Organize:** undo / redo, marquee select, align, z-order, duplicate, lock, rotate cards.
+- **Search** inside a board (`⌘F`) and filter by type / color / tag.
+- **Version snapshots** with history rollback.
+- **Export** a whole board to Markdown / PNG / PDF / SVG / ZIP / Canvas.
+- **Presentation mode** with a scripted path, per-card camera focus, and `→` / `←` stepping.
+- **Template library:** four built-in templates plus your own.
+- **Board URI:** `obsidian://nestboard?file=…&card=…` — usable from notes, daily notes or
+  other apps.
+- **Home board & inbox:** a default landing spot when you don't want to decide where to put
+  something first.
+- **Board list sidebar:** folder tree / recently opened / by tag, with filters.
+- **Thumbnail navigator:** click or drag to navigate.
+- **Drag & drop:** drop files in, paste images, or use *Add to board* from a note's context menu.
+
+Not implemented yet: the OBS live-streaming set (local read-only HTTP output, transparent
+background, copy-browser-source URL, fixed frame and safe area, per-card *hide while live*,
+pointer highlight, OBS WebSocket control). Presentation mode itself already works with
+full-screen or window capture.
+
+## Installation
+
+Not yet available in the Obsidian community plugin directory (submitted for review).
+Install manually:
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the
+   [latest release](https://github.com/yisinever/nestBoard/releases/latest).
+2. Create the folder `<your vault>/.obsidian/plugins/nestboard/`.
+3. Put the three files into it.
+4. Obsidian → Settings → Community plugins → turn off *Restricted mode* → enable **Nestboard**.
+
+### Build from source
+
+```bash
+npm install
+npm run build   # production build -> main.js
+```
+
+Other scripts: `npm run dev` (watch), `npm run typecheck`, `npm run lint`, `npm test`.
+
+## Getting started
+
+1. Create a board from the command palette or the ribbon (*Create new board*).
+2. Add cards from the left toolbar, by dragging files in, or from the canvas context menu.
+3. Right-click a card or a column for its menu; select a single card to get the quick action
+   bar (bold / italic / underline / text color / background).
+4. Drop a board card onto another board to go one level deeper — the breadcrumb brings you back.
+
+## Privacy
+
+Nestboard has no account, no telemetry and no background requests. The only two networking
+features are per-click: *fetch link preview* (on by default, can be disabled in settings) and
+*map card static image* (off by default; you choose a tile provider and may need your own API
+key). Everything else — rendering, exporting, switching boards — is fully local.
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+## 中文文档
+
 > 把无限画布搬进你的 Vault：一块白板就是一个纯文本 `.nboard` 文件，纯本地、可 Git、可与笔记双链互通。
 
 - 插件 ID：`nestboard` · 显示名：**Nestboard**
