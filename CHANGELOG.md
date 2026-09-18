@@ -7,6 +7,23 @@ Nestboard 的所有重要变更都记录在此文件。
 
 ---
 
+## [2.1.3] — 2026-09-18
+
+按社区目录的源码审核（`eslint-plugin-obsidianmd`）修掉三个 Error，并把 `minAppVersion` 提到 **1.8.7**：
+
+- **`no-unsupported-api`**：代码里 10 处 `app.workspace.revealLeaf(...)` 用的是 Obsidian
+  **1.7.2** 起才有的异步形式。不再回避：`minAppVersion` 1.5.0 → **1.8.7**（同时满足下面
+  用到的 `getLanguage()`，它是 1.8.7 引入的）。
+- **`no-static-styles-assignment`**：31 处 `el.style.xxx = '字面量'` 改成
+  `el.setCssStyles({ xxx: '字面量' })` —— Obsidian 的官方写法，且 `setCssStyles` 没有
+  `@since` 门控，任何版本都能用。
+- **innerHTML**：脑图「大纲 / 树」切换器的图标不再 `seg.innerHTML = 常量SVG`，改由
+  `DOMParser` 解析成节点再 `importNode`（`currentColor` 高亮照旧，弹出窗下也不会串 document）。
+- **`prefer-get-language`**：宿主语言不再读 `window.localStorage.getItem('language')`，改成由
+  `main.ts` 调用官方 `getLanguage()` 注入给 `util/i18n`（那个模块依然一个 obsidian 符号都不碰）。
+- 其余提示（`prefer-create-el` 这种成规模的、`!important` / `:has` 这种刻意为之的、以及
+  settings 声明式 API 的迁移建议）在提交的 PR 里逐条回复，不在本版动。
+
 ## [2.1.2] — 2026-09-18
 
 按 Obsidian 社区目录审核给出的 CSS lint 建议收紧样式，**视觉与行为零变化**：

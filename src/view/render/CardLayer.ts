@@ -616,10 +616,10 @@ export class CardLayer {
     );
     // 栏内滚动的裁剪必须清掉（T2.03）：留着它，下一张用这个节点的卡片
     // 会莫名缺掉一角 —— 而"回收池最脏的那种 bug"就是这种"内容对了但样子不对"
-    element.style.clipPath = '';
+    element.setCssStyles({ clipPath: '' });
     // 旋转也是内联样式（T7.06），同样必须清掉：池里复用的节点带着上一张卡的
     // `rotate()`，下一张会在完全无关的时候歪着出场
-    element.style.transform = '';
+    element.setCssStyles({ transform: '' });
     // 颜色是内联 CSS 变量，回收时必须一并清掉 —— 否则下一张用这个节点的卡片
     // 会先闪一下上一张的颜色（池子复用最容易漏的一类脏数据）
     element.style.removeProperty('--nestboard-card-color');

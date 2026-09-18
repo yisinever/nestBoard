@@ -120,7 +120,7 @@ export class EdgeCurveController {
     this.handle.setAttribute('role', 'button');
     this.handle.setAttribute('aria-label', t('canvas.edgeCurveHandle'));
     this.handle.title = t('canvas.edgeCurveHandle');
-    this.handle.style.display = 'none';
+    this.handle.setCssStyles({ display: 'none' });
     this.listener = (event) => this.beginDrag(event as PointerEvent);
     this.handle.addEventListener('pointerdown', this.listener);
     this.host.appendChild(this.handle);
@@ -169,7 +169,7 @@ export class EdgeCurveController {
     };
     this.place(session);
     this.visible = true;
-    this.handle.style.display = '';
+    this.handle.setCssStyles({ display: '' });
   }
 
   dispose(): void {
@@ -266,7 +266,7 @@ export class EdgeCurveController {
   private hide(): void {
     if (!this.visible) return;
     this.visible = false;
-    this.handle.style.display = 'none';
+    this.handle.setCssStyles({ display: 'none' });
   }
 
   private toWorld(event: { clientX: number; clientY: number }): { x: number; y: number } {

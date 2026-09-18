@@ -6,7 +6,8 @@
  *
  * ★ 依赖约束：本文件**不得** import `obsidian`。
  *   因为 `model/` → `util/` 是允许的依赖方向，而 `model/` 必须零 Obsidian 依赖（03 §7.2）。
- *   语言检测因此走 `window.localStorage`，由 `main.ts` 在启动时调用 `setLocale()`。
+ *   因此宿主语言也由 `main.ts` **注入**（它拿 Obsidian 官方的 `getLanguage()`，
+ *   见 `setHostLanguage`），本文件依旧一个 obsidian 符号都不碰。
  */
 
 export type Locale = 'zh-cn' | 'en';
@@ -3125,20 +3126,23 @@ export function resolveLocale(preference: LanguagePreference, hostLanguage: stri
 }
 
 /**
- * 读宿主的界面语言。**本文件唯一一处碰浏览器 API 的地方**。
+ * 宿主语言（由 `main.ts` 注入）。
  *
- * ★ 只在 `main.ts` 启动 / 设置变更时调用一次，结果交给 `resolveLocale`；
- *   把 IO 与判断分开，`resolveLocale` 才能在 node 下单测
- *   （`03 §7.2`：本文件不得 import `obsidian`，所以拿不到 `moment.locale()`）。
+ * ★ 从前这里是 `window.localStorage.getItem('language')` —— 那是 Obsidian 自己写进
+ *   localStorage 的键。社区审核要求改用官方 `getLanguage()`（Obsidian 1.8.7 起才有），
+ *   而本文件**不得 import obsidian**（见文件头），所以改成「由 `main.ts` 读、往这里塞」：
+ *   纯逻辑留在这边可单测，碰 Obsidian 的那一下留在入口。
  */
+let hostLanguage: string | null = null;
+
+/** `main.ts` 在启动 / 设置变更时调用：把 `getLanguage()` 的结果交给 i18n */
+export function setHostLanguage(language: string | null): void {
+  hostLanguage = language;
+}
+
+/** 读宿主语言（`resolveLocale` / `setLocale('auto')` 用）：见 `setHostLanguage` */
 export function detectHostLanguage(): string | null {
-  try {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem('language');
-  } catch {
-    // 隐私模式下 localStorage 可能直接抛错 —— 拿不到就是"没有宿主语言"，回落英文
-    return null;
-  }
+  return hostLanguage;
 }
 
 /** 等价于"按宿主语言自动检测"（T1.06 起的旧名字，保留以防外部引用） */

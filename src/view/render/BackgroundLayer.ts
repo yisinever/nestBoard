@@ -58,8 +58,8 @@ export class BackgroundLayer {
     if (!Number.isFinite(cell) || cell < MIN_PATTERN_CELL_PX) {
       // 底色保留，只是不画图案（02 §4.3：缩到很小时允许降级）
       this.host.dataset.nestboardPattern = 'off';
-      this.host.style.backgroundSize = '';
-      this.host.style.backgroundPosition = '';
+      this.host.setCssStyles({ backgroundSize: '' });
+      this.host.setCssStyles({ backgroundPosition: '' });
       return;
     }
 
@@ -79,8 +79,8 @@ export class BackgroundLayer {
 
   private reset(): void {
     this.host.removeAttribute('data-nestboard-pattern');
-    this.host.style.backgroundSize = '';
-    this.host.style.backgroundPosition = '';
+    this.host.setCssStyles({ backgroundSize: '' });
+    this.host.setCssStyles({ backgroundPosition: '' });
     this.host.style.removeProperty('--nestboard-dot-radius');
   }
 }

@@ -1174,7 +1174,7 @@ export class MindView extends FileView {
     const marquee = doc.createElement('div');
     marquee.className = 'nestboard-mind-marquee';
     marquee.setAttribute('aria-hidden', 'true');
-    marquee.style.display = 'none';
+    marquee.setCssStyles({ display: 'none' });
     canvas.appendChild(marquee);
     this.marqueeEl = marquee;
     this.contentEl.replaceChildren(canvas);
@@ -1870,7 +1870,7 @@ export class MindView extends FileView {
   private paintMarquee(rect: Rect): void {
     const el = this.marqueeEl;
     if (!el) return;
-    el.style.display = 'block';
+    el.setCssStyles({ display: 'block' });
     el.style.left = `${rect.x}px`;
     el.style.top = `${rect.y}px`;
     el.style.width = `${rect.width}px`;
@@ -1881,7 +1881,7 @@ export class MindView extends FileView {
   private clearMarquee(): void {
     const marquee = this.marquee;
     this.marquee = null;
-    if (this.marqueeEl) this.marqueeEl.style.display = 'none';
+    if (this.marqueeEl) this.marqueeEl.setCssStyles({ display: 'none' });
     if (marquee) this.releasePointer(marquee.pointerId);
   }
 
@@ -2856,9 +2856,9 @@ export class MindView extends FileView {
     this.canvasEl?.classList.add('is-dragging');
     // 连线压暗：拖动期间**模型没动**，连着它的那些线还停在旧位置 ——
     // 不压暗的话，用户看到的是"节点已经飘走了，线还拴在原地"，像坏了
-    if (this.edgeLayerEl) this.edgeLayerEl.style.opacity = '0.25';
+    if (this.edgeLayerEl) this.edgeLayerEl.setCssStyles({ opacity: '0.25' });
     // 关联线同理（`N1`）：模型没动，线还拴在节点原来的位置上
-    if (this.linkLayerEl) this.linkLayerEl.style.opacity = '0.25';
+    if (this.linkLayerEl) this.linkLayerEl.setCssStyles({ opacity: '0.25' });
     this.capturePointer(pending.pointerId);
     this.updateDrag(this.drag, event);
     return true;
@@ -3046,13 +3046,13 @@ export class MindView extends FileView {
     this.clearHoverExpand();
     this.guideLayer?.set(null);
     this.canvasEl?.classList.remove('is-dragging');
-    if (this.edgeLayerEl) this.edgeLayerEl.style.opacity = '';
-    if (this.linkLayerEl) this.linkLayerEl.style.opacity = '';
+    if (this.edgeLayerEl) this.edgeLayerEl.setCssStyles({ opacity: '' });
+    if (this.linkLayerEl) this.linkLayerEl.setCssStyles({ opacity: '' });
     for (const id of drag.nodeIds) {
       const el = this.mounted.get(id);
       if (!el) continue;
       el.classList.remove(DRAGGING_CLASS);
-      el.style.transform = '';
+      el.setCssStyles({ transform: '' });
     }
     this.releasePointer(drag.pointerId);
   }
@@ -3216,13 +3216,13 @@ export class MindView extends FileView {
 
     const ghost = source.cloneNode(true) as HTMLElement;
     ghost.addClass('is-flying');
-    ghost.style.position = 'fixed';
+    ghost.setCssStyles({ position: 'fixed' });
     ghost.style.left = `${from.left}px`;
     ghost.style.top = `${from.top}px`;
     ghost.style.width = `${from.width}px`;
-    ghost.style.margin = '0';
-    ghost.style.pointerEvents = 'none';
-    ghost.style.zIndex = '1000';
+    ghost.setCssStyles({ margin: '0' });
+    ghost.setCssStyles({ pointerEvents: 'none' });
+    ghost.setCssStyles({ zIndex: '1000' });
     source.ownerDocument.body.appendChild(ghost);
 
     const animation = ghost.animate(
@@ -4239,7 +4239,7 @@ export class MindView extends FileView {
     //   这一行的高度、缩进、后面元素的左右边界**一个像素都不会变**（用户反复报的
     //   "光标进去时文字向下动了"这一条，就是靠"不参与布局的输入框 + 继续占位的标题"
     //   从结构上排除掉的 —— 而不是靠对齐属性去凑，那条路已经试过、没用）
-    title.style.visibility = 'hidden';
+    title.setCssStyles({ visibility: 'hidden' });
     title.after(editor.element);
     // ★ 输入框**绝对定位盖在那块位置上**、尺寸照抄（宽度另给一个下限）：它不参与布局，
     //   于是"进出编辑态这一行动不动"不再取决于 `<input>` 的基线 / 主题给的 `min-height`
@@ -5236,7 +5236,7 @@ export class MindView extends FileView {
     if (!titleEl) return;
 
     const editor = buildTitleEditor(holder.ownerDocument, node.text, t('mind.nodeTitle.label'));
-    titleEl.style.display = 'none';
+    titleEl.setCssStyles({ display: 'none' });
     titleEl.after(editor.element);
     this.editing = { nodeId, editor, titleEl };
 
@@ -5347,8 +5347,8 @@ export class MindView extends FileView {
     //   * 画布：`display: none`（节点宽度由影子重算，不再需要这块地方）；
     //   * 大纲：`visibility: hidden`（标题**必须继续占位**，否则行会跳 —— 见那一段的说明）。
     if (editing.titleEl) {
-      editing.titleEl.style.display = '';
-      editing.titleEl.style.visibility = '';
+      editing.titleEl.setCssStyles({ display: '' });
+      editing.titleEl.setCssStyles({ visibility: '' });
     }
     // 同一件事的另一半：编辑态收掉之后宽度也会变（用户可能打了一半又 Esc），
     // 原地重排一次。走 `commit` 那条路时后面还有一次 `render()`，多这一趟不碍事。
@@ -5948,7 +5948,7 @@ export class MindView extends FileView {
     if (!textarea) return;
 
     const grow = (): void => {
-      textarea.style.height = 'auto';
+      textarea.setCssStyles({ height: 'auto' });
       textarea.style.height = `${textarea.scrollHeight}px`;
       this.scheduleRelayout();
     };
@@ -6057,11 +6057,11 @@ export class MindView extends FileView {
     this.handleLayerEl?.replaceChildren();
     if (this.edgeLayerEl) {
       paintEdges(this.edgeLayerEl, []);
-      this.edgeLayerEl.style.opacity = '';
+      this.edgeLayerEl.setCssStyles({ opacity: '' });
     }
     if (this.linkLayerEl) {
       paintLinks(this.linkLayerEl, []);
-      this.linkLayerEl.style.opacity = '';
+      this.linkLayerEl.setCssStyles({ opacity: '' });
     }
     // 连线态与标签编辑也一并收掉（换文件 / 关视图时不该留一条拉了一半的线、
     // 或一个还挂着的输入框）

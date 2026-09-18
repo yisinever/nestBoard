@@ -14,7 +14,7 @@
  * 卡片渲染在 T1.24 `CardLayer`。
  */
 
-import { Notice, Plugin, TFile, TFolder } from 'obsidian';
+import { Notice, Plugin, TFile, TFolder, getLanguage } from 'obsidian';
 import type { TAbstractFile } from 'obsidian';
 import { createNewBoard, registerCommands } from './commands';
 import { createNewMind, registerMindCommands } from './mind/commands';
@@ -78,7 +78,7 @@ import type { ConflictChoice } from './ui/modals/ConflictModal';
 import { debounce } from './util/debounce';
 import type { Debounced } from './util/debounce';
 import { describeError } from './util/errors';
-import { getLocale, setLocale, t } from './util/i18n';
+import { getLocale, setHostLanguage, setLocale, t } from './util/i18n';
 import type { MessageKey } from './util/i18n';
 import { BoardView } from './view/BoardView';
 import { allBoardViews, getActiveBoardView, openBoardView } from './view/BoardViewHost';
@@ -263,6 +263,9 @@ export default class NestboardPlugin extends Plugin {
     this.settings = normalizeSettings(await this.loadData());
     // ★ 语言必须在**任何 `t()` 之前**定下来（T3.23）：下面的 `registerCommands`
     //   会把命令名一次性翻成中文/英文，晚一步就会留下半中半英的命令面板
+    // ★ 宿主语言走 Obsidian 官方的 `getLanguage()`（社区审核要求；插件 minAppVersion
+    //   1.8.7 起提供），在入口读一次注入给 i18n —— 那个模块本身不碰 obsidian
+    setHostLanguage(getLanguage());
     setLocale(this.settings.language);
 
     this.vaultIO = new ObsidianVaultIO(this.app);
@@ -743,6 +746,9 @@ export default class NestboardPlugin extends Plugin {
     // ★ 语言（T3.23）：`setLocale` 会重新解析（`auto` 就是现场再读一次 Obsidian 语言）。
     //   只有**真的换了语言**才值得让视图重画文案 —— 否则用户每调一次圆角，
     //   所有打开的视图都要重排一遍工具栏与菜单。
+    // ★ 重新注入一次宿主语言：用户可能刚在 Obsidian 里换掉界面语言，`auto` 那一档
+    //   要读到新的值（见 `setHostLanguage`）
+    setHostLanguage(getLanguage());
     const localeChanged = setLocale(this.settings.language) !== previousLocale;
     this.refreshLocalizedChrome(localeChanged);
 

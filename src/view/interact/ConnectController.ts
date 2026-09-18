@@ -134,7 +134,7 @@ export class ConnectController {
       anchor.className = 'nestboard-connect-anchor';
       anchor.setAttribute(ANCHOR_SIDE_ATTR, side);
       anchor.setAttribute('aria-hidden', 'true');
-      anchor.style.display = 'none';
+      anchor.setCssStyles({ display: 'none' });
       const listener: EventListener = (event) => this.beginConnect(side, event as PointerEvent);
       anchor.addEventListener('pointerdown', listener);
       this.anchorBindings.push({ anchor, listener });
@@ -284,7 +284,7 @@ export class ConnectController {
       // 居中靠 CSS 的 translate(-50%, -50%)，这里只写左上角落点
       anchor.style.left = `${screen.x}px`;
       anchor.style.top = `${screen.y}px`;
-      anchor.style.display = '';
+      anchor.setCssStyles({ display: '' });
     }
     this.hoveredEndpointId = endpointId;
   }
@@ -292,7 +292,7 @@ export class ConnectController {
   private hideAnchors(): void {
     if (this.hoveredEndpointId === null) return;
     this.hoveredEndpointId = null;
-    for (const anchor of this.anchors.values()) anchor.style.display = 'none';
+    for (const anchor of this.anchors.values()) anchor.setCssStyles({ display: 'none' });
   }
 
   // ── 预览 ─────────────────────────────────────────────────
