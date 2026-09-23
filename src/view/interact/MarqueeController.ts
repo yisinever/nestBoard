@@ -72,6 +72,23 @@ export interface SelectionInput {
   edges?: Iterable<string>;
   /** 选中的分栏 id（T1.54）。**省略 = 空** —— 与卡片一样，框选会整体替换选区 */
   columns?: Iterable<string>;
+  /**
+   * 选中的**节点**（`2.2.0` 收尾 · 节点级框选），键 = `nodeEndpointKey(mindId, nodeId)`。
+   * 省略 = 空。
+   *
+   * ★ 与 `minds` 是**两种粒度、互斥**：框住一棵树的一部分节点得到的是这些节点，
+   *   框住整棵（或只擦过它的外框）得到的才是那棵树。
+   */
+  mindNodes?: Iterable<string>;
+  /**
+   * 选中的**脑图** id（`2.2.0` 批 5）。省略 = 空。
+   *
+   * ★ 这是**整棵**那一档（`2.2.0` 批 5）。节点级那一档见 {@link SelectionInput.mindNodes}：
+   *   两者互斥 —— 框到节点的树不会整棵进选区（`MarqueeController.update` 那条规则）。
+   * ★ 与卡片 / 分栏**可以共存**：框住"两棵树 + 几张贴在旁边的卡"是一次合法选区
+   *   （`Delete` 一次删干净、一步撤销），与 `columns` 那条注释同源。
+   */
+  minds?: Iterable<string>;
 }
 
 function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -97,14 +114,42 @@ export class SelectionModel {
    *   `⌘G` 把两栏各收成一个组、松散卡片收成另一个组（一次提交、一步撤销）。
    */
   private readonly columns = new Set<string>();
+  /**
+   * 选中的**脑图**（`2.2.0` 批 5）。与分栏同一条：框选可以一次框住好几棵。
+   *
+   * ★ 点选那条路（`selectColumn` 那种"收敛成唯一一个"）这里**不做**：
+   *   点一棵树的节点是**节点级**手势（选中节点 → 底部快捷栏），整棵的入口是
+   *   **框选**与 `⌘A`，再加上根节点菜单里那一项「删除整棵脑图」——
+   *   多做一个"点空白处的根节点 = 选中整棵"的入口只会与"拖根节点 = 挪整棵"打架。
+   */
+  private readonly minds = new Set<string>();
+  /**
+   * 选中的**节点**（`2.2.0` 收尾 · 节点级框选）—— 键用 {@link nodeEndpointKey}
+   * （`mindId::nodeId`），与连线端点表、过滤表**同一把键**。
+   *
+   * ★ 节点的"归属"有两层（哪棵树 + 树里哪个节点），所以不能只存 nodeId：
+   *   两棵树里各有一个叫 `n_1` 的节点是常态（id 只在树内唯一）。
+   * ★ 与 `minds` **互斥**（同一个框里）：框到节点的那些树**不整棵进选区**
+   *   （见 `MarqueeController.update` 里那条规则）—— 否则"我只要这几个节点"
+   *   会顺带把整棵树也选中，`Delete` 一按就是删一整棵。
+   */
+  private readonly mindNodes = new Set<string>();
   private readonly listeners = new Set<() => void>();
 
   get isEmpty(): boolean {
-    return this.cards.size === 0 && this.edges.size === 0 && this.columns.size === 0;
+    return (
+      this.cards.size === 0 &&
+      this.edges.size === 0 &&
+      this.columns.size === 0 &&
+      this.minds.size === 0 &&
+      this.mindNodes.size === 0
+    );
   }
 
   get size(): number {
-    return this.cards.size + this.edges.size + this.columns.size;
+    return (
+      this.cards.size + this.edges.size + this.columns.size + this.minds.size + this.mindNodes.size
+    );
   }
 
   /** 选中卡片 id（**活引用**，渲染层可直接缓存） */
@@ -119,6 +164,28 @@ export class SelectionModel {
   /** 选中分栏 id（**活引用**） */
   get columnIds(): ReadonlySet<string> {
     return this.columns;
+  }
+
+  /** 选中脑图 id（**活引用**）。图层（`MindLayer.setSelection`）直接缓存它 */
+  get mindIds(): ReadonlySet<string> {
+    return this.minds;
+  }
+
+  hasMind(id: string): boolean {
+    return this.minds.has(id);
+  }
+
+  /**
+   * 选中节点（**活引用**，`MindLayer.setNodeSelection` 直接缓存它）。
+   *
+   * 键 = {@link nodeEndpointKey}（`mindId::nodeId`）。
+   */
+  get mindNodeKeys(): ReadonlySet<string> {
+    return this.mindNodes;
+  }
+
+  hasMindNode(key: string): boolean {
+    return this.mindNodes.has(key);
   }
 
   /** 唯一选中的分栏；没有 / 不止一个时 `null` */
@@ -151,12 +218,19 @@ export class SelectionModel {
       this.columns.size === 1 &&
       this.columns.has(id) &&
       this.cards.size === 0 &&
-      this.edges.size === 0
+      this.edges.size === 0 &&
+      this.minds.size === 0
     ) {
       return false;
     }
     this.cards.clear();
     this.edges.clear();
+    // ★ 脑图也要一起清（`2.2.0` 批 5）：不清就会留下"分栏被选中、同时一棵树也亮着"——
+    //   而 `Delete` 会把两样都删掉。点分栏是一个"我要动这一栏"的手势，
+    //   与"点一张卡会把别的都放下"是同一条语义（见本方法上面那条注释）。
+    this.minds.clear();
+    // 节点级那一档同理（`2.2.0` 收尾 · 节点级框选）
+    this.mindNodes.clear();
     this.columns.clear();
     this.columns.add(id);
     this.emit();
@@ -172,10 +246,14 @@ export class SelectionModel {
     const nextCards = input.cards ? new Set(input.cards) : new Set<string>();
     const nextEdges = input.edges ? new Set(input.edges) : new Set<string>();
     const nextColumns = input.columns ? new Set(input.columns) : new Set<string>();
+    const nextMinds = input.minds ? new Set(input.minds) : new Set<string>();
+    const nextMindNodes = input.mindNodes ? new Set(input.mindNodes) : new Set<string>();
     if (
       sameIdSet(this.cards, nextCards) &&
       sameIdSet(this.edges, nextEdges) &&
-      sameIdSet(this.columns, nextColumns)
+      sameIdSet(this.columns, nextColumns) &&
+      sameIdSet(this.minds, nextMinds) &&
+      sameIdSet(this.mindNodes, nextMindNodes)
     ) {
       return false;
     }
@@ -185,6 +263,8 @@ export class SelectionModel {
     // ★ `set()` 是"整体替换"：框选每帧都会调它，不在这里清掉分栏的话，
     //   一次框选过后分栏会一直保持选中（而用户眼里选区早就换成框里的卡片了）
     replace(this.columns, nextColumns);
+    replace(this.minds, nextMinds);
+    replace(this.mindNodes, nextMindNodes);
     this.emit();
     return true;
   }
@@ -195,6 +275,8 @@ export class SelectionModel {
     this.cards.clear();
     this.edges.clear();
     this.columns.clear();
+    this.minds.clear();
+    this.mindNodes.clear();
     this.emit();
     return true;
   }
@@ -211,6 +293,8 @@ export class SelectionModel {
     this.cards.clear();
     this.edges.clear();
     this.columns.clear();
+    this.minds.clear();
+    this.mindNodes.clear();
   }
 
   private emit(): void {
@@ -267,12 +351,44 @@ export interface MarqueeControllerOptions {
    *   位置由栏算出来、还能被收起来的卡片。
    */
   columnsIn?: (worldRect: Rect) => string[];
+  /**
+   * 框选时与脑图有关的结果（`2.2.0` 批 5 / 收尾）。
+   *
+   * ★ **两种粒度**（`2.2.0` 收尾 · 节点级框选）：
+   *   * `nodes`：框住的那几个**节点**（键 = `nodeEndpointKey`）—— 用户想要的
+   *     "只要这几个节点"；
+   *   * `minds`：**整棵**进选区的那些树 —— 框住整棵（节点全在框里），
+   *     或只擦过树的空白处（一个节点都没框到）。
+   *   两者互斥，**判在 `MindLayer` 里**（只有它知道每棵树有几个节点、各在哪）。
+   * ★ 不传 = 框选不选脑图（老调用方一行都不用改）。
+   */
+  mindsIn?: (worldRect: Rect) => MarqueeMindHits;
+  /**
+   * 全部脑图 id（`⌘A` 用）。与 `mindsIn` 分开：`⌘A` 是"整块板"，不是"框里那些"。
+   * ★ 脑图这边**没有**"栏内卡片不参与"那种例外：它不属于任何容器，永远在画布上。
+   */
+  allMinds?: () => string[];
+}
+
+/** 框选与脑图相交的结果：整棵进选区的树 + 节点级选中的那几颗（`2.2.0` 收尾） */
+export interface MarqueeMindHits {
+  /** 整棵进选区的树 id */
+  minds: readonly string[];
+  /** 节点级选中的键（`nodeEndpointKey(mindId, nodeId)`） */
+  nodes: readonly string[];
 }
 
 interface DragState {
   readonly start: Point;
   /** Shift 加选时按下瞬间的已有选区；`null` = 没按 Shift */
-  readonly base: { cards: Set<string>; edges: Set<string>; columns: Set<string> } | null;
+  readonly base: {
+    cards: Set<string>;
+    edges: Set<string>;
+    columns: Set<string>;
+    minds: Set<string>;
+    /** 节点级选中（`2.2.0` 收尾）：键 = `nodeEndpointKey` */
+    mindNodes: Set<string>;
+  } | null;
   /** 是否越过了位移阈值（越过才算"框选"，否则是"点击空白"） */
   active: boolean;
 }
@@ -289,6 +405,8 @@ export class MarqueeController {
   private readonly hitEdge: ((screen: Point) => string | null) | undefined;
   private readonly edgesIn: ((worldRect: Rect) => string[]) | undefined;
   private readonly columnsIn: ((worldRect: Rect) => string[]) | undefined;
+  private readonly mindsIn: ((worldRect: Rect) => MarqueeMindHits) | undefined;
+  private readonly allMinds: (() => string[]) | undefined;
 
   private drag: DragState | null = null;
   /** 最近一次的指针屏幕坐标，用于视口变化时按同样大小重画 */
@@ -308,6 +426,8 @@ export class MarqueeController {
     this.hitEdge = options.hitEdge;
     this.edgesIn = options.edgesIn;
     this.columnsIn = options.columnsIn;
+    this.mindsIn = options.mindsIn;
+    this.allMinds = options.allMinds;
 
     this.listen('pointerdown', (event) => this.onPointerDown(event as PointerEvent));
     this.listen('pointermove', (event) => this.onPointerMove(event as PointerEvent));
@@ -328,10 +448,14 @@ export class MarqueeController {
    * ★ 与框选**同一套"能选中谁"**（用户 2026-09-16："`⌘A` 做到一致"）：栏内卡片不参与
    *   —— 它们的坐标由栏算出来、栏一收起就看不见，选中之后按 `Delete` 会删掉一屏
    *   看不见的东西（框选那条路早就这么防着，`⌘A` 之前漏了）。
+   * ★ 脑图（`2.2.0` 批 5）**全部参与**：它不属于任何栏，也没有"收起来看不见"这回事。
    */
   selectAll(): boolean {
     return this.selection.set({
       cards: marqueeSelectableCards(this.getCards()).map((card) => card.id),
+      // ★ 脑图也在"整块白板"里（`2.2.0` 批 5）：不补这一笔，`⌘A` 之后按 Delete
+      //   会留下画布上那一棵棵树 —— 而用户刚刚明明"全选"了。
+      minds: this.allMinds?.() ?? [],
     });
   }
 
@@ -378,6 +502,8 @@ export class MarqueeController {
             cards: new Set(this.selection.cardIds),
             edges: new Set(this.selection.edgeIds),
             columns: new Set(this.selection.columnIds),
+            minds: new Set(this.selection.mindIds),
+            mindNodes: new Set(this.selection.mindNodeKeys),
           }
         : null,
       active: false,
@@ -469,9 +595,20 @@ export class MarqueeController {
     const columns = drag.base ? new Set(drag.base.columns) : new Set<string>();
     if (this.columnsIn) for (const id of this.columnsIn(worldRect)) columns.add(id);
 
-    // ★ 三类必须**同一次** `set()` 给出：`set()` 是整体替换，
+    // 脑图（`2.2.0` 批 5 / 收尾）：**两种粒度**一起给 —— 整棵进选区的树，以及
+    // 框住的那几个节点。判据由 `MindLayer` 给（它才知道每棵树有几个节点、各在哪），
+    // 本控制器只负责把两边都放进选区。
+    const minds = drag.base ? new Set(drag.base.minds) : new Set<string>();
+    const mindNodes = drag.base ? new Set(drag.base.mindNodes) : new Set<string>();
+    if (this.mindsIn) {
+      const hits = this.mindsIn(worldRect);
+      for (const id of hits.minds) minds.add(id);
+      for (const key of hits.nodes) mindNodes.add(key);
+    }
+
+    // ★ 五类必须**同一次** `set()` 给出：`set()` 是整体替换，
     //   分两次调用的话后一次会把前一次的选中清空
-    this.selection.set({ cards, edges, columns });
+    this.selection.set({ cards, edges, columns, minds, mindNodes });
 
     // 整层重画：选框只有一条，维护脏区不划算（T1.28 的 `beginFrame` 就是为此而生）
     this.overlay.beginFrame();
@@ -495,6 +632,7 @@ export class MarqueeController {
         cards: drag.base.cards,
         edges: drag.base.edges,
         columns: drag.base.columns,
+        minds: drag.base.minds,
       });
     } else {
       this.selection.clear();

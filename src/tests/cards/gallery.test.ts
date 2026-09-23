@@ -80,8 +80,12 @@ describe('galleryCard 定义', () => {
     const one = cardsForDropPaths(['a.png'], [{ x: 0, y: 0 }]);
     expect(one.map((card) => card.type)).toEqual(['image']);
 
-    const mixed = cardsForDropPaths(['a.png', 'doc.pdf'], [{ x: 0, y: 0 }]);
+    const mixed = cardsForDropPaths(['a.png', 'doc.docx'], [{ x: 0, y: 0 }]);
     expect(mixed.map((card) => card.type)).toEqual(['image', 'file']);
+
+    // `.pdf` 有自己的**预览卡**（`F8`），不是文件卡 —— 但它同样不该被塞进图集
+    const withPdf = cardsForDropPaths(['a.png', 'doc.pdf'], [{ x: 0, y: 0 }]);
+    expect(withPdf.map((card) => card.type)).toEqual(['image', 'pdf']);
   });
 
   it('导出成 Markdown：一组内嵌，顺序就是卡面上的顺序', () => {

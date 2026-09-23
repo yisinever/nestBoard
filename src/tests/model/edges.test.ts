@@ -43,12 +43,19 @@ import {
   removeEdges,
   segmentIntersectsRect,
   shrinkPolylineEnd,
+  setEdgeEndpoint,
   updateEdges,
   type AnchorSide,
   type RectLookup,
 } from '../../model/edges';
 import { columnDisplayHeight } from '../../model/columns';
-import { createBoardFile, createCard, createColumn, createEdge } from '../../model/factories';
+import {
+  createBoardFile,
+  createCard,
+  createColumn,
+  createEdge,
+  createMind,
+} from '../../model/factories';
 import type { BoardFile, Column, Edge } from '../../model/schema';
 import type { Point, Rect } from '../../util/geometry';
 
@@ -1144,6 +1151,71 @@ describe('polylineEndDirections / shrinkPolylineEnd', () => {
       { x: 9, y: 0 },
       { x: 91, y: 0 },
     ]);
+  });
+});
+
+/**
+ * 端点重拖（`2.2.0` · O1）。
+ *
+ * ★ 合法性规则必须与 `addEdges` **同一套**：改端点这条路比"拉新线"宽一点的话，
+ *   用户就能用重拖做出拉不出来的线（两条一模一样的线、自环、指向虚空）——
+ *   这些缺陷在界面上都表现为"线不对劲"，而很难反推到是哪一步允许的。
+ */
+describe('setEdgeEndpoint · 改连线端点（2.2.0 · O1）', () => {
+  function boardWithEdge(): BoardFile {
+    const board = createBoardFile();
+    board.cards = [createCard('note', { id: 'a' }), createCard('note', { id: 'b' })];
+    board.edges = [createEdge({ cardId: 'a', side: null }, { cardId: 'b', side: null })];
+    return board;
+  }
+
+  it('★ 把一端改到另一个对象上（并自动选边：`side: null`）', () => {
+    const board = boardWithEdge();
+    board.cards.push(createCard('note', { id: 'c' }));
+
+    expect(setEdgeEndpoint(board, board.edges[0].id, 'to', { key: 'c', side: null })).toBe(true);
+    expect(board.edges[0].to).toEqual({ cardId: 'c', side: null });
+  });
+
+  it('★ 改到**脑图节点**上：`cardId` 是脑图、`nodeId` 是那个节点', () => {
+    const board = boardWithEdge();
+    const mind = { ...createMind(), id: 'nm1' };
+    board.minds = [mind];
+
+    expect(
+      setEdgeEndpoint(board, board.edges[0].id, 'to', { key: 'nm1', side: null, nodeId: 'n_a' }),
+    ).toBe(true);
+    expect(board.edges[0].to).toEqual({ cardId: 'nm1', side: null, nodeId: 'n_a' });
+  });
+
+  it('★ 改成**自由端**：端点留在松手的地方', () => {
+    const board = boardWithEdge();
+    expect(
+      setEdgeEndpoint(board, board.edges[0].id, 'to', { key: null, point: { x: 120, y: 40 } }),
+    ).toBe(true);
+    expect(board.edges[0].to).toEqual({ cardId: '', side: null, point: { x: 120, y: 40 } });
+  });
+
+  it('★ 自环、指向不存在的对象、完全重复：都返回 `false` 且一个字节不动', () => {
+    const board = boardWithEdge();
+    const edge = board.edges[0];
+
+    // 自环：把 `to` 改到 `from` 那同一个对象上
+    expect(setEdgeEndpoint(board, edge.id, 'to', { key: 'a', side: null })).toBe(false);
+    // 指向不存在的对象
+    expect(setEdgeEndpoint(board, edge.id, 'to', { key: 'c_没有', side: null })).toBe(false);
+    // 与已有连线完全重复
+    board.cards.push(createCard('note', { id: 'c' }));
+    board.edges.push(createEdge({ cardId: 'a', side: null }, { cardId: 'c', side: null }));
+    expect(setEdgeEndpoint(board, edge.id, 'to', { key: 'c', side: null })).toBe(false);
+
+    expect(edge.to).toEqual({ cardId: 'b', side: null });
+    expect(board.edges).toHaveLength(2);
+  });
+
+  it('没变化（拖回原处）⇒ `false`，不产生历史', () => {
+    const board = boardWithEdge();
+    expect(setEdgeEndpoint(board, board.edges[0].id, 'to', { key: 'b', side: null })).toBe(false);
   });
 });
 

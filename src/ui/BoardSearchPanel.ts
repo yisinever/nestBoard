@@ -254,7 +254,9 @@ export class BoardSearchPanelView extends ItemView {
     );
 
     row.addEventListener('click', () => {
-      void this.openBoard(hit.boardPath, hit.cardId);
+      // 命中的是脑图节点 ⇒ 定位到那个节点（`2.2.0` 批 4）
+      if (hit.mind) void this.openBoardAtMindNode(hit.boardPath, hit.mind);
+      else void this.openBoard(hit.boardPath, hit.cardId);
     });
 
     return row;
@@ -271,6 +273,15 @@ export class BoardSearchPanelView extends ItemView {
   private async openBoard(path: string, cardId?: string): Promise<void> {
     const view = await openBoardView(this.app, path);
     if (view && cardId !== undefined) view.revealCardById(cardId);
+  }
+
+  /** 同上，但落点是**脑图里的某个节点** */
+  private async openBoardAtMindNode(
+    path: string,
+    target: { mindId: string; nodeId: string },
+  ): Promise<void> {
+    const view = await openBoardView(this.app, path);
+    view?.revealMindNodeById(target.mindId, target.nodeId);
   }
 }
 

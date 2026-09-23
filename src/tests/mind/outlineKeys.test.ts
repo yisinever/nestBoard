@@ -21,6 +21,22 @@ const key = (
   altKey: mods.alt === true,
 });
 
+// ── `←` / `→` = 跳父 / 子（`O3`，用户 2026-09-21 追加）────────────
+
+describe('大纲键位 · 左右跳父子（`O3`）', () => {
+  it('★ `←` = 跳到父、`→` = 跳到第一个子', () => {
+    expect(outlineKeyActionOf(key('ArrowLeft'))).toEqual({ kind: 'jump', to: 'parent' });
+    expect(outlineKeyActionOf(key('ArrowRight'))).toEqual({ kind: 'jump', to: 'child' });
+  });
+
+  it('★ 带修饰键的左右一律不接（`⌥←/→` 按词移光标、`⌘←/→` 行首行尾、`⇧←/→` 不占多选）', () => {
+    expect(outlineKeyActionOf(key('ArrowLeft', { meta: true }))).toEqual({ kind: 'none' });
+    expect(outlineKeyActionOf(key('ArrowRight', { alt: true }))).toEqual({ kind: 'none' });
+    expect(outlineKeyActionOf(key('ArrowLeft', { shift: true }))).toEqual({ kind: 'none' });
+    expect(outlineKeyActionOf(key('ArrowRight', { ctrl: true }))).toEqual({ kind: 'none' });
+  });
+});
+
 describe('大纲键位 · 结构与编辑（对齐幕布）', () => {
   it('`Enter` = 新建同级；`⌥⏎` = 新建子级；`⇧Tab` = 提升一级', () => {
     expect(outlineKeyActionOf(key('Enter'))).toEqual({ kind: 'structure', to: 'sibling' });

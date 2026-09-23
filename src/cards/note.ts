@@ -6,7 +6,19 @@
  * | 模式 | 渲染 | 进入方式 |
  * |---|---|---|
  * | `display` | Obsidian Markdown 渲染（双链、标签、代码块、内嵌全都原生生效） | 默认 |
- * | `edit` | `MiniMarkdownEditor`（行首快捷输入 + 列表续行），`Esc` / `⌘Enter` / 失焦提交 | 双击卡片 |
+ * | `edit` | `MiniMarkdownEditor`（行首快捷输入 + 列表续行 + `⌘B`/`⌘I` + 粘图 + `[[` 补全），`Esc` / `⌘Enter` / 失焦提交 | 双击卡片 |
+ *
+ * ── `F5`（用户 2026-09-21）：卡内编辑**只有正文**，与文档节点同款 ──
+ *
+ * ★ 便签卡与引用卡（`.md` 文档节点）在"怎么改内容、怎么改标题"上**必须是同一套**
+ *   （用户原话："不能是'一个能干的另一个干不了'"）：
+ *   * **内容** = 正文编辑器（`MiniMarkdownEditor`）—— 编辑态里**没有标题那一格**；
+ *   * **标题** = 卡面那一行的就地输入（`BoardView.editCardTitle` → `CardLayer.editTitle`，
+ *     也就是右键「编辑标题」那一项；双击标题行也走它）。
+ * ★ 从前这里是"标题框 + 正文框两格"（`O22`），本次按上面那条口径**收掉了标题框**：
+ *   两格意味着"进内容编辑就顺带进标题编辑"，而文档节点那边标题根本不在编辑器里
+ *   —— 这正是当初说的"两个半套"。想改标题仍有明确的入口（见上），而且输入框就长在
+ *   **标题那一行上**（那条反馈的落点没变，只是入口从"双击进两格"换成了"双击标题行"）。
  *
  * ── 深色变体（`O06`） ──────────────────────────────────────
  *
@@ -97,7 +109,7 @@ export const noteCard: CardTypeDefinition<'note'> = {
     // 深色变体（`O06`）：这个类只画"内容槽"，卡片外壳（底色 / 标题行 / 分隔线）
     // 由样式表用 `:has(> .nestboard-card-content.is-dark)` 反选过去 —— 见文件头的第 2 条
     el.classList.toggle('is-dark', card.content.variant === 'dark');
-    if (ctx.mode === 'edit') renderNoteEditor(el, card.title, card.content.md, ctx);
+    if (ctx.mode === 'edit') renderNoteEditor(el, card.content.md, ctx);
     else renderNotePreview(el, card.content.md, ctx);
   },
 
@@ -105,13 +117,14 @@ export const noteCard: CardTypeDefinition<'note'> = {
    * 节点被回收进复用池前的清理。
    * 这里删掉的每个 class，`render()` 里都加过一次 —— 漏一个，
    * 下一位租客（可能是图片卡）就会继承便签的样式。
+   *
+   * ★ `F5` 起**不必**再收"标题栏上的编辑残留"：编辑态里已经没有标题框了
+   *   （标题编辑走 `CardLayer.editTitle`，它自己摘输入框、`CardLayer.resetNode`
+   *   也会兜一遍 —— 见本文件文件头那段）。
    */
   destroy(el: HTMLElement): void {
     el.classList.remove(...NOTE_CLASSES);
     delete el.dataset.placeholder;
-    // ★ 标题栏上的编辑残留也要收：输入框现在长在**标题栏**里（不在这个内容槽里），
-    //   不清的话复用池的下一位租客会看到标题那一行被藏起来、还杵着一个输入框
-    clearNoteTitleBand(el);
   },
 
   toMarkdown(card): string {
@@ -142,207 +155,31 @@ export function renderNotePreview(el: HTMLElement, md: string, ctx: CardRenderCo
 }
 
 /**
- * 便签的**编辑态**渲染（O22 重做：标题框 + 正文框两格，参考待办卡）。
+ * 便签的**编辑态**渲染：整块内容槽交给 `MiniMarkdownEditor`（`F5`，用户 2026-09-21：
+ * 与文档节点——也就是引用卡——同款）。
  *
- * | 入口 | 编辑态 | 收口 |
- * |---|---|---|
- * | 双击 / `Enter`（`editEntry !== 'raw'`） | 上面标题框、下面正文编辑器 | 两格合并成**一次**写回 |
- * | `⌘`+双击 / 右键「编辑内容」（`'raw'`） | 只有正文编辑器（老样子） | 只写正文 |
- *
- * ★ `submit` 可替换：同步便签（`cards/syncNote.ts`，T7.04）提交时正文要写回**整组**，
- *   于是它把自己的收口传进来。不给则退回便签卡默认（`ctx.updateCard`，一次写回标题 + 正文）。
+ * ★ 这里**没有标题那一格**（`O22` 的"标题框 + 正文框两格"已按上面那条口径收掉）：
+ *   标题是卡面那一行的字，改它走 `BoardView.editCardTitle`（右键「编辑标题」，
+ *   双击卡面标题行也走它）—— 与引用卡（`.md` 文档节点）完全同一条路。
+ * ★ 所有入口（双击 / `⌘`+双击 / `Enter` / 右键「编辑内容」/ 快捷操作栏）都是这一条：
+ *   `ctx.editEntry` 对便签不再有分支意义（它仍给待办卡那种"标题 + 正文两格"的类型用）。
+ * ★ `submit` 可替换：同步便签（`cards/syncNote.ts`，T7.04）的正文要写回**整组**，
+ *   于是它把自己的收口传进来。不给则退回单卡写回（`ctx.updateContent`）。
  */
 export function renderNoteEditor(
   el: HTMLElement,
-  title: string,
   md: string,
   ctx: CardRenderContext,
-  submit?: (patch: { title?: string; md?: string }) => void,
+  submit?: (md: string) => void,
 ): void {
   el.classList.add('nestboard-note-edit');
-
-  // 收口：把"标题 + 正文"合并成一次写回（`ctx.updateCard`）——两格各自写会在第一笔
-  // 之后触发重绘、把这次编辑还没结束的另一格现场丢掉（见 registry 的 `updateCard`）
-  const write =
-    submit ??
-    ((patch: { title?: string; md?: string }) => {
-      ctx.updateCard({
-        title: patch.title,
-        content: patch.md === undefined ? undefined : { md: patch.md },
-      });
-    });
-
-  // `⌘`+双击 / 右键「编辑内容」：跳过标题，直接给正文（O01/O02）
-  if (ctx.editEntry === 'raw') {
-    new MiniMarkdownEditor({
-      host: el,
-      value: md,
-      onSubmit: (value) => write({ md: value }),
-      onExit: () => ctx.setMode('display'),
-    }).focus();
-    return;
-  }
-
-  renderNoteSplitEditor(el, title, md, ctx, write);
-}
-
-/**
- * 便签的**两格编辑态**（O22）：上面一个标题框，下面一块正文编辑器 —— 与待办卡
- * （`cards/todo.ts` 的 `renderSplitEditor`）同一套交互，标题与正文可以分别编辑。
- *
- * ── 两格怎么收口（同待办卡）────────────────────────────────
- *
- * 标题先在 DOM 里待着，等这次编辑真正结束时跟正文**合并成一次写回**（`write`）——
- * `ctx.updateCard` 的既有约定是"写入 = 这次编辑的终点"，所以"敲完标题按 `Enter`
- * 去正文"这一步不能提交标题（那会把正文那格一起拆掉）。
- *
- * | 收口 | 谁提交 |
- * |---|---|
- * | 焦点离开卡片 | 富余的一方（两格都提，一次写回） |
- * | 正文里 `⌘Enter` / `Esc` | 正文编辑器 |
- * | 标题框里 `Esc` | 只提正文（放弃的是**这一格**） |
- * | 焦点在两格之间换 | 谁都不提（`keepEditingOnBlur` 放行） |
- *
- * ★ 标题的权威是**标题框**：便签的标题是 `card.title`，正文里手写的 `# 标题`
- *   只是普通正文。
- */
-function renderNoteSplitEditor(
-  el: HTMLElement,
-  title: string,
-  md: string,
-  ctx: CardRenderContext,
-  write: (patch: { title?: string; md?: string }) => void,
-): void {
-  const doc = el.ownerDocument;
-
-  const input = doc.createElement('input');
-  input.type = 'text';
-  input.className = 'nestboard-note-title-input';
-  input.value = title;
-  input.placeholder = t('card.title.placeholder');
-  input.setAttribute('aria-label', t('card.title.placeholder'));
-
-  const bodyHost = doc.createElement('div');
-  bodyHost.className = 'nestboard-note-body-edit';
-
-  /**
-   * 标题框放哪 —— **优先放进标题栏**。
-   *
-   * ★ 用户 2026-09-16 反馈："编辑时，双击标题部分，输入框却在下方正文部分。"
-   *   原先两格都塞在内容槽里、还把整条标题栏藏掉了（`.nestboard-card:has(…)` 那条），
-   *   于是"改标题"看起来像"改正文" —— 连右键「编辑内容」（`raw`，只给正文）也显得在改标题。
-   *   标题是那一行的字，输入框就该长在那一行上。
-   * ★ 拿不到标题栏（单测里的裸元素、将来别的宿主）就退回老办法：两格摞在内容槽里 ——
-   *   宁可位置不对，也不能出现两个输入框或一个都没有。
-   */
-  const band = titleBandOf(el);
-  if (band) {
-    band.classList.add('is-editing-note-title');
-    band.appendChild(input);
-    el.replaceChildren(bodyHost);
-  } else {
-    el.replaceChildren(input, bodyHost);
-  }
-
-  /** 把标题栏还给骨架（`CardLayer` 下一帧会把标题文字写回去） */
-  const restoreBand = (): void => {
-    if (!band) return;
-    band.classList.remove('is-editing-note-title');
-    input.remove();
-  };
-
-  /** 收工：先把标题栏还原，再回显示态（顺序反了的话骨架那一帧会看到残留的输入框） */
-  const leave = (): void => {
-    restoreBand();
-    ctx.setMode('display');
-  };
-
-  const editor = new MiniMarkdownEditor({
-    host: bodyHost,
+  new MiniMarkdownEditor({
+    host: el,
     value: md,
-    // 正文这格提交时把标题一起带上：`Esc` / `⌘Enter` / 点走都只走这一次写回
-    onSubmit: () => commit(true),
-    onExit: leave,
-    // 焦点挪到同一张卡里的标题框 = 换了一格，不是离开（内容原地留着）
-    keepEditingOnBlur: (event) => staysInside(el, event.relatedTarget),
-  });
-
-  /** 这次编辑是否已经落过盘。写进去就等于结束了，往后的 `blur` / `Esc` 不再写第二遍 */
-  let written = false;
-
-  function commit(keepTitle: boolean): void {
-    if (written) return;
-    const nextTitle = keepTitle ? input.value.trim() : title;
-    const nextMd = editor.value;
-    const titleChanged = keepTitle && nextTitle !== title;
-    const mdChanged = nextMd !== md;
-    if (!titleChanged && !mdChanged) return;
-    written = true;
-    write({
-      title: titleChanged ? nextTitle : undefined,
-      md: mdChanged ? nextMd : undefined,
-    });
-  }
-
-  input.addEventListener('pointerdown', (event: Event) => {
-    // 标题框**在标题栏里**，而标题栏也是卡片的一部分：不挡住这一下，
-    // 画布会把它当成"按住卡片"的开始（进来选词却把卡拖走了）
-    event.stopPropagation();
-  });
-  input.addEventListener('keydown', (event: KeyboardEvent) => {
-    // 绝不能让它冒泡到画布：空格会被当成平移、`Delete` 会删掉这张卡
-    event.stopPropagation();
-    // 输入法组词中一律放行：中文输入法确认候选词用的就是 `Enter`
-    if (event.isComposing || event.keyCode === 229) return;
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault();
-      editor.focus();
-      return;
-    }
-    if (event.key === 'Escape') {
-      // 放弃的是**这一格**：清了标题改动，正文那格照旧收下
-      event.preventDefault();
-      input.value = title;
-      commit(false);
-      leave();
-    }
-  });
-  input.addEventListener('blur', (event: FocusEvent) => {
-    // 失焦即落盘；只有焦点**离开这张卡**才算这次编辑结束
-    commit(true);
-    if (!staysInside(el, event.relatedTarget)) leave();
-  });
-
-  // 光标先落在标题上：双击进来的第一步是"这张卡叫什么"（与待办卡一致）
-  input.focus();
-  input.select();
-}
-
-/** 焦点是否仍落在这张卡的内容槽里（两格之间换 = 没走） */
-function staysInside(el: HTMLElement, next: EventTarget | null): boolean {
-  return next !== null && el.contains(next as Node);
-}
-
-/**
- * 便签的**标题栏**（`.nestboard-card-header`）；拿不到给 `null`。
- *
- * ★ 用可选调用（`closest?.` / `querySelector?.`）而不是直接调：单测里传进来的
- *   是**假 DOM 的裸元素**（没有 `closest` / `querySelector`），将来别的宿主也可能没有 ——
- *   拿不到就退回"两格摞在内容槽里"，不必让每个宿主都长出这两个方法。
- */
-function titleBandOf(el: HTMLElement): HTMLElement | null {
-  const card = el.closest?.('.nestboard-card');
-  // ★ 不用 `instanceof HTMLElement` 收口：node 下的单测环境**没有这个全局**
-  //   （会直接抛 `HTMLElement is not defined`），而 `querySelector` 给回来的本来就是
-  //   `Element | null` —— 真值判断 + 断言就够了，还能顺手兼容假 DOM
-  const band = card?.querySelector?.('.nestboard-card-header');
-  return band ? (band as HTMLElement) : null;
-}
-
-/** 收掉标题栏上的编辑残留（输入框 + 那个 class）—— 节点回收时用 */
-function clearNoteTitleBand(el: HTMLElement): void {
-  const band = titleBandOf(el);
-  if (!band) return;
-  band.classList.remove('is-editing-note-title');
-  band.querySelector('.nestboard-note-title-input')?.remove();
+    onSubmit: (value) => (submit ? submit(value) : ctx.updateContent({ md: value })),
+    onExit: () => ctx.setMode('display'),
+    // 截图直接粘进正文（`F5`）：落盘规则由视图给，卡片只转交
+    pasteImage: ctx.pasteImage,
+    suggestLinks: ctx.suggestLinks,
+  }).focus();
 }

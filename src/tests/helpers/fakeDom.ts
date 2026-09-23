@@ -263,6 +263,11 @@ export function createFakeElement(doc: FakeDocument, tag = 'div'): FakeElement {
       delete style[name];
     },
   };
+  /** 清空孩子时把它们的 `parentNode` 一并摘掉（与浏览器一致，见 `textContent` 那条说明） */
+  const detachAll = (): void => {
+    for (const child of children) (child as FakeElement).parentNode = null;
+    children.length = 0;
+  };
   const element: FakeElement = {
     dataset: {},
     style,
@@ -274,10 +279,13 @@ export function createFakeElement(doc: FakeDocument, tag = 'div'): FakeElement {
      *   语义（`el.textContent = ''` 之后再挂新内容）。不模拟的话，同一个槽位被重复
      *   渲染时旧节点会留在 `children` 里 —— 测试就会看到"上一帧的残留"，
      *   于是要么断言写得很别扭，要么干脆漏掉一个真实存在的 bug。
+     * ★ 被摘掉的孩子**也要把 `parentNode` 清掉**（与浏览器一致）：卡片代码会问
+     *   "我这棵 DOM 还在不在这个槽里"（`root.parentElement !== el` ⇒ 挂回去）——
+     *   不清的话它以为还在、就不挂了，于是这套断言在真浏览器里过、在单测里"假失败"。
      */
     set textContent(value: string) {
       text = value;
-      children.length = 0;
+      detachAll();
     },
     /**
      * ★ `className` 与 `classList` 必须是**同一份真相**（真实 DOM 里 `className` 就是
@@ -319,7 +327,7 @@ export function createFakeElement(doc: FakeDocument, tag = 'div'): FakeElement {
       for (const node of nodes) element.appendChild(node);
     },
     replaceChildren: (...nodes) => {
-      children.length = 0;
+      detachAll();
       children.push(...nodes);
       for (const node of nodes) (node as FakeElement).parentNode = element;
     },

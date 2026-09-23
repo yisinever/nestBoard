@@ -31,7 +31,12 @@ import {
   MAP_TILE_LABEL_KEY,
   normalizeMapTileProvider,
 } from './settings';
-import type { AttachmentLocation, AttachmentNaming, NestboardSettings } from './settings';
+import type {
+  AttachmentLocation,
+  AttachmentNaming,
+  CardStyleMode,
+  NestboardSettings,
+} from './settings';
 
 export class NestboardSettingTab extends PluginSettingTab {
   constructor(
@@ -280,6 +285,21 @@ export class NestboardSettingTab extends PluginSettingTab {
             .onChange((value) => this.patch({ defaultCardColor: value })),
         );
     }
+
+    // ★ 外观档（`F2`）：放在颜色与圆角之间 —— 它决定的是"整套光影规则"，
+    //   比圆角 / 字号更靠前，读完颜色接着读它最顺
+    new Setting(this.containerEl)
+      .setName(t('settings.cardStyle.name'))
+      .setDesc(t('settings.cardStyle.desc'))
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('classic', t('settings.cardStyle.classic'))
+          .addOption('neumorph', t('settings.cardStyle.neumorph'))
+          .setValue(this.settings.cardStyle)
+          // 立即生效（`§6` 13j）：`patchAndRedraw` 会推 CSS 变量 + 重画设置页，
+          // 旁边的白板当场变样 —— 切档是"看一眼才决定"的事
+          .onChange((value) => this.patchAndRedraw({ cardStyle: value as CardStyleMode })),
+      );
 
     new Setting(this.containerEl)
       .setName(t('settings.cardRadius.name'))

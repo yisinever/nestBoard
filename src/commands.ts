@@ -87,14 +87,16 @@ export function registerCommands(plugin: NestboardPlugin): void {
     id: COMMAND_IDS.bringToFront,
     nameKey: 'command.bringToFront.name',
     hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'ArrowUp' }],
-    available: (view) => view.canManipulateCards,
+    // ★ 卡片与**整棵脑图**都算（`2.2.0` 收尾）：用 `canManipulateCards` 时，
+    //   "只选中一棵树"两边都是灰的 —— 连热键都不触发（用户 2026-09-22 实测）。
+    available: (view) => view.canReorderSelection,
     run: (view) => view.bringSelectionToFront(),
   });
   registerViewCommand(plugin, {
     id: COMMAND_IDS.sendToBack,
     nameKey: 'command.sendToBack.name',
     hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'ArrowDown' }],
-    available: (view) => view.canManipulateCards,
+    available: (view) => view.canReorderSelection,
     run: (view) => view.sendSelectionToBack(),
   });
 
@@ -157,7 +159,9 @@ export function registerCommands(plugin: NestboardPlugin): void {
     id: COMMAND_IDS.duplicateSelection,
     nameKey: 'command.duplicateSelection.name',
     hotkeys: [{ modifiers: ['Mod'], key: 'D' }],
-    available: (view) => view.canManipulateCards,
+    // ★ 与 `⌘C` 同一个闸门（`canCopySelection`）：卡片与整棵脑图都能原地复制
+    //   （`2.2.0` 批 4 五）。从前这里是 `canManipulateCards` —— 那时脑图还没进选区
+    available: (view) => view.canCopySelection,
     run: (view) => view.duplicateSelection(),
   });
   // 复制 / 剪切 / 粘贴卡片（T4.15 / `F7-07`，插件 `02 §4.1` 键位表定的组合）。
@@ -165,18 +169,21 @@ export function registerCommands(plugin: NestboardPlugin): void {
   //   那条路上能**同步**拿到剪贴板内容，而注册成命令就得异步读系统剪贴板
   //   （要权限、要等 promise），还会和"编辑卡片时的 `⌘V`"抢焦点。
   //   三条键位合起来才是完整的一套，所以另外两条也照键位表占上默认键。
+  // ★ 可用条件用 `canCopySelection`（= 有选中的**卡片**）而不是 `canManipulateSelection`：
+  //   搬运载荷只装卡片，抓着一棵树按 `⌘C` 会**静默地什么都不发生**（`2.2.0` 批 5 起
+  //   脑图也能被框选了，这条才浮出来）。整棵搬运留给下一批。
   registerViewCommand(plugin, {
     id: COMMAND_IDS.copySelection,
     nameKey: 'command.copySelection.name',
     hotkeys: [{ modifiers: ['Mod'], key: 'C' }],
-    available: (view) => view.canManipulateSelection,
+    available: (view) => view.canCopySelection,
     run: (view) => void view.copySelection(),
   });
   registerViewCommand(plugin, {
     id: COMMAND_IDS.cutSelection,
     nameKey: 'command.cutSelection.name',
     hotkeys: [{ modifiers: ['Mod'], key: 'X' }],
-    available: (view) => view.canManipulateSelection,
+    available: (view) => view.canCopySelection,
     run: (view) => void view.cutSelection(),
   });
   registerViewCommand(plugin, {

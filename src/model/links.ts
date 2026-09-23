@@ -78,6 +78,27 @@ export function refsOfCard(card: Card): CardRef[] {
     // "这张卡里少了一张"，而不是整张卡一个引用都没有
     case 'gallery':
       return card.content.paths.flatMap((path) => pathRef(base, 'image', path));
+    // PDF 预览卡（`F8`）：与视频 / 音频同一条 —— 它指向库内一份文件，
+    // "这份文件还在不在"是同一个问题（引用种类也是 `file`）
+    case 'pdf':
+      return pathRef(base, 'file', card.content.path);
+    // `.canvas` 预览卡（`F6`）：同上
+    case 'canvas':
+      return pathRef(base, 'file', card.content.path);
+    // 脑图卡（`F3a`）：同上（指向一份 `.nestmind`）
+    case 'mindRef':
+      return pathRef(base, 'file', card.content.path);
+    // 内嵌脑图卡（`F4`）：脑图本身没有路径，但它**节点上的附件**是真的库内引用 ——
+    // 少了一张图同样该在断链总览里被看见（与引用卡 / 图集卡同一条）
+    case 'mind': {
+      const refs: CardRef[] = [];
+      for (const node of card.content.mind.nodes) {
+        for (const ref of node.refs ?? []) {
+          refs.push(...pathRef(base, ref.kind === 'image' ? 'image' : 'file', ref.path));
+        }
+      }
+      return refs;
+    }
     default:
       return assertNever(card);
   }

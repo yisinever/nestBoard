@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MIND_NODE_PADDING_X,
   MIND_NODE_PADDING_Y,
+  MIND_TITLE_MAX_UNITS,
+  MIND_TITLE_MAX_WIDTH,
   MIND_TITLE_MIN_WIDTH,
   estimateNodeSize,
 } from '../../mind/layout/measure';
@@ -18,8 +20,9 @@ import {
   MIND_SIBLING_GAP,
   directionForStructure,
   layoutMind,
+  layoutMindEqualLevels,
 } from '../../mind/layout/tree';
-import type { NodeBox } from '../../mind/layout/tree';
+import type { MindLayout, NodeBox } from '../../mind/layout/tree';
 import {
   MIND_BODY_MIX_PERCENT,
   mindPaletteOf,
@@ -40,7 +43,8 @@ const sizeOf = (): Size => SIZE;
 
 /** 造一棵树：`text` 就是节点文字，父子关系由嵌套表达 */
 function treeOf(rootText: string, children: (string | [string, unknown[]])[] = []): MindFile {
-  const file = createMindFile({ title: rootText, now: () => 'T' });
+  // ★ 根节点文字现在单独给（`2.2.0` 收尾那一批改了默认值 —— 见 `createMindFile`）
+  const file = createMindFile({ title: rootText, rootText, now: () => 'T' });
   const rootId = file.rootId;
   file.nodes = [file.nodes[0] as MindNode];
 
@@ -72,6 +76,226 @@ function boxOf(file: MindFile, text: string): NodeBox {
   return box;
 }
 
+// ── 同层等宽（用户 2026-09-21）─────────────────────────────────
+
+describe('同层等宽', () => {
+  /** 宽度跟着文字长度走（每个字 10px）：用来验证"以同层最宽者为准" */
+  const widthByText = (node: MindNode): Size => ({ width: node.text.length * 10, height: 40 });
+  /** 一律往右排：两侧各自算宽度，混在一起看不出断言想说什么 */
+  const layoutOf = (file: MindFile) =>
+    layoutMind(file, { sizeOf: widthByText, direction: 'right' });
+  const idOf = (file: MindFile, text: string): string =>
+    file.nodes.find((node) => node.text === text)?.id ?? '';
+
+  it('★ 比"同层最宽那个"窄的节点，会拿到它的宽度当**下限**；最宽那个自己不设', () => {
+    const file = treeOf('中心', ['甲', '乙乙乙乙']);
+    const layout = layoutOf(file);
+    const wide = layout.boxes.get(idOf(file, '乙乙乙乙'));
+    const narrow = layout.boxes.get(idOf(file, '甲'));
+
+    expect(narrow?.minWidth).toBe(wide?.width);
+    // 它本来就是这一层的宽度，不必给自己设下限
+    expect(wide?.minWidth).toBeUndefined();
+  });
+
+  it('★ 每一层各算一份：下一层的宽度不为上一层让路', () => {
+    const file = treeOf('中心', [['甲', ['甲甲甲甲甲']], '甲二']);
+    const layout = layoutOf(file);
+
+    // 一层：甲(1 字) 与 甲二(2 字) ⇒ 甲 被撑到 2 个字
+    expect(layout.boxes.get(idOf(file, '甲'))?.minWidth).toBe(
+      layout.boxes.get(idOf(file, '甲二'))?.width,
+    );
+    // 二层只有它一个（5 个字）⇒ 不设下限，宽度就是自己的 50
+    const deep = layout.boxes.get(idOf(file, '甲甲甲甲甲'));
+    expect(deep?.minWidth).toBeUndefined();
+    expect(deep?.width).toBe(50);
+  });
+
+  it('折叠起来的子孙不参与等宽（它们一个都不排）', () => {
+    const file = treeOf('中心', ['甲', '乙乙乙乙']);
+    const collapsed = file.nodes.find((node) => node.text === '甲');
+    if (collapsed) collapsed.collapsed = true;
+
+    const layout = layoutOf(file);
+    // 没有崩、也没有因为折叠了谁就少算宽度
+    expect(layout.boxes.get(idOf(file, '乙乙乙乙'))?.width).toBe(40);
+  });
+});
+
+/**
+ * 画布那条路的"同层等宽"（`2.2.0` 收尾 · 用户 2026-09-22 报的
+ * "超过第二级就不生效了，节点长度会有长有短"）。
+ *
+ * ── 这条路的形状 ─────────────────────────────────────────
+ * 布局给出**下限** → 渲染层写成 `min-width` → 量真尺寸 → 再排一遍。
+ * 致命之处在于 `min-width` **只抬高、不压低**：第二遍要是还拿"**量到的宽度**"算
+ * "这一层谁最宽"，量到的那个数里已经含着**上一轮自己撑开**的那一档 ⇒ 算出来永远是
+ * "就是刚才那个下限" ⇒ "比最宽的窄"一个都不成立 ⇒ 渲染层把下限摘掉、节点缩回内容宽
+ * —— 于是同层又参差不齐。所以布局层多收一份 `intrinsicSizeOf`（**内容真宽**），
+ * 画布两条渲染路径（`MindView` / `EmbedMind`）都传它。
+ *
+ * ── 这一组怎么做到"不必开浏览器"─────────────────────────
+ * 把浏览器那点事照抄成几行：元素只记住一个"下限"，而它**画出来**的宽度就是
+ * `max(内容宽, 下限)` —— 正好是样式表里 `min-width: var(…, 0)` 那条规则的语义。
+ * 于是"第二轮之后到底齐不齐"在 node 下就能被钉住。
+ */
+describe('同层等宽 × 画布那条路（两遍布局 + min-width）', () => {
+  const idOf = (file: MindFile, text: string): string =>
+    file.nodes.find((node) => node.text === text)?.id ?? '';
+  /** 内容自己要多大：跟着字数走（每个字 10px）——"同层长短不一"就是靠它造的 */
+  const contentWidth = (text: string): number => text.length * 10;
+  const contentSize = (node: MindNode): Size => ({ width: contentWidth(node.text), height: 40 });
+
+  /**
+   * 极简"元素层"：只模拟 `min-width` 那一条（**只抬高、不压低**）。
+   *
+   * ★ `apply` = `applyNodeBox` 那一步（写下限；`minWidth` 缺席 ⇒ 把变量摘掉）；
+   * ★ `widthOf` = 浏览器算出来的最终宽度；
+   * ★ `measured` = 量尺寸（元素上挂着下限时，窄的那个会量成被撑开的宽度 —— 就是"自证"）。
+   */
+  class FakeElements {
+    private readonly mins = new Map<string, number>();
+
+    constructor(private readonly file: MindFile) {}
+
+    apply(layout: MindLayout): void {
+      for (const box of layout.boxes.values()) {
+        if (box.minWidth === undefined) this.mins.delete(box.id);
+        else this.mins.set(box.id, Math.round(box.minWidth));
+      }
+    }
+
+    widthOf(text: string): number {
+      return Math.max(contentWidth(text), this.mins.get(idOf(this.file, text)) ?? 0);
+    }
+
+    measured(): (node: MindNode) => Size {
+      return (node) => ({ width: this.widthOf(node.text), height: 40 });
+    }
+  }
+
+  /** 一棵**三层**、同层长短不一的树（"超过第二级"那一档必须真的有三层） */
+  function tree3(): MindFile {
+    const file = createMindFile({ rootText: '中心', now: () => 'T' });
+    const add = (text: string, parentId: string, order: number): string => {
+      const node = createMindNode({ text, parentId, order });
+      file.nodes.push(node);
+      return node.id;
+    };
+    const a = add('甲', file.rootId, 0);
+    const b = add('乙乙乙乙乙乙', file.rootId, 1);
+    const a1 = add('甲一', a, 0);
+    add('甲二甲二甲二甲二', a, 1);
+    const b1 = add('乙一', b, 0);
+    add('甲一甲一', a1, 0); // ← 三层（4 字 ⇒ 40）
+    add('乙一乙一乙一', b1, 0); // ← 三层（6 字 ⇒ 60）
+    return file;
+  }
+
+  const options = { direction: 'right' as const };
+
+  it('★★ 两遍之后同层等宽：**三层也一样**，而且再跑一遍还齐（下限没被自己抹掉）', () => {
+    const file = tree3();
+    const dom = new FakeElements(file);
+
+    // ① 第一遍：按内容宽排一版（画布上先摆的就是它）
+    let layout = layoutMind(file, {
+      ...options,
+      sizeOf: contentSize,
+      intrinsicSizeOf: contentSize,
+    });
+    dom.apply(layout);
+    // ② 量"内容真宽"（`measureNodeSizes` 量之前会把下限摘掉 ⇒ 拿到的就是内容自己要多宽）
+    // ③ 第二遍：几何**撑开** + 下限继续挂着（`layoutMindEqualLevels` + `intrinsicSizeOf`）
+    layout = layoutMindEqualLevels(file, {
+      ...options,
+      sizeOf: contentSize,
+      intrinsicSizeOf: contentSize,
+    });
+    dom.apply(layout);
+
+    // 一层：10 / 60 ⇒ 都 60；二层：20 / 80 / 20 ⇒ 都 80；三层：40 / 60 ⇒ 都 60
+    expect(dom.widthOf('甲')).toBe(60);
+    expect(dom.widthOf('乙乙乙乙乙乙')).toBe(60);
+    expect(dom.widthOf('甲一')).toBe(80);
+    expect(dom.widthOf('甲二甲二甲二甲二')).toBe(80);
+    expect(dom.widthOf('甲一甲一')).toBe(60);
+    expect(dom.widthOf('乙一乙一乙一')).toBe(60);
+    // 三层里窄的那个：几何也撑开了（连线 / 外接框 / 缩略图读的都是 `box.width`）
+    expect(layout.boxes.get(idOf(file, '甲一甲一'))?.width).toBe(60);
+
+    // ★ 再排一遍（用户改一个字就会重排一次）：还是齐的 —— 下限不会在第二遍里消失
+    layout = layoutMindEqualLevels(file, {
+      ...options,
+      sizeOf: contentSize,
+      intrinsicSizeOf: contentSize,
+    });
+    dom.apply(layout);
+    expect(dom.widthOf('甲一甲一')).toBe(60);
+    expect(dom.widthOf('甲一')).toBe(80);
+  });
+
+  it('★ 反例：拿"量到的宽度"算最宽（老口径）⇒ 下限会被自己抹掉、节点缩回去', () => {
+    const file = tree3();
+    const dom = new FakeElements(file);
+
+    // 老口径：`intrinsicSizeOf` 缺席 ⇒ 同层最宽是拿**量到的宽度**算的
+    let layout = layoutMind(file, { ...options, sizeOf: dom.measured() });
+    dom.apply(layout);
+    expect(dom.widthOf('甲')).toBe(60); // 第一遍：按内容宽算出来的是 60，撑开了
+
+    // 第二遍：此刻量到的宽度**已经是被撑开的** ⇒ "甲"不再"比最宽的窄" ⇒ 拿不到下限
+    layout = layoutMind(file, { ...options, sizeOf: dom.measured() });
+    expect(layout.boxes.get(idOf(file, '甲'))?.minWidth).toBeUndefined();
+    dom.apply(layout); // ← 渲染层把元素上的下限摘掉
+    expect(dom.widthOf('甲')).toBe(contentWidth('甲')); // ⇒ 缩回 10，同层又不齐了
+  });
+});
+
+/**
+ * 同层等宽**落进几何**（`2.2.0` 批 4 六）。
+ *
+ * 画布那边靠"CSS 撑开 + 量到真尺寸再排一遍"落地；缩略图 / 导出**没有第二次测量**，
+ * 只靠上面那份 `minWidth` 提示的话，导出的树里同层节点会参差不齐、整体比画布上窄
+ * —— 用户 2026-09-22 报的"绘制尺寸不是很还原"就是这一处。
+ */
+describe('同层等宽 · 落进几何（layoutMindEqualLevels）', () => {
+  const widthByText = (node: MindNode): Size => ({ width: node.text.length * 10, height: 40 });
+  const idOf = (file: MindFile, text: string): string =>
+    file.nodes.find((node) => node.text === text)?.id ?? '';
+  const options = { sizeOf: widthByText, direction: 'right' as const };
+
+  it('★★ 两遍之后**真的等宽**（不是只挂一个 CSS 下限），右边缘因此齐平', () => {
+    const file = treeOf('中心', ['甲', '乙乙乙乙']);
+
+    const plain = layoutMind(file, options);
+    const even = layoutMindEqualLevels(file, options);
+
+    // 只排一遍：窄的那个仍然窄（它靠自己那点内容宽）
+    expect(plain.boxes.get(idOf(file, '甲'))?.width).toBe(10);
+    // 排两遍：两个都等于这一层最宽的那个
+    expect(even.boxes.get(idOf(file, '甲'))?.width).toBe(40);
+    expect(even.boxes.get(idOf(file, '乙乙乙乙'))?.width).toBe(40);
+    // 几何已经等宽 ⇒ 不再需要那个下限提示
+    expect(even.boxes.get(idOf(file, '甲'))?.minWidth).toBeUndefined();
+    // 右边缘齐平（从根往右排：两兄弟起笔在同一个 x）
+    const narrow = even.boxes.get(idOf(file, '甲'));
+    const wide = even.boxes.get(idOf(file, '乙乙乙乙'));
+    expect((narrow?.x ?? 0) + (narrow?.width ?? 0)).toBeCloseTo(
+      (wide?.x ?? 0) + (wide?.width ?? 0),
+      5,
+    );
+  });
+
+  it('一层里没有更宽的邻居 ⇒ 就是第一遍的结果（小树不必多排一次）', () => {
+    const file = treeOf('中心', ['甲']);
+    const even = layoutMindEqualLevels(file, options);
+    expect(even.boxes.size).toBe(2);
+    expect(even.boxes.get(idOf(file, '甲'))?.width).toBe(10);
+  });
+});
+
 // ── 尺寸估算 ─────────────────────────────────────────────────
 
 describe('estimateNodeSize', () => {
@@ -85,8 +309,31 @@ describe('estimateNodeSize', () => {
     expect(short.width).toBeLessThan(long.width);
     // 下限：再短的标题也放得下
     expect(short.width).toBeGreaterThanOrEqual(MIND_TITLE_MIN_WIDTH + MIND_NODE_PADDING_X * 2);
-    // 上限：再长的标题也不会变成一条横贯屏幕的带子
-    expect(long.width).toBeLessThanOrEqual(240 + MIND_NODE_PADDING_X * 2);
+    // 上限：再长的标题也不会变成一条横贯屏幕的带子（= 一行 29 个英文单位那么宽）
+    expect(long.width).toBeLessThanOrEqual(MIND_TITLE_MAX_WIDTH + MIND_NODE_PADDING_X * 2);
+  });
+
+  it('★ 一行放不下就在节点内**换行**（用户 2026-09-21）：宽度封顶、高度按行数涨', () => {
+    const one = estimateNodeSize(node({ text: 'A'.repeat(MIND_TITLE_MAX_UNITS) }));
+    const two = estimateNodeSize(node({ text: 'A'.repeat(MIND_TITLE_MAX_UNITS + 1) }));
+    const three = estimateNodeSize(node({ text: 'A'.repeat(MIND_TITLE_MAX_UNITS * 2 + 1) }));
+
+    // 多出来的那一个字符**不再加宽**，而是多一行
+    expect(two.width).toBe(one.width);
+    expect(two.height).toBeGreaterThan(one.height);
+    expect(three.height).toBeGreaterThan(two.height);
+  });
+
+  it('★ 中文按**两个英文单位**折算：十五个汉字就换行，宽度与满行英文齐平', () => {
+    const fullEn = estimateNodeSize(node({ text: 'A'.repeat(MIND_TITLE_MAX_UNITS) }));
+    const zhShort = estimateNodeSize(node({ text: '汉'.repeat(14) }));
+    const zhLong = estimateNodeSize(node({ text: '汉'.repeat(15) }));
+
+    // 14 个汉字 = 28 个单位 ⇒ 还在一行里（比满行略窄）
+    expect(zhShort.width).toBeLessThan(fullEn.width);
+    // 15 个汉字 = 30 个单位 ⇒ 已经满行：宽度与 29 个英文字符相同，多出来的是一个新行
+    expect(zhLong.width).toBe(fullEn.width);
+    expect(zhLong.height).toBeGreaterThan(zhShort.height);
   });
 
   it('内容块让节点更高（行数越多越高）', () => {

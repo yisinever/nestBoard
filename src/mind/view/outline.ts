@@ -32,9 +32,34 @@ import type { MindFile, MindNode } from '../model/schema';
  */
 const OUTLINE_LEVEL_SIZE = 18;
 const OUTLINE_BASE_SIZE = 16;
+
+/**
+ * 正文**收起时显示几行**（`O2`，用户 2026-09-21 定的 **6**）。
+ *
+ * ★ 样式表里那一句 `max-height: 132px` 就是"6 × 22px 行高"，两处**必须是同一个数** ——
+ *   将来改这里，记得一起改（写在样式表的注释里了）。
+ */
+export const OUTLINE_NOTE_FOLD_LINES = 6;
+
+/**
+ * 正文要不要给「展开 / 收起」那枚把手。
+ *
+ * ★ 判据只能是**估算**：建行的时候这一行还没挂到 DOM 上，量不出真实行数。
+ *   两个口径**任一够长**就算：
+ *   ① 它本来就有 7 行以上（`\n` 是真的换行）；
+ *   ② 显示宽度超过"6 行 × 20 个单位"—— 20 是"大纲正文那一列大约放得下多少英文单位"的粗估
+ *      （正文 14px，面板正文列约 300px）。中文按 2 折算（`displayWidthOf`）。
+ * ★ 宁可**多给**这枚把手：多一个暂时没用的按钮，也远好过"正文被折了却展不开"。
+ * ★ 纯函数、不碰 DOM，可直接单测。
+ */
+export function noteFoldNeeded(note: string): boolean {
+  if (note.split('\n').length > OUTLINE_NOTE_FOLD_LINES) return true;
+  return displayWidthOf(note) > OUTLINE_NOTE_FOLD_LINES * 20;
+}
 // ★ `HexColor` 住在**白板那一份** schema 里（颜色是跨两个文档类型共用的词汇，
 //   脑图只借用，见 `model/palette.ts` 的同一句）
 import type { HexColor } from '../../model/schema';
+import { displayWidthOf } from '../layout/measure';
 import { MIND_NODE_ID_ATTR } from './render';
 
 /** 大纲里的一行（`N3-a`）：**已经算好"长什么样"**，面板只管照着画 */
@@ -45,8 +70,16 @@ export interface OutlineRow {
   text: string;
   /** 标记 emoji（空串 = 没有） */
   icon: string;
-  /** 正文（`note`）的**一行预览**；空串 = 不画那一行 */
+  /** 正文（`note`）；空串 = 不画那一块 */
   note: string;
+  /**
+   * 正文是否**展开**（`O2`，用户 2026-09-21：正文超过 6 行要能折叠）。
+   *
+   * ★ 缺席 = 收起（默认只显示 6 行）。
+   * ★ 这个状态由**视图**保管、在这里贴上来（纯视图状态：与"滚到哪"同级 ——
+   *   不进模型、不进撤销栈、不落盘）。
+   */
+  noteExpanded?: boolean;
   collapsed: boolean;
   /** 直接子节点数（**有孩子才画折叠三角**） */
   childCount: number;
@@ -326,6 +359,13 @@ export interface OutlineHandlers {
   /** 点折叠三角 */
   onToggle(id: string): void;
   /**
+   * 点正文末尾那枚「展开 / 收起」（`O2`）。
+   *
+   * ★ 可选：没接这一路时（单测 / 只用面板做别的事）**整枚把手不出现** ——
+   *   免得点了一个没有回音的按钮。
+   */
+  onToggleNote?(id: string): void;
+  /**
    * 点这一行。
    *
    * ★ `event` 会一路传到视图，用来把**光标落在用户点到的那个字之间**
@@ -601,13 +641,33 @@ export function buildOutlinePanel(doc: Document): OutlinePanel {
       //   于是这一行的宽度永远只由文字决定，折来折去也不会左右跳。
       main.append(head);
 
-      // 正文预览：**一行**灰字（超出省略号）—— 大纲要的是"扫一眼结构"，不是读内容。
-      // ★ 不折行是我们自己的取舍（幕布那边是折行全显）；字号 / 行高 / 灰度的取值照幕布
+      // 正文（`O2`，用户 2026-09-21："如果有内容，应该全展示，超过一定行，加个折叠"）：
+      // 从前是"一行灰字 + 省略号"，现在**按内容折行**；超过 `OUTLINE_NOTE_FOLD_LINES`
+      // 行就收起，并在末尾给一枚「展开 / 收起」。
       if (row.note.length > 0) {
+        const expanded = row.noteExpanded === true;
         const note = doc.createElement('div');
-        note.className = 'nestboard-mind-outline-note';
+        note.className = expanded
+          ? 'nestboard-mind-outline-note is-expanded'
+          : 'nestboard-mind-outline-note';
         note.textContent = row.note;
         main.append(note);
+
+        // ★ 把手只在"正文真的可能超长"、且视图愿意接这一路时才建（见 `noteFoldNeeded`）
+        if (noteFoldNeeded(row.note) && handlers.onToggleNote) {
+          const more = doc.createElement('span');
+          more.className = 'nestboard-mind-outline-note-more';
+          more.setAttribute('role', 'button');
+          more.setAttribute('tabindex', '-1');
+          more.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+          more.textContent = t(expanded ? 'menu.mindCollapse' : 'menu.mindExpand');
+          more.addEventListener('click', (event) => {
+            // 这一下是"折 / 展正文"，不是"点这一行"（不拦的话会顺手进编辑）
+            event.stopPropagation();
+            handlers.onToggleNote?.(row.id);
+          });
+          main.append(more);
+        }
       }
 
       // 顺序就是眼睛看到的顺序：竖线格 → 三角手柄（含占位）→ 小圆点 → 标题（+ 正文）

@@ -227,3 +227,53 @@ describe('filterBoards：筛选', () => {
     expect(items).toEqual(copy);
   });
 });
+
+/**
+ * `F1` 追记：标签来源是**白板级 ∪ 卡内**两份的并集。
+ *
+ * 只看 `item.tags`（`meta.tags`）的话，"在便签里写了一堆 `#纪要` 的板"会掉进
+ * "未加标签" —— 而卡内标签才是用户天天写的那一种。
+ */
+describe('groupByTag：卡内标签也进分组（F1）', () => {
+  const items = [
+    { path: 'A.nboard', title: 'A', tags: [] },
+    { path: 'B.nboard', title: 'B', tags: ['板级'] },
+    { path: 'C.nboard', title: 'C', tags: [] },
+  ];
+
+  const cardTags: Record<string, string[]> = {
+    'A.nboard': ['纪要'],
+    'B.nboard': ['纪要', '板级'],
+  };
+
+  it('★ 只有卡内标签的板也会成组（不再掉进"未加标签"）', () => {
+    const groups = groupByTag(items, (path) => cardTags[path] ?? []);
+    const ji = groups.find((group) => group.tag === '纪要');
+    expect(ji?.boards.map((board) => board.path)).toEqual(['A.nboard', 'B.nboard']);
+    // C 两边都没有 ⇒ 未加标签
+    const untagged = groups.find((group) => group.tag === null);
+    expect(untagged?.boards.map((board) => board.path)).toEqual(['C.nboard']);
+  });
+
+  it('白板级与卡内同名只算一次（同一块板不会在组里出现两遍）', () => {
+    const groups = groupByTag(items, (path) => cardTags[path] ?? []);
+    const boardLevel = groups.find((group) => group.tag === '板级');
+    expect(boardLevel?.boards.map((board) => board.path)).toEqual(['B.nboard']);
+  });
+
+  it('不传第二个参数 = 只按白板级标签（老行为一字不差）', () => {
+    const groups = groupByTag(items);
+    expect(groups.find((group) => group.tag === '纪要')).toBeUndefined();
+    const untagged = groups.find((group) => group.tag === null);
+    expect(untagged?.boards.map((board) => board.path)).toEqual(['A.nboard', 'C.nboard']);
+  });
+
+  it('卡内标签里的空白 / 空串同样会被清掉', () => {
+    const groups = groupByTag([{ path: 'A.nboard', title: 'A', tags: [] }], () => [
+      '  ',
+      '',
+      ' 纪要 ',
+    ]);
+    expect(groups.map((group) => group.tag)).toEqual(['纪要']);
+  });
+});

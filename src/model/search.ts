@@ -18,16 +18,26 @@
  *    渲染与 DOM 都变重，而用户要的只是"我为什么搜到它"。
  */
 
-import type { BoardFile, Card, CardType } from './schema';
+import type { MindFile, MindNode } from '../mind/model/schema';
+import type { BoardFile, Card, CardType, Mind } from './schema';
+
+/**
+ * 内嵌脑图卡（`F4`）最多收多少个节点的文字进搜索索引。
+ *
+ * ★ 索引是有成本的（每一条都要带卡片 id 与字段类型），而一张几百节点的脑图
+ *   全塞进去只是为了"能搜到它" —— 前 200 个已经足够命中这张卡了。
+ */
+const MIND_SEARCH_NODE_LIMIT = 200;
 
 /** 命中在卡片的哪个字段上（面板据此显示标签，也参与排序权重） */
 export type SearchField = 'title' | 'text' | 'path' | 'url';
 
 export interface SearchHit {
+  /** 命中的卡片 id；**命中脑图节点时为空串**（那时看 {@link SearchHit.mind}） */
   cardId: string;
   type: CardType;
   field: SearchField;
-  /** 卡片自己的标题；空串 = 这张卡没标题（面板不该显示一行空白） */
+  /** 卡片 / 这棵树的标题；空串 = 没有标题（面板不该显示一行空白） */
   title: string;
   /** 命中处附近的一小段原文，两端可能带 `…` */
   snippet: string;
@@ -35,6 +45,17 @@ export interface SearchHit {
   matchStart: number;
   /** 命中片段的长度（原文长度，不含 `…`） */
   matchLength: number;
+  /**
+   * 命中在**脑图的某一个节点**上（`2.2.0` 批 4）。
+   *
+   * ★ 为什么是"脑图 id + 节点 id"两个字段而不是把节点 id 塞进 `cardId`：
+   *   `cardId` 的语义是"板上的**一张卡**"，而节点不是卡 —— 混进去的话，
+   *   每个消费方（面板 / 跨板搜索 / 跳转）都要写一遍"这个 id 到底是卡还是节点"的猜测。
+   *   节点命中时 `cardId` 为空串，判据就是这个字段在不在。
+   * ★ `type` 固定给 `'mind'`（面板上那一档类型名就是"脑图"），
+   *   `title` 给**中心主题的文字** —— 它就是这棵树的名字。
+   */
+  mind?: { mindId: string; nodeId: string };
 }
 
 /** 最多给多少条结果。再多用户也不会翻，而面板每多一条就多一次 DOM 构造 */
@@ -55,6 +76,19 @@ const FIELD_WEIGHT: Record<SearchField, number> = { title: 0, path: 1, url: 1, t
 /** 权重之间的间隔，必须大于"文本长度"能取到的最大值 */
 const WEIGHT_STRIDE = 1e6;
 
+/** `searchBoard` 的额外输入（都是"模型之外才知道的东西"） */
+export interface SearchBoardOptions {
+  /**
+   * 一棵脑图的**模型**（`2.2.0` 批 4）。
+   *
+   * ★ 内嵌脑图的模型就在 `board.minds[].mind` 里（`searchBoard` 自己会读），
+   *   只有"指向一份 `.nestmind`"的那些需要调用方喂进来 —— 那份数据住仓储的内存里，
+   *   白板文件本身没有。缺席时那些树的节点**不进索引**（与缩略图 / 导出同一条口径：
+   *   宁可少索引一棵，也不要在这一层同步等一次读盘）。
+   */
+  mindModelOf?: (mind: Mind) => MindFile | null;
+}
+
 /**
  * 在**已经拿到的**白板快照上搜索。
  *
@@ -65,6 +99,7 @@ export function searchBoard(
   board: BoardFile,
   query: string,
   limit: number = MAX_SEARCH_HITS,
+  options: SearchBoardOptions = {},
 ): SearchHit[] {
   const terms = parseTerms(query);
   if (terms.length === 0 || limit <= 0) return [];
@@ -72,6 +107,14 @@ export function searchBoard(
   const hits: { hit: SearchHit; score: number }[] = [];
   for (const card of board.cards) {
     const match = bestMatchOf(card, terms);
+    if (match) hits.push(match);
+  }
+  // 脑图：节点里的字也是用户写下的字（`2.2.0` 批 4）—— 从前"一张脑图 = 一张卡"时
+  // 它天然在索引里；升格成容器之后不补这一笔，"搜节点里的词"会**一条都搜不到**
+  for (const mind of board.minds ?? []) {
+    const model =
+      mind.path.length === 0 ? (mind.mind ?? null) : (options.mindModelOf?.(mind) ?? null);
+    const match = bestMindMatchOf(mind, model, terms);
     if (match) hits.push(match);
   }
 
@@ -106,6 +149,29 @@ export function cardMatchesTerms(card: Card, terms: readonly string[]): boolean 
     const haystack = collapse(field.text).toLowerCase();
     return terms.every((term) => haystack.includes(term));
   });
+}
+
+/**
+ * 一个脑图节点上**人能搜到的文本**（`2.2.0` 批 4）。
+ *
+ * ★ 一处定义、两处使用（索引 `bestMindMatchOf` 与画布过滤 `dimmedMindNodeKeys`）：
+ *   与卡片那条同一条纪律 —— 两处各写一套字段的话，会出现"面板里搜得到、
+ *   画布上却变淡"这种没法解释的不一致。
+ * ★ 只有两样：节点文字 + 备注。别的（附件路径 / 折叠态）都不是"用户写下的字"。
+ */
+export function mindNodeSearchText(node: MindNode): string {
+  return collapse(`${node.text} ${node.note}`);
+}
+
+/**
+ * 一个脑图节点是否命中给定的**已解析**词条（AND 语义；`2.2.0` 批 4）。
+ *
+ * ★ 与 {@link cardMatchesTerms} 同形（空词条 = 全部命中）：调用方不必先判"有没有词"。
+ */
+export function mindNodeMatchesTerms(node: MindNode, terms: readonly string[]): boolean {
+  if (terms.length === 0) return true;
+  const haystack = mindNodeSearchText(node).toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 // ── 内部 ──────────────────────────────────────────────────────
@@ -191,6 +257,37 @@ function searchableFields(card: Card): SearchableField[] {
     case 'gallery':
       for (const path of card.content.paths) fields.push({ field: 'text', text: path });
       break;
+    // PDF 预览卡（`F8`）：与视频 / 音频同一条 —— 能搜的是**文件名**
+    case 'pdf':
+      fields.push({ field: 'text', text: card.content.path });
+      break;
+    // `.canvas` 预览卡（`F6`）：同上
+    case 'canvas':
+      fields.push({ field: 'text', text: card.content.path });
+      break;
+    // 脑图卡（`F3a`）：同上（能搜的是那份 `.nestmind` 的文件名 / 路径）
+    case 'mindRef':
+      fields.push({ field: 'text', text: card.content.path });
+      break;
+    // 内嵌脑图卡（`F4`）：能搜的是**节点里的字** —— 中心主题当"标题"那一档
+    // （它才是这张卡的名字），其余节点连正文一起按正文档塞进去。
+    // ★ 设上限：一张大脑图有几百个节点，全塞进去只会把索引撑肥，
+    //   而"命中第 200 个节点"对"找到这张卡"已经没有帮助了。
+    case 'mind': {
+      const mind = card.content.mind;
+      const root = mind.nodes.find((node) => node.id === mind.rootId);
+      if (root && root.text.trim().length > 0) fields.push({ field: 'title', text: root.text });
+      let taken = 0;
+      for (const node of mind.nodes) {
+        if (taken >= MIND_SEARCH_NODE_LIMIT) break;
+        if (node === root) continue;
+        const text = `${node.text} ${node.note}`.trim();
+        if (text.length === 0) continue;
+        fields.push({ field: 'text', text });
+        taken += 1;
+      }
+      break;
+    }
     default:
       assertNever(card);
       break;
@@ -249,6 +346,81 @@ function bestMatchOf(
         type: card.type,
         field: candidate.field,
         title: card.title,
+        ...snippetOf(text, first, firstLength),
+      },
+      score,
+    };
+  }
+
+  return best;
+}
+
+/**
+ * 一棵脑图上最优的那处命中（`2.2.0` 批 4）。
+ *
+ * ★ 与卡片那条同形：**中心主题**当"标题"那一档（它就是这棵树的名字，权重最高），
+ *   其余节点连备注一起按"正文"档塞进去。于是"搜"甲"时，中心主题叫《甲》的那棵树
+ *   排在"某个分支里提了一句甲"的那棵前面 —— 与"标题永远优先于正文"同一条道理。
+ * ★ 设上限（`MIND_SEARCH_NODE_LIMIT`）：一张几百节点的脑图全塞进来只会把索引撑肥，
+ *   而"命中第 200 个节点"对"找到这棵树"已经没有帮助了。
+ * ★ `model` 为 `null`（文件脑图还没读到）⇒ `null`：这条树这一轮不进索引。
+ */
+function bestMindMatchOf(
+  mind: Mind,
+  model: MindFile | null,
+  terms: readonly string[],
+): { hit: SearchHit; score: number } | null {
+  if (!model) return null;
+  const root = model.nodes.find((node) => node.id === model.rootId);
+  if (!root) return null;
+
+  const candidates: Array<{ nodeId: string; field: SearchField; text: string }> = [];
+  if (root.text.trim().length > 0) {
+    candidates.push({ nodeId: root.id, field: 'title', text: root.text });
+  }
+  let taken = 0;
+  for (const node of model.nodes) {
+    if (taken >= MIND_SEARCH_NODE_LIMIT) break;
+    if (node === root) continue;
+    // 字段口径与画布过滤共用（`mindNodeSearchText`）：两处各写一遍迟早不一致
+    const text = mindNodeSearchText(node);
+    if (text.length === 0) continue;
+    candidates.push({ nodeId: node.id, field: 'text', text });
+    taken += 1;
+  }
+
+  let best: { hit: SearchHit; score: number } | null = null;
+  for (const candidate of candidates) {
+    const text = collapse(candidate.text);
+    if (text.length === 0) continue;
+    const haystack = text.toLowerCase();
+
+    let first = -1;
+    let firstLength = 0;
+    let all = true;
+    for (const term of terms) {
+      const at = haystack.indexOf(term);
+      if (at < 0) {
+        all = false;
+        break;
+      }
+      if (first < 0 || at < first) {
+        first = at;
+        firstLength = term.length;
+      }
+    }
+    if (!all) continue;
+
+    const score = FIELD_WEIGHT[candidate.field] * WEIGHT_STRIDE + first;
+    if (best && best.score <= score) continue;
+
+    best = {
+      hit: {
+        cardId: '',
+        type: 'mind',
+        field: candidate.field,
+        title: root.text.trim(),
+        mind: { mindId: mind.id, nodeId: candidate.nodeId },
         ...snippetOf(text, first, firstLength),
       },
       score,

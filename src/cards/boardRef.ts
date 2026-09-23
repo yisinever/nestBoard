@@ -147,6 +147,22 @@ export function cardCountLabel(count: number): string {
 }
 
 /**
+ * 概要那一行的数字（`2.2.0` 收尾）。
+ *
+ * ★ 脑图那一段**只有真的有树**才出现：绝大多数板子一棵都没有，让每一张引用卡
+ *   都拖着"0 棵脑图"只是噪音（与模板列表那条同一取舍）。
+ * ★ 单独抽成函数是为了能在 node 下断言 —— 引用卡那块 DOM 在单测里搭不起来。
+ */
+export function summaryCountLabel(summary: BoardSummary): string {
+  return summary.minds > 0
+    ? t('card.boardRef.cardsAndMinds', {
+        cards: summary.cards,
+        minds: summary.minds,
+      })
+    : cardCountLabel(summary.cards);
+}
+
+/**
  * 换预览档位时要顺手写回去的尺寸；`null` = "尺寸一个字都不动"（`O18`）。
  *
  * mini 是**固定正方形**，所以它的尺寸不是用户拉出来的、而是形态自带的：
@@ -465,10 +481,12 @@ function paintSummary(
   showCount: boolean,
 ): void {
   if (!summary) return;
-  // 空板要显式说出来：概要面板里一片空白，用户会以为是"还没加载出来"
-  if (summary.cards === 0) body.classList.add('is-empty');
+  // 空板要显式说出来：概要面板里一片空白，用户会以为是"还没加载出来"。
+  // ★ "空" = **既没有卡片也没有脑图**（`2.2.0` 收尾）：一块只放了一棵树的板子
+  //   不是空板 —— 从前这里只看 `cards`，于是它会显示成"空板 / 0 张卡片"。
+  if (summary.cards === 0 && summary.minds === 0) body.classList.add('is-empty');
   if (!showCount) return;
-  count.textContent = cardCountLabel(summary.cards);
+  count.textContent = summaryCountLabel(summary);
 }
 
 /**

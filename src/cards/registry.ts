@@ -28,6 +28,9 @@ import type {
 } from '../model/schema';
 import type { Size } from '../util/geometry';
 import { t, type MessageKey } from '../util/i18n';
+// ★ 唯一一处"白板卡片层 → 脑图"的类型依赖（`F3a`）：只借一个**接口**，不借实现 ——
+//   方向是 `cards/** → mind/**`（eslint 那条边界钉的是反过来那个方向）。
+import type { MindBridge } from '../mind/embed/MindBridge';
 // 各卡片定义只 `import type` 本文件 → 运行期没有循环依赖，可以放心在这里聚合
 import { boardRefCard } from './boardRef';
 import { commentCard } from './comment';
@@ -36,7 +39,11 @@ import { videoCard } from './video';
 import { audioCard } from './audio';
 import { titleCard } from './titleCard';
 import { galleryCard } from './gallery';
+import { canvasCard } from './canvas';
+import { mindRefCard } from './mindRef';
+import { mindCard } from './mindCard';
 import { imageCard } from './image';
+import { pdfCard } from './pdf';
 import { inkCard } from './ink';
 import { linkCard } from './link';
 import { mapCard } from './map';
@@ -428,6 +435,15 @@ export interface BoardNavBridge {
 export interface BoardSummary {
   cards: number;
   columns: number;
+  /**
+   * 白板级脑图的棵数（`2.2.0` 收尾）。
+   *
+   * ★ 为什么不并进 `cards`：引用卡要能说清"这块板里有什么"。不数的话，
+   *   一块**只有树**的白板会被判成"空板"（`cards === 0`）并写"0 张卡片" ——
+   *   而它显然不是空的。
+   * ★ 读的是 `.nboard` 里的 `minds` 数组（可选键，缺省 = 0）。
+   */
+  minds: number;
 }
 
 /**
@@ -505,8 +521,10 @@ export interface InkAnnotateBridge {
  * * `'raw'`：`⌘`+双击 / `⌘`+Enter / 右键「编辑内容」—— "我就是要改**正文**"，
  *   跳过标题那一格（待办卡这里是"整份源码"，连 `# 标题` 一起）。
  *
- * ★ 它是**入口意图**，不是"编辑器长什么样"：待办卡与便签卡都是"标题 + 正文"两格，
- *   按 `ctx.editEntry` 在"两格"与"只有正文一格"之间分支（`cards/todo.ts` / `cards/note.ts`）。
+ * ★ 它是**入口意图**，不是"编辑器长什么样"：待办卡是"标题 + 清单两格"，按 `ctx.editEntry`
+ *   在"两格"与"只有清单一格"之间分支（`cards/todo.ts`）。
+ * ★ 便签 / 同步便签**不分支**（`F5`，用户 2026-09-21）：它们的编辑态只有正文一格，
+ *   标题走卡面那一行的就地输入（与引用卡——`.md` 文档节点——同款，见 `cards/note.ts` 文件头）。
  */
 export type EditEntry = 'title' | 'raw';
 
@@ -531,6 +549,24 @@ export interface CardRenderContext {
    * 卡片定义因此不必 import `obsidian`，便签卡的渲染逻辑才测试得起来。
    */
   renderMarkdown(markdown: string, el: HTMLElement): Promise<void>;
+  /**
+   * 把剪贴板里的一张图片落进库并返回路径（`F5` 卡内粘贴图片）；失败给 `null`。
+   *
+   * ★ 与"直接粘在画布上变成图片卡"（`BoardView` 的 paste 分支）**共用同一份规则**
+   *   （附件目录跟随用户设置、命名跟随 `attachmentOptions`）—— 两条路各读一遍设置，
+   *   迟早出现"设置里改了但粘贴进来的图还是老名字"。
+   * ★ 可选：缺席 = 卡内不支持粘贴图片（编辑器放行原生粘贴，正文里会出现 `image.png`）。
+   */
+  readonly pasteImage?: (file: File) => Promise<string | null>;
+  /**
+   * 敲 `[[` 时的候选来源（`F5` 链接补全）。**同步**返回库内文件。
+   *
+   * ★ 形状与 `editor/linkSuggest.LinkCandidate` 一致，但这里**故意写成结构类型**：
+   *   卡片定义层不必为了一个字段去 import 编辑器模块（`registry` 是"卡片与环境"的
+   *   边界，编辑器属于它的下游）。过滤与排序由编辑器那侧做，这里只给全量清单。
+   * ★ 缺席 = 不做补全（`[[` 就是普通文本）。
+   */
+  readonly suggestLinks?: (query: string) => readonly { path: string; label?: string }[];
   /** 当前缩放比（`02 §8.2`：图片等按缩放降级到缩略图） */
   readonly zoom: number;
   /**
@@ -543,6 +579,15 @@ export interface CardRenderContext {
   readonly alwaysFullImage?: boolean;
   readonly mode: CardViewMode;
   /**
+   * 这块白板现在是不是**只读**（T4.06 的归档锁定 / 演示态）。
+   *
+   * ★ 与 `minds.isReadOnly(path)` 是两件事：那一个是"这份 `.nestmind` 自己处于保护态
+   *   （解析失败）"，这一个是"白板这一层不许改"。脑图卡（`F3a`）两个都要看 ——
+   *   只读板上点节点改名，等于从白板绕过了一次只读。
+   * ★ 缺席 = 不特殊处理（单测 / 嵌入视图）。
+   */
+  readonly readOnly?: boolean;
+  /**
    * 本次编辑的入口（O01 / O02）。缺席 = `'title'`（双击那条路）。
    *
    * ★ `mode !== 'edit'` 时不传：显示态没有"从哪一步进来"这回事，
@@ -554,6 +599,14 @@ export interface CardRenderContext {
    * 单测里不传，卡片必须优雅降级（引用卡就画成"读不到内容"而不是崩）。
    */
   readonly notes?: VaultBridge;
+  /**
+   * 脑图桥（`F3a`）：那张脑图卡要读写的 `.nestmind`。
+   *
+   * ★ 与 `notes` 同一条分工：这一层不认识 `MindRepository`，只声明能力形状
+   *   （`mind/embed/MindBridge.ts`），实现由视图给。
+   * ★ 不传 = 脑图卡画成"这份脑图读不出来"（单测 / 嵌入视图）。
+   */
+  readonly minds?: MindBridge;
   /** 缩略图桥（T1.52）。不传 = 图片卡只能直接用原图（单测/无缓存环境） */
   readonly thumbnails?: ThumbnailBridge;
   /** 系统文件操作桥（T1.53） */
@@ -574,13 +627,15 @@ export interface CardRenderContext {
   /** 把内容改动写回模型（只传改动的字段，其余原样保留） */
   updateContent(patch: Partial<CardContentOf<CardType>>): void;
   /**
-   * 一次写回卡片的**标题与内容**（便签卡"标题框 + 正文框"两格编辑态的收口，O22）。
+   * 一次写回卡片的**标题与内容**（"标题 + 内容两格"编辑态的收口，`O22`）。
    *
    * ★ 为什么必须一次写：两格各自提交会在第一笔写入后触发重绘，而此刻这次编辑还没
    *   结束（`editingCardId` 未清）→ 编辑器被重造、另一格的现场丢失。合并成一次
    *   → 只重绘一次、只进一步撤销。只传改动的字段；都不变 = 什么都不写。
    * ★ 标题是**卡片级**字段（`card.title`）、正文是**内容级**字段（`card.content`），
    *   所以这个口子与 `updateContent` 分开。
+   * ★ 现用户只剩**待办卡**（`cards/todo.ts`）与**仅标题卡**（`cards/titleCard.ts`）；
+   *   便签 / 同步便签自 `F5` 起只有正文一格，走 `updateContent`（见 `cards/note.ts` 文件头）。
    */
   updateCard(patch: { title?: string; content?: Partial<CardContentOf<CardType>> }): void;
   /** 请求切换呈现模式（进入/退出编辑态） */
@@ -601,6 +656,21 @@ export interface CardRenderContext {
    * 不实现（便签卡）时卡片层不做任何事，没有代价。
    */
   contentReady?(): void;
+  /**
+   * 内容**自己**要把卡片撑到多大（两个方向都只增不减）。
+   *
+   * ★ 用户 2026-09-21（`F4` 的脑图卡）："我现在不断地增加节点，会让整个脑图的所有节点都
+   *   缩小。应该是无论如何增加节点，脑图中节点尺寸不用相对白板等比缩小。"
+   *   —— 那颗卡的内容（一张脑图）**不能靠缩放去迁就卡片**，只能反过来：
+   *   卡片长大到装得下它。卡内的节点于是永远 1:1，与白板上的其它卡片"一样大"。
+   * ★ 与 `measure`（只报**高度**，给"自适应高度"的便签 / 引用卡用）分开：
+   *   那一条是"内容多高就多高、宽度由用户定"；这一条是"宽度也要跟着内容走"。
+   *   两者是两种尺寸策略，不该塞进同一个返回形状里（一个 `number | Size` 的联合类型
+   *   会让每个调用点都要先分辨"这是哪一种"）。
+   * ★ 只增不减、并且**合并进一次提交**（视图那一侧实现，见 `BoardView.requestCardSize`）：
+   *   连续加五个节点不该在历史里留五条记录。
+   */
+  growTo?(size: Size): void;
   /**
    * 把正文写回**整个同步组**（T7.04）。
    *
@@ -625,6 +695,8 @@ export interface CardActionContext {
   readonly app: App;
   readonly sourcePath: string;
   readonly notes?: VaultBridge;
+  /** 脑图桥（`F3a`）：脑图卡的双击 / 菜单要拿它打开那份 `.nestmind`（同 `CardRenderContext`） */
+  readonly minds?: MindBridge;
   /** 系统文件操作桥（T1.53：双击文件卡用系统应用打开） */
   readonly shell?: ShellBridge;
   /** 白板导航桥（T1.61：双击白板卡进去） */
@@ -690,6 +762,16 @@ export interface CardTypeDefinition<T extends CardType = CardType> {
   icon: string;
   defaultSize: Size;
   /**
+   * 新建这张卡时，**尺寸按内容算**（不给 = 用 `defaultSize`）。
+   *
+   * ★ 内嵌脑图卡（`F4`）用它：用户 2026-09-21 要求"尺寸随内容自适应（不是固定值）"。
+   *   算这件事需要内容 —— 而内容恰恰是 `createDefaultContent()` 刚造出来的那一份，
+   *   所以判据交给类型自己（视图只知道"卡上有什么内容"，不知道"脑图该多大"）。
+   * ★ 只影响**新建**：已存在的卡片尺寸仍然由用户（与拖拽 / 缩放）说了算，
+   *   读入口不会按内容去改用户摆好的大小。
+   */
+  sizeForContent?(content: CardContentOf<T>): Size;
+  /**
    * **新建**这张卡时的默认主色；不写 = 用设置里的「默认卡片颜色」（`F11-03`）。
    *
    * ★ 图片卡是它唯一的用户：照片默认配纯黑"相框"（用户 2026-09-17）。做成类型上的一个口头，
@@ -707,6 +789,17 @@ export interface CardTypeDefinition<T extends CardType = CardType> {
    *   那会把一种具体卡片的规矩焊进视图，"以后再加一种不需要立刻编辑的卡"就得回头改视图。
    */
   autoEditOnCreate?: boolean;
+  /**
+   * 卡面**画不画那个盒子**（默认 `'card'` = 边框 / 底色 / 圆角 / 阴影都要）。
+   *
+   * ★ 脑图卡（`F3a` / `F4`）给 `'bare'`：用户 2026-09-21 —— "脑图是作为一个组件出现的，
+   *   其实不用底下那个框"。它要的效果是"画面上就是一棵脑图"，而不是"脑图上盖着一个盒子"。
+   * ★ 只去**视觉**、不去**几何**：卡片矩形、命中区、尺寸手柄、右键菜单、拖动全照旧 ——
+   *   无框之后"看得见的那只手"由**根节点**承担（同一天定的：卡片级入口都挂到根节点上）。
+   * ★ 为什么是类型定义上的一个口头而不是视图里的 `if (type === 'mind')`：与 `autoEditOnCreate`
+   *   同一条理由 —— 视图只管"问定义"，以后再加一种不要框的卡（比如将来的"画布卡"）不必改视图。
+   */
+  chrome?: 'card' | 'bare';
   createDefaultContent(): CardContentOf<T>;
   /** 渲染卡片**主体**（骨架与定位由 `CardLayer` 负责，这里只管槽位里的内容） */
   render(el: HTMLElement, card: CardOfType<T>, ctx: CardRenderContext): void;
@@ -782,6 +875,14 @@ export const CARD_TYPE_LABEL_KEY: Record<CardType, MessageKey> = {
   file: 'card.type.file',
   video: 'card.type.video',
   audio: 'card.type.audio',
+  // PDF 预览卡（`F8`）
+  pdf: 'card.type.pdf',
+  // `.canvas` 预览卡（`F6`）
+  canvas: 'card.type.canvas',
+  // 脑图卡（`F3a`）
+  mindRef: 'card.type.mindRef',
+  // 内嵌脑图卡（`F4`）
+  mind: 'card.type.mind',
   titleCard: 'card.type.titleCard',
   gallery: 'card.type.gallery',
   link: 'card.type.link',
@@ -965,5 +1066,13 @@ export function createCardRegistry(): CardTypeRegistry {
   registry.register(mapCard);
   registry.register(syncNoteCard);
   registry.register(commentCard);
+  // PDF 预览卡（`F8`，用户 2026-09-21）
+  registry.register(pdfCard);
+  // `.canvas` 预览卡（`F6`，用户 2026-09-21）
+  registry.register(canvasCard);
+  // 脑图卡（`F3a`，用户 2026-09-21）
+  registry.register(mindRefCard);
+  // 内嵌脑图卡（`F4`，用户 2026-09-21）
+  registry.register(mindCard);
   return registry;
 }

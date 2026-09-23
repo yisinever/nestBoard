@@ -7,8 +7,8 @@
  * （移动 / 缩放 / 层级 / 增删 / 复制 / 改色 / 改标题 / 分栏 / 连线 / 手绘…）。
  * 每加一种操作就得同步写一个逆操作，漏一个就是"撤销后文件坏掉"这种最伤数据的 bug。
  *
- * 快照法只依赖一件事：**卡片/分栏/连线/编组必须是可 JSON 化的纯数据**
- * （这是 `03 §2` 的硬性前提，`.nboard` 本来就是 JSON）。于是撤销 = 把四个数组换回旧值，
+ * 快照法只依赖一件事：**卡片/分栏/脑图/连线/编组必须是可 JSON 化的纯数据**
+ * （这是 `03 §2` 的硬性前提，`.nboard` 本来就是 JSON）。于是撤销 = 把五个数组换回旧值，
  * 永远不可能"逆操作写错"。代价是内存 —— 用**条数上限 + 总体积预算**两道闸门兜住：
  * 5000 卡的白板单份快照约 1~2MB，预算 8MB 时栈里只留最近几次，这是有意的取舍
  * （宁可少撤销几步，也不要把 Obsidian 的内存吃光）。
@@ -24,10 +24,20 @@
 import { HISTORY_BYTES_BUDGET, HISTORY_LIMIT, HISTORY_MERGE_WINDOW_MS } from '../constants';
 import type { BoardFile } from './schema';
 
-/** 白板里**参与撤销**的四类实体。`meta` / `view` / `settings` 刻意不在内（见下） */
+/** 白板里**参与撤销**的五类实体。`meta` / `view` / `settings` 刻意不在内（见下） */
 export interface BoardContent {
   cards: BoardFile['cards'];
   columns: BoardFile['columns'];
+  /**
+   * 白板级脑图（`2.2.0` 收尾 · 用户 2026-09-23："删除脑图卡目前没法撤销"）。
+   *
+   * ★ 从前这里只有四类（卡片 / 分栏 / 连线 / 编组）—— 脑图是 `2.2.0` 才升格成白板对象的，
+   *   快照漏了它 ⇒ **删掉一整棵树之后 `⌘Z` 撤不回来**（恢复出来的白板里那棵树不在），
+   *   反过来"加一棵树之后撤销"也不会把它去掉。
+   * ★ 快照里**一律写这一格**（哪怕空数组）：读回来才分得清"当时确实没有树"与"这是一份
+   *   老快照"，而写回白板时要不要留这个键另说（见 `restoreContent`）。
+   */
+  minds: NonNullable<BoardFile['minds']>;
   edges: BoardFile['edges'];
   groups: BoardFile['groups'];
 }
@@ -41,6 +51,9 @@ export function serializeContent(board: BoardFile): string {
   const content: BoardContent = {
     cards: board.cards,
     columns: board.columns,
+    // ★ `?? []`：白板没有树时这个键是**缺席**的（"缺席 = 没有脑图"的纪律），而快照里
+    //   一律给一格空数组 —— 读回来才分得清"当时没有树"与"这是一份老快照"
+    minds: board.minds ?? [],
     edges: board.edges,
     groups: board.groups,
   };
@@ -63,11 +76,21 @@ export function restoreContent(board: BoardFile, raw: string): boolean {
   const content = parsed as Partial<BoardContent>;
   if (!Array.isArray(content.cards) || !Array.isArray(content.columns)) return false;
   if (!Array.isArray(content.edges) || !Array.isArray(content.groups)) return false;
+  // ★ `minds` 也必须在：这一批之前记下的快照没有它，而"猜"的两个方向都糟 ——
+  //   猜成空数组会把"删掉一棵树"**坐实**（用户按了撤销却什么都没回来），
+  //   猜成"保持现状"会把别的改动一起吞掉。宁可放弃这一次撤销（坏快照的老口径）
+  if (!Array.isArray(content.minds)) return false;
 
   board.cards = content.cards;
   board.columns = content.columns;
   board.edges = content.edges;
   board.groups = content.groups;
+  // ★ 快照里一棵树都没有 ⇒ **把这个键删掉**（别写一个 `minds: []`）：
+  //   "缺席 = 没有脑图"是仓库的一条纪律（`createBoardFile` / `validate` /
+  //   `serializeBoard` 的版本判定都看它），留个空数组会让落盘多出一行空壳
+  const minds = content.minds as NonNullable<BoardFile['minds']>;
+  if (minds.length > 0) board.minds = minds;
+  else delete board.minds;
   return true;
 }
 

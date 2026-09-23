@@ -60,6 +60,7 @@ import type { UriRejection } from './integration/ProtocolHandler';
 import { RenameWatcher } from './integration/RenameWatcher';
 import { isNotePath } from './model/drop';
 import { INDEX_NOTE_BOARD_KEY } from './model/indexNote';
+import { TAG_HUB_FOLDER, TAG_HUB_KEY } from './model/tagHub';
 import { NestboardSettingTab } from './settings/SettingTab';
 import { pushRecentBoards, renameRecentBoards } from './settings/recentBoards';
 import { normalizeSettings } from './settings/settings';
@@ -82,6 +83,8 @@ import { getLocale, setHostLanguage, setLocale, t } from './util/i18n';
 import type { MessageKey } from './util/i18n';
 import { BoardView } from './view/BoardView';
 import { allBoardViews, getActiveBoardView, openBoardView } from './view/BoardViewHost';
+// 外观档（原版 / 拟物，`F2`）：一个类切换整套光影规则，写在 `document.body` 上
+import { applyBoardStyleClass } from './view/themeVars';
 import { fileMenuItems } from './view/interact/fileMenu';
 import type { FileMenuAction, FileMenuTarget } from './view/interact/fileMenu';
 
@@ -169,7 +172,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-18 b54';
+  readonly buildStamp = '2026-09-23 b107';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;
@@ -261,6 +264,9 @@ export default class NestboardPlugin extends Plugin {
     // ★ 设置要在**一切装配之前**读出来：自动保存节奏是构造参数，附件目录与新建目录
     //   也都在下面的装配过程中被取用。晚一步读就会有一段"用默认值跑"的窗口
     this.settings = normalizeSettings(await this.loadData());
+    // ★ 外观档要在**装配之前**落到 `body` 上（`F2`）：视图、菜单、设置面板都读它，
+    //   等到某一个视图打开再写，用户会先看见一帧原版样子
+    this.applyStyleMode();
     // ★ 语言必须在**任何 `t()` 之前**定下来（T3.23）：下面的 `registerCommands`
     //   会把命令名一次性翻成中文/英文，晚一步就会留下半中半英的命令面板
     // ★ 宿主语言走 Obsidian 官方的 `getLanguage()`（社区审核要求；插件 minAppVersion
@@ -390,6 +396,22 @@ export default class NestboardPlugin extends Plugin {
           target: hit.target,
           resolved: hit.resolved,
         })),
+      // `F1` ①：卡内标签走同一个 `LinkIndex`（它本来就按文档存了 tags，
+      //   只是从前没人取）—— 与 `linksOf` 同源同口径，不必再扫一遍文件
+      cardTagsOf: (path) => this.linkIndex.tagsOf(path),
+      // `F1` ②：标签枢纽笔记的清单 —— 与 `listIndexNotes` 同一套（只认 frontmatter
+      //   那一栏、一个文件都不读；删不删由文件里的标记定）
+      listTagHubs: async (folder) => {
+        const prefix = folder.length > 0 ? `${folder}/` : '';
+        const tagsPrefix = `${prefix}${TAG_HUB_FOLDER}/`;
+        const found: string[] = [];
+        for (const file of this.app.vault.getMarkdownFiles()) {
+          if (!file.path.startsWith(tagsPrefix)) continue;
+          const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+          if (frontmatter && typeof frontmatter[TAG_HUB_KEY] === 'string') found.push(file.path);
+        }
+        return found;
+      },
       boardUri: (path) => buildNestboardUri(path),
     });
     // 目录迁移防抖（T7.01）：见字段说明。目标目录从端口"现取"，所以回调里只说"从哪搬"
@@ -457,6 +479,15 @@ export default class NestboardPlugin extends Plugin {
     // 解析成"未解析"（退回按文件名匹配）。`resolved` 是 Obsidian 明确给出的
     // "缓存已就绪 / 批量变更后"的信号，用它把解析结果纠正一次（见 `reresolve`）。
     this.registerEvent(this.app.metadataCache.on('resolved', () => this.linkIndex.reresolve()));
+
+    // 索引笔记 / 标签枢纽（`F1`）在**启动时也补一遍**：等 `LinkIndex` 扫完（卡内标签
+    //   在它那儿）再跑，否则第一轮会写出"没有卡内标签"的旧 frontmatter。幂等
+    //   （内容一致不写盘），所以每次启动跑一遍几乎零成本 —— 却能兜住"用户手动删了
+    //   生成物""外部改了 data.json 开关"这类没有任何事件可听的情况。
+    void this.linkIndex.rebuild().then(() => {
+      if (this.settings.enableIndexNote) return this.indexNotes.syncAll();
+      return undefined;
+    });
 
     // 同步冲突副本（T4.03）：启动扫一遍，有就提示一句（没有则完全不出声）。
     // ★ 不 await：扫描要遍历整个库的文件列表，不能拖慢插件加载
@@ -750,6 +781,9 @@ export default class NestboardPlugin extends Plugin {
     //   要读到新的值（见 `setHostLanguage`）
     setHostLanguage(getLanguage());
     const localeChanged = setLocale(this.settings.language) !== previousLocale;
+    // ★ 外观档（`F2`）：**与语言无关**，所以不塞进 `refreshLocalizedChrome`
+    //   （那个函数只在"已打开的视图"上跑；档是全局的、还要覆盖菜单与设置面板）
+    this.applyStyleMode();
     this.refreshLocalizedChrome(localeChanged);
 
     // ★ 缩略图导航器（T5.09）是**已打开视图的现场状态**（不是"下次新建才生效"），
@@ -859,6 +893,21 @@ export default class NestboardPlugin extends Plugin {
    * ★ 只对**打开的**视图做事：没打开的下次创建时自然读到新设置。
    *   新建卡片的默认色 / 新板背景属于"下次新建才生效"，本来就无需推送。
    */
+  /**
+   * 把外观档（原版 / 拟物，`F2`）写进 `document.body`。
+   *
+   * ★ 为什么是 `body` 而不是某个视图的根容器：拟物的作用面（`11 §6` 13d）**跨容器** ——
+   *   白板视图、嵌在笔记里的白板、右键菜单、设置面板都在 `body` 下不同的子树里。
+   *   写在 `body` 上是唯一一处能一次覆盖全部的地方，也省得每个容器各记一次。
+   * ★ 与逐视图推的 CSS 变量分工：变量是**视图级**的（圆角 / 字号 / 字体），
+   *   档是**全局级**的；原版档会把这个类**摘掉** ⇒ 既有规则一条都不受影响
+   *   （`11 §7` 的回归基线是靠这条结构性保证的）。
+   */
+  private applyStyleMode(): void {
+    if (typeof document === 'undefined') return;
+    applyBoardStyleClass(document.body, this.settings);
+  }
+
   private refreshLocalizedChrome(localeChanged: boolean): void {
     for (const view of allBoardViews(this.app)) {
       // 卡片外观是纯 CSS 变量：无论语言变没变都要重推（用户可能刚改了圆角）

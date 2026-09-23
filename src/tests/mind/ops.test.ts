@@ -19,6 +19,7 @@ import {
   hasChildren,
   indent,
   horizontalTargetId,
+  neighborByArrow,
   isDescendant,
   moveNode,
   nextVisibleId,
@@ -164,6 +165,49 @@ describe('可见顺序与键盘落点', () => {
     expect(nextVisibleId(mind, 'n_甲', -1)).toBe('n_中心');
     expect(nextVisibleId(mind, 'n_中心', -1)).toBeNull();
     expect(nextVisibleId(mind, 'n_乙', 1)).toBeNull();
+  });
+
+  it('★★ `neighborByArrow`：横向布局上下走可见顺序、左右走父子（白板与树视图共用一份）', () => {
+    const mind = mindWith([
+      ['中心', null],
+      ['甲', '中心'],
+      ['甲一', '甲'],
+      ['乙', '中心'],
+    ]);
+
+    // 可见顺序是**深度优先**的：中心 → 甲 → 甲一 → 乙 ⇒ "下"从甲走到甲一，再走才是乙
+    expect(neighborByArrow(mind, 'n_甲', 'down')).toBe('n_甲一');
+    expect(neighborByArrow(mind, 'n_甲一', 'down')).toBe('n_乙');
+    expect(neighborByArrow(mind, 'n_甲', 'up')).toBe('n_中心');
+    expect(neighborByArrow(mind, 'n_甲', 'right', { side: 1 })).toBe('n_甲一');
+    expect(neighborByArrow(mind, 'n_甲', 'left', { side: 1 })).toBe('n_中心');
+    // 到头 / 没有那一侧 ⇒ `null`（调用方什么都不做，别把选中弄丢）
+    expect(neighborByArrow(mind, 'n_中心', 'up')).toBeNull();
+  });
+
+  it('★ 纵向布局（组织结构图）：上下与左右**互换**', () => {
+    const mind = mindWith([
+      ['中心', null],
+      ['甲', '中心'],
+      ['甲一', '甲'],
+      ['乙', '中心'],
+    ]);
+
+    // 纵向：兄弟在 x 上 ⇒ `→` / `←` 换兄弟，`↓` / `↑` 往孩子 / 父
+    expect(neighborByArrow(mind, 'n_甲', 'right', { vertical: true, side: 1 })).toBe('n_甲一');
+    expect(neighborByArrow(mind, 'n_甲', 'down', { vertical: true, side: 1 })).toBe('n_甲一');
+    expect(neighborByArrow(mind, 'n_甲', 'up', { vertical: true, side: 1 })).toBe('n_中心');
+  });
+
+  it('★ 挂在左边的那一支：左右镜像（`side = -1`）', () => {
+    const mind = mindWith([
+      ['中心', null],
+      ['甲', '中心'],
+      ['甲一', '甲'],
+    ]);
+
+    expect(neighborByArrow(mind, 'n_甲', 'left', { side: -1 })).toBe('n_甲一');
+    expect(neighborByArrow(mind, 'n_甲', 'right', { side: -1 })).toBe('n_中心');
   });
 
   it('★ `←` / `→` 按**展开方向**判（右侧那一支往孩子的方向是 `→`）', () => {

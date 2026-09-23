@@ -58,6 +58,8 @@ import {
   renderIndexNote,
 } from '../model/indexNote';
 import type { IndexNoteLink } from '../model/indexNote';
+import { isTagHubNote, renderTagHubNote, tagHubPathOf } from '../model/tagHub';
+import type { TagHubBoard } from '../model/tagHub';
 import { debounce } from '../util/debounce';
 import type { Debounced } from '../util/debounce';
 import { describeError } from '../util/errors';
@@ -122,6 +124,22 @@ export interface IndexNotePorts {
   linksOf: (boardPath: string) => readonly IndexNoteLink[];
   /** `obsidian://nestboard?file=…`；缺省时不写「打开这块白板」那一行 */
   boardUri?: (boardPath: string) => string;
+  /**
+   * 这块板里**卡内**写的标签（`F1` ①，生产实现走 `LinkIndex.tagsOf`）。
+   *
+   * ★ 与 `linksOf` 同一个来源、同一条口径：白板便签里的 md 写下的东西 ——
+   *   索引笔记把这两样都搬进库内 Markdown，只是搬的栏目不同（链接进正文、标签进 frontmatter）。
+   * ★ 缺省 = 没有卡内标签（老宿主 / 测试）⇒ 索引笔记与 `F1` 之前一字不差。
+   */
+  cardTagsOf?: (boardPath: string) => readonly string[];
+  /**
+   * 列出 `folder/_tags` 之下**由本插件生成的**标签枢纽笔记（`F1` ②）。
+   *
+   * ★ 与 `listIndexNotes` 同一套：生产实现走 `metadataCache` 的 frontmatter
+   *   （认 `nestboard-tag`），一个文件都不读；真正决定删不删的仍然是文件里的标记。
+   * ★ **缺省 = 不生成枢纽笔记**：老宿主 / 测试不接这条线，行为与从前一字不差。
+   */
+  listTagHubs?: (folder: string) => Promise<string[]>;
   /** 让出主线程的方式（测试注入点）。默认 `requestIdleCallback` → `setTimeout` 兜底 */
   scheduleIdle?: (task: () => void) => void;
   /** 每片处理多少块板（默认 20） */
@@ -205,12 +223,32 @@ export class IndexNoteBridge {
       boardPath,
       title: entry.title,
       tags: entry.tags,
+      // `F1` ①：卡内标签并进同一份 frontmatter（端口缺省 = 空，行为与从前一致）
+      cardTags: this.ports.cardTagsOf?.(boardPath) ?? [],
       cardCount: entry.cardCount,
       updatedAt: entry.updatedAt,
       links: this.ports.linksOf(boardPath),
       boardUri: this.ports.boardUri?.(boardPath) ?? '',
     });
 
+    return this.writeGenerated(notePath, content, isIndexNote, '索引笔记');
+  }
+
+  /**
+   * 写一份**生成物**（索引笔记 / 标签枢纽笔记共用）。
+   *
+   * ★ 这里是全文唯一一处"认领一个文件"的地方，也是"绝不覆盖用户文件"唯一的执行点：
+   *   路径上正好是用户自己写的笔记（认不出我们的标记）时**跳过**，并记进
+   *   `conflictPaths`（设置面板会把它列出来，让用户知道"有个同名文件挡着"）。
+   * ★ 内容一致 ⇒ 不写盘（`unchanged`）：自动保存路径上这一步是最常走到的分支，
+   *   少了它每次保存都会写一遍文件、触发一次文件事件、让图谱重算一次。
+   */
+  private async writeGenerated(
+    notePath: string,
+    content: string,
+    isOurs: (text: string) => boolean,
+    label: string,
+  ): Promise<IndexNoteSyncOutcome> {
     try {
       const existing = await this.readIfPresent(notePath);
 
@@ -220,8 +258,7 @@ export class IndexNoteBridge {
         return 'written';
       }
 
-      // ★ 全文里唯一一处"认领一个文件"的地方，也是"绝不覆盖用户文件"唯一的执行点
-      if (!isIndexNote(existing)) {
+      if (!isOurs(existing)) {
         this.conflictPaths.add(notePath);
         return 'skipped';
       }
@@ -232,8 +269,35 @@ export class IndexNoteBridge {
       this.conflictPaths.delete(notePath);
       return 'written';
     } catch (error) {
-      console.warn(`[nestboard] 写入索引笔记失败：${notePath}`, describeError(error));
+      console.warn(`[nestboard] 写入${label}失败：${notePath}`, describeError(error));
       return 'failed';
+    }
+  }
+
+  /** 列出 `folder/_tags` 下的枢纽笔记；端口抛了就当"一个都没有"（宁可漏，不可乱删） */
+  private async listTagHubsSafe(
+    folder: string,
+    listTagHubs: (folder: string) => Promise<string[]>,
+  ): Promise<string[]> {
+    try {
+      return await listTagHubs(folder);
+    } catch (error) {
+      console.warn('[nestboard] 列不出标签枢纽笔记', describeError(error));
+      return [];
+    }
+  }
+
+  /** 收掉一份枢纽笔记（**认标记才删**：路径上可能是用户自己的文件） */
+  private async removeTagHub(notePath: string): Promise<boolean> {
+    if (this.disposed) return false;
+    const existing = await this.readIfPresent(notePath);
+    if (existing === null || !isTagHubNote(existing)) return false;
+    try {
+      await this.ports.remove(notePath);
+      return true;
+    } catch (error) {
+      console.warn(`[nestboard] 删除标签枢纽笔记失败：${notePath}`, describeError(error));
+      return false;
     }
   }
 
@@ -279,6 +343,78 @@ export class IndexNoteBridge {
       }
       // 片与片之间让出主线程：几千块板的库里，这条命令不该把界面按住几秒
       if (index + chunkSize < boards.length) await this.yieldIdle();
+    }
+    // 全部板都看过一遍之后，标签 → 白板的映射才是完整的（`F1` ②）。
+    // ★ 放在这里而不是每块板各写一次：枢纽页的正文就是"用到它的全部白板"，
+    //   逐板写会在中途写出几十个"只有一块板"的中间态（用户会看到清单忽长忽短）。
+    mergeStats(stats, await this.syncTagHubs(boards));
+    return stats;
+  }
+
+  /**
+   * 同步**标签枢纽笔记**（`F1` ②）：让每个标签在库里有一页"用到它的白板"。
+   *
+   * 口径：
+   * * 一个标签一页 `<索引目录>/_tags/<标签>.md`（路径规则见 `model/tagHub`）；
+   * * 标签来源 = 白板级 `meta.tags` ∪ 卡内标签（与 frontmatter 那份完全同源）；
+   * * **幂等**：内容一致不写盘；用户占着同一个路径（没有我们的标记）时跳过，绝不覆盖；
+   * * **清理**：这一轮映射里不再出现的枢纽页会被收掉（删标签之后不该留一页空壳）。
+   *
+   * ★ 端口 `listTagHubs` 缺席 = 整个特性不发生（老宿主 / 测试）。
+   */
+  async syncTagHubs(knownBoards?: readonly string[]): Promise<IndexNoteStats> {
+    const stats = emptyStats();
+    if (this.disposed || !this.ports.enabled()) return stats;
+    const listTagHubs = this.ports.listTagHubs;
+    if (!listTagHubs) return stats;
+
+    let boards: readonly string[];
+    try {
+      boards = knownBoards ?? (await this.ports.listBoards());
+    } catch (error) {
+      console.warn('[nestboard] 列不出白板，标签枢纽同步跳过', describeError(error));
+      return stats;
+    }
+
+    const folder = this.ports.folder();
+    /** 标签 → 用到它的白板（索引笔记路径 + 标题） */
+    const byTag = new Map<string, TagHubBoard[]>();
+    for (const boardPath of boards) {
+      const entry = this.ports.entryOf(boardPath);
+      if (!entry) continue;
+      const tags = new Set<string>();
+      for (const tag of entry.tags) tags.add(tag.trim().replace(/^#/, ''));
+      for (const tag of this.ports.cardTagsOf?.(boardPath) ?? []) {
+        tags.add(tag.trim().replace(/^#/, ''));
+      }
+      const notePath = indexNotePathOf(boardPath, folder);
+      for (const tag of tags) {
+        if (tag.length === 0) continue;
+        const list = byTag.get(tag) ?? [];
+        list.push({ notePath, title: entry.title, boardPath });
+        byTag.set(tag, list);
+      }
+    }
+
+    const expected = new Set<string>();
+    for (const [tag, list] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const notePath = tagHubPathOf(tag, folder);
+      expected.add(notePath);
+      tally(
+        stats,
+        await this.writeGenerated(
+          notePath,
+          renderTagHubNote({ tag, boards: list }),
+          isTagHubNote,
+          '标签枢纽笔记',
+        ),
+      );
+    }
+
+    // 清理：我们生成的、但这一轮不再需要的枢纽页
+    for (const notePath of await this.listTagHubsSafe(folder, listTagHubs)) {
+      if (expected.has(notePath)) continue;
+      if (await this.removeTagHub(notePath)) stats.removed += 1;
     }
     return stats;
   }
@@ -367,7 +503,23 @@ export class IndexNoteBridge {
     for (const notePath of await this.listNotes()) {
       if (await this.removeNote(notePath)) stats.removed += 1;
     }
+    // ★ 标签枢纽笔记一起收（`F1` ②）：用户按的是一次"整体退订"，
+    //   留下 `_tags/` 一屋子空壳等于没退干净（与索引笔记同一笔账）
+    const listTagHubs = this.ports.listTagHubs;
+    if (listTagHubs) {
+      for (const notePath of await this.listTagHubsSafe(this.ports.folder(), listTagHubs)) {
+        if (await this.removeTagHub(notePath)) stats.removed += 1;
+      }
+    }
     return stats;
+  }
+
+  /** 当前由本插件生成的**标签枢纽**笔记（用于「删除索引笔记」确认框里的数字） */
+  async listTagHubNotes(): Promise<string[]> {
+    if (this.disposed) return [];
+    const listTagHubs = this.ports.listTagHubs;
+    if (!listTagHubs) return [];
+    return this.listTagHubsSafe(this.ports.folder(), listTagHubs);
   }
 
   /**
@@ -475,6 +627,15 @@ function tally(stats: IndexNoteStats, outcome: IndexNoteSyncOutcome): void {
   else if (outcome === 'unchanged') stats.unchanged += 1;
   else if (outcome === 'skipped') stats.skipped += 1;
   else if (outcome === 'failed') stats.failed += 1;
+}
+
+/** 把一轮同步的账并进另一份（`syncAll` 里"白板 + 标签枢纽"两段共用一个回执） */
+function mergeStats(target: IndexNoteStats, source: IndexNoteStats): void {
+  target.written += source.written;
+  target.unchanged += source.unchanged;
+  target.removed += source.removed;
+  target.skipped += source.skipped;
+  target.failed += source.failed;
 }
 
 /** 默认的让出主线程方式：空闲回调优先，没有就退化成"下一个宏任务" */

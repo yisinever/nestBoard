@@ -18,6 +18,15 @@ interface HarnessOptions {
   boards?: string[];
   entries?: Record<string, IndexNoteEntry>;
   links?: Record<string, IndexNoteLink[]>;
+  /** 这块板里**卡内**写的标签（`F1` ①） */
+  cardTags?: Record<string, string[]>;
+  /**
+   * 预置的标签枢纽笔记清单（`F1` ②）。
+   *
+   * ★ **给了这个端口才会发生枢纽同步**（与生产一致：端口缺席 = 老宿主，
+   *   整个特性不发生）—— 老用例因此一个字节都不受影响。
+   */
+  tagHubs?: (folder: string) => string[];
   /** 预置的文件（`路径 → 内容`） */
   files?: Record<string, string>;
   /** 覆盖"列出某个目录下的索引笔记"（默认：目录下所有 .md） */
@@ -74,6 +83,15 @@ function createHarness(options: HarnessOptions = {}) {
     },
     entryOf: (path) => options.entries?.[path] ?? null,
     linksOf: (path) => options.links?.[path] ?? [],
+    cardTagsOf: (path) => options.cardTags?.[path] ?? [],
+    ...(options.tagHubs
+      ? {
+          listTagHubs: async (target: string) => {
+            listed.push(target);
+            return options.tagHubs?.(target) ?? [];
+          },
+        }
+      : {}),
     boardUri: options.boardUri,
     chunkSize: options.chunkSize ?? 20,
     debounceMs: options.debounceMs ?? 5,
@@ -586,5 +604,117 @@ describe('IndexNoteBridge · 失败与收尾', () => {
     });
     await harness.bridge.syncBoard(BOARD);
     expect(harness.has(indexNotePathOf(BOARD, 'Boards/_index/'))).toBe(true);
+  });
+});
+
+/**
+ * `F1`：标签进 Obsidian 体系。
+ *
+ * ① 卡内标签并进索引笔记 frontmatter；② 每个标签一份**枢纽笔记**（用到它的白板清单）。
+ */
+describe('IndexNoteBridge × 标签（F1）', () => {
+  const BOARD_B = 'Boards/B.nboard';
+  const HUB_A = 'idx/_tags/纪要.md';
+
+  it('① 卡内标签并进索引笔记 frontmatter（与白板级标签同一条 `tags:`）', async () => {
+    const harness = createHarness({
+      boards: [BOARD],
+      entries: { [BOARD]: entry('A', { tags: ['白板级'] }) },
+      cardTags: { [BOARD]: ['纪要', '白板级'] },
+    });
+    await harness.bridge.syncBoard(BOARD);
+    const text = harness.textOf(NOTE);
+    expect(text).toContain('  - "白板级"');
+    expect(text).toContain('  - "纪要"');
+    // 同一个标签（白板级 + 卡内都写过）只出现一次
+    expect(text.match(/- "白板级"/g)?.length).toBe(1);
+  });
+
+  it('② 枢纽笔记：标签 → 用到它的白板清单（卡内标签也算来源，按路径排序）', async () => {
+    const harness = createHarness({
+      tagHubs: () => [],
+      boards: [BOARD_B, BOARD],
+      entries: {
+        [BOARD]: entry('A 板', { tags: ['纪要'] }),
+        [BOARD_B]: entry('B 板'),
+      },
+      cardTags: { [BOARD_B]: ['纪要'] },
+    });
+    const stats = await harness.bridge.syncTagHubs();
+
+    expect(stats.written).toBe(1); // 只有"纪要"一个标签（两块板共用一份枢纽页）
+    const hub = harness.textOf(HUB_A);
+    expect(hub).toContain('# #纪要');
+    const a = hub.indexOf('[[idx/Boards/A|A 板]]');
+    const b = hub.indexOf('[[idx/Boards/B|B 板]]');
+    expect(a).toBeGreaterThan(0);
+    expect(b).toBeGreaterThan(a);
+
+    // 幂等：再同步一次不写盘
+    harness.written.length = 0;
+    const again = await harness.bridge.syncTagHubs();
+    expect(again.written).toBe(0);
+    expect(again.unchanged).toBe(1);
+  });
+
+  it('★ 目标路径被用户自己的笔记占着 ⇒ 跳过 + 记进 conflicts（绝不覆盖）', async () => {
+    const harness = createHarness({
+      tagHubs: () => [HUB_A],
+      files: { [HUB_A]: '# 我自己写的纪要页' },
+      boards: [BOARD],
+      entries: { [BOARD]: entry('A', { tags: ['纪要'] }) },
+    });
+    await harness.bridge.syncTagHubs();
+    expect(harness.textOf(HUB_A)).toBe('# 我自己写的纪要页');
+    expect(harness.bridge.conflicts()).toContain(HUB_A);
+  });
+
+  it('★ 不再被任何白板用到的标签 ⇒ 枢纽页被收掉（认标记才删）', async () => {
+    const stale = 'idx/_tags/旧标签.md';
+    const harness = createHarness({
+      tagHubs: () => [stale],
+      files: { [stale]: `${'<!-- nestboard:tag-hub -->'}\n# #旧标签\n` },
+      boards: [BOARD],
+      entries: { [BOARD]: entry('A', { tags: ['纪要'] }) },
+    });
+    const stats = await harness.bridge.syncTagHubs();
+    expect(stats.removed).toBe(1);
+    expect(harness.has(stale)).toBe(false);
+
+    // 用户自己的同名文件（没标记）不删
+    const mine = 'idx/_tags/我的.md';
+    const harness2 = createHarness({
+      tagHubs: () => [mine],
+      files: { [mine]: '# 我的标签页' },
+      boards: [BOARD],
+      entries: { [BOARD]: entry('A', { tags: ['纪要'] }) },
+    });
+    await harness2.bridge.syncTagHubs();
+    expect(harness2.has(mine)).toBe(true);
+  });
+
+  it('★ `syncAll` 顺带把枢纽写完；`removeAll` 把枢纽一起收（整体退订要退干净）', async () => {
+    // 清单端口给一份"活的"视图：`removeAll` 靠它找到要收的枢纽页（与生产实现同一条路）
+    let hubs: string[] = [];
+    const harness = createHarness({
+      tagHubs: () => hubs,
+      boards: [BOARD],
+      entries: { [BOARD]: entry('A', { tags: ['纪要'] }) },
+    });
+    const stats = await harness.bridge.syncAll();
+    expect(stats.written).toBe(2); // 索引笔记 + 枢纽页
+    expect(harness.has(HUB_A)).toBe(true);
+
+    hubs = [HUB_A];
+    const removed = await harness.bridge.removeAll();
+    expect(removed.removed).toBe(2);
+    expect(harness.has(HUB_A)).toBe(false);
+    expect(harness.has(NOTE)).toBe(false);
+  });
+
+  it('端口缺席（老宿主）⇒ 整个特性不发生（一个文件都不多）', async () => {
+    const harness = createHarness({ boards: [BOARD], entries: { [BOARD]: entry('A') } });
+    const stats = await harness.bridge.syncTagHubs();
+    expect(stats).toEqual({ written: 0, unchanged: 0, removed: 0, skipped: 0, failed: 0 });
   });
 });

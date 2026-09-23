@@ -160,6 +160,17 @@ export interface EdgeRendererOptions {
    *   否则用模型里的弧度 —— 与另两张覆盖表同一个约定。
    */
   getOverrideCurves?: () => ReadonlyMap<string, EdgeCurve | null> | null;
+  /**
+   * **卡外的端点几何**（`2.2.0` 批 3）：脑图节点的盒子，键是端点几何键
+   * （`脑图id/节点id`，见 `schema.nodeEndpointKey`）。
+   *
+   * ★ 为什么不并进 `getOverrideRects`（那张表是"拖动中的临时矩形"）：这两份几何的
+   *   **来源**完全不同 —— 一个来自模型 / 拖动预览，一个来自 DOM 里那棵树的实测布局。
+   *   合并的话，调用方每次都要把两件事拼在一起，而"哪一份赢"根本没有意义
+   *   （键空间不相交）。分开给，谁也不挡谁。
+   * ★ 缺席 = 这块板不把脑图节点当端点（老调用方一行都不用改）。
+   */
+  getNodeRects?: () => ReadonlyMap<string, Rect> | null;
 }
 
 /** 生成可挂到 `EdgeLayer.setPainter()` 的绘制回调 */
@@ -169,7 +180,10 @@ export function createEdgePainter(options: EdgeRendererOptions): EdgePainter {
     if (!board || board.edges.length === 0) return;
 
     const override = options.getOverrideRects?.() ?? null;
-    const rectOf = createRectLookup(board, override);
+    // 节点端点（`2.2.0` 批 3）：**每帧只取一次**（建表时逐条遍历全部节点，
+    // 而每条线都要查表 —— 放在查表里现问就等于 O(线数 × 节点数)）
+    const nodeRects = options.getNodeRects?.() ?? null;
+    const rectOf = createRectLookup(board, override, nodeRects);
     const angleOf = createAngleLookup(board, options.getOverrideAngles?.() ?? null);
     const palette = readEdgePalette(options.host);
     const selected = options.getSelected();
@@ -254,10 +268,14 @@ function resolvePath(
  *   沉到一个看不见的空盒子底部。
  * ★ 覆盖表（拖动中的临时矩形）**最后**写入，因此拖栏时栏自己的预览矩形也在其中，
  *   线会跟着手走，而不是等松手才"啪"地跳过去。
+ * ★ **脑图节点**（`2.2.0` 批 3）也进这张表：键是 `脑图id/节点id`（与卡片 id 不相交），
+ *   几何由视图从 DOM 实测喂进来（`MindLayer.nodeRects`）—— 本文件依旧只知道
+ *   "一个键换一个矩形"。
  */
 function createRectLookup(
   board: BoardFile,
   override: ReadonlyMap<string, Rect> | null,
+  nodeRects: ReadonlyMap<string, Rect> | null = null,
 ): RectLookup {
   const rects = new Map<string, Rect>();
   for (const card of board.cards) {
@@ -272,11 +290,14 @@ function createRectLookup(
     });
   }
   for (const column of board.columns) rects.set(column.id, columnRect(column));
+  if (nodeRects) {
+    for (const [key, rect] of nodeRects) rects.set(key, rect);
+  }
   // 拖动中的卡片 / 分栏以临时矩形为准（覆盖而不是替换：没被拖的照旧从模型取）
   if (override) {
     for (const [id, rect] of override) rects.set(id, rect);
   }
-  return (cardId) => rects.get(cardId) ?? null;
+  return (endpointKey) => rects.get(endpointKey) ?? null;
 }
 
 /**

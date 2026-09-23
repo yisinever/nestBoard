@@ -64,6 +64,28 @@ export function applyCardStyleVariables(el: HTMLElement, settings: NestboardSett
   }
 }
 
+/**
+ * **拟物档的标记类**（`F2`）：写在视图根容器上。
+ *
+ * ★ 为什么用**类**而不是"再来一个 CSS 变量"：CSS 没法比较变量的值做分支 ——
+ *   写一个 `--nestboard-card-style: neumorph` 在那儿没有任何规则能读它。
+ *   类选择器就是最直接的开关。
+ * ★ 更关键的是**原版档一个字节都不动**：不写这个类 = 所有既有规则照旧生效，
+ *   于是"原版档与 2.1.3 逐像素一致"这条回归基线（`11 §7`）是**结构上**成立的，
+ *   而不是靠"我逐条对照过"。
+ */
+export const BOARD_STYLE_CLASS = 'nestboard-neumorph';
+
+/**
+ * 把当前外观档写进根容器（与 {@link applyCardStyleVariables} 同一个咽喉点一起调用）。
+ *
+ * ★ 幂等：重复调用只是把同一个类再 toggle 一次；切回原版档时**摘掉类**，
+ *   于是不需要任何"复位"代码。
+ */
+export function applyBoardStyleClass(el: HTMLElement, settings: NestboardSettings): void {
+  el.classList.toggle(BOARD_STYLE_CLASS, settings.cardStyle === 'neumorph');
+}
+
 /** 移除外观变量（视图卸载 / 复用到别处时清干净，别把上一个用户的偏好留下） */
 export function clearCardStyleVariables(el: HTMLElement): void {
   for (const name of CARD_STYLE_VARS) el.style.removeProperty(name);

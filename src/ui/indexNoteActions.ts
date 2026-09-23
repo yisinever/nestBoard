@@ -49,8 +49,12 @@ export async function rebuildIndexNotes(plugin: NestboardPlugin): Promise<void> 
  *   所以目录里混着的用户笔记一个字都不会动。
  */
 export async function cleanupIndexNotes(plugin: NestboardPlugin): Promise<void> {
+  // ★ 数量把**标签枢纽笔记**（`F1` ②，`<索引目录>/_tags/`）一起算进来：
+  //   它们会被同一条命令收掉，确认框里只报索引笔记的话，用户按下的规模是少报的
   const notes = await plugin.indexNotes.listNotes();
-  if (notes.length === 0) {
+  const hubs = await plugin.indexNotes.listTagHubNotes();
+  const count = notes.length + hubs.length;
+  if (count === 0) {
     new Notice(t('notice.indexNoteCleanupNone'));
     return;
   }
@@ -58,7 +62,7 @@ export async function cleanupIndexNotes(plugin: NestboardPlugin): Promise<void> 
   new ConfirmModal(plugin.app, {
     title: t('modal.indexNoteCleanup.title'),
     body: t('modal.indexNoteCleanup.body', {
-      count: notes.length,
+      count,
       folder: plugin.settings.indexNoteFolder,
     }),
     confirmLabel: t('modal.indexNoteCleanup.confirm'),

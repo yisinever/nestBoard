@@ -149,11 +149,7 @@ function applyTitleStyle(el: HTMLElement, style: CardTitleStyle | undefined): vo
  * ★ 其余按键 `stopPropagation`：不拦的话画布会把方向键 / Delete 当成"移动 / 删除这张卡"。
  * ★ 组字中的按键一律放过（中文输入法选字时 `Enter` 是选字，不是提交）。
  */
-function renderEditor(
-  el: HTMLElement,
-  card: { title: string },
-  ctx: CardRenderContext,
-): void {
+function renderEditor(el: HTMLElement, card: { title: string }, ctx: CardRenderContext): void {
   el.classList.add('is-editing');
   const doc = el.ownerDocument;
 

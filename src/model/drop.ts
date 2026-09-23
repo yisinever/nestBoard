@@ -16,22 +16,47 @@
  */
 
 import { BOARD_EXT } from '../constants';
-import type { Card, CardType } from './schema';
-import { DEFAULT_CARD_SIZES, createCard, newBoardRefContent } from './factories';
+import type { Card, CardType, Mind } from './schema';
+import { DEFAULT_CARD_SIZES, createCard, createMind, newBoardRefContent } from './factories';
 import type { Point, Rect, Size } from '../util/geometry';
 import { roundTo } from '../util/geometry';
 import type { MessageKey } from '../util/i18n';
 
 /**
- * 拖入能变成的卡片类型。
+ * 拖入能变成的**卡片**类型。
  *
- * 只取这四种：能拖进白板的东西必然是"库里已经有的一份文件"，
+ * 只取这几种：能拖进白板的东西必然是"库里已经有的一份文件"，
  * 而它对应哪种卡片完全由扩展名决定（`note` / `link` / `todo` 等没有可拖的实体）。
+ *
+ * ★ `2.2.0` 起 `.nestmind` **不在其中**：它落成的是**白板级脑图**（`Mind`），
+ *   不再是卡（见 {@link DropKind} 的 `'mind'` 那一支）。
  */
-export type DropKind = Extract<
+export type DropCardType = Extract<
   CardType,
-  'noteRef' | 'image' | 'file' | 'video' | 'audio' | 'boardRef'
+  'noteRef' | 'image' | 'file' | 'video' | 'audio' | 'boardRef' | 'pdf' | 'canvas'
 >;
+
+/**
+ * 拖入能变成的白板对象类型。
+ *
+ * * {@link DropCardType}：落成卡片；
+ * * `'mind'`：落成**一棵画在白板上的脑图**（`2.2.0`，`.nestmind` 文件）——
+ *   它的形状与卡片不同（只有一个锚点、没有宽高），所以两条落法分开走
+ *   （`cardsForDropPaths` / `mindsForDropPaths`）。
+ */
+export type DropKind = DropCardType | 'mind';
+
+/** PDF 扩展名（`F8`）：拖进来直接是"PDF 预览卡"（不是文件卡）—— 它就是拿来看的 */
+export const PDF_EXTENSIONS: readonly string[] = ['pdf'];
+
+/** `.canvas` 扩展名（`F6`）：拖进来是**只读预览卡**（双击才在新标签打开原文件） */
+export const CANVAS_EXTENSIONS: readonly string[] = ['canvas'];
+
+/**
+ * `.nestmind` 扩展名（`F3a`）：拖进来是**脑图卡** —— 卡面就是那份脑图本身
+ * （可点、可改、可折叠），不是在白板里再开一份副本。
+ */
+export const MIND_EXTENSIONS: readonly string[] = ['nestmind'];
 
 /**
  * 拖入**预览幽灵卡**能出现的卡片种类（`F6-05`）。
@@ -95,6 +120,13 @@ const KIND_BY_EXTENSION: Record<string, DropKind> = (() => {
   // 音频（`A2`）：同上，落下来就是一张"留声机"卡
   for (const ext of AUDIO_EXTENSIONS) table[ext] = 'audio';
   for (const ext of NOTE_EXTENSIONS) table[ext] = 'noteRef';
+  // PDF（`F8`）：落成**预览卡**（从前落 `file` 卡，双击才交给系统应用）
+  for (const ext of PDF_EXTENSIONS) table[ext] = 'pdf';
+  // `.canvas`（`F6`）：也是"拿来看的"（从前落 `file` 卡，双击才打开）
+  for (const ext of CANVAS_EXTENSIONS) table[ext] = 'canvas';
+  // `.nestmind`（`F3a`）：落成**脑图卡** —— 卡面就是那份脑图（可点、可改、可折叠）
+  // ★ `2.2.0`：`.nestmind` 落成**白板级脑图**（不再是脑图卡）—— 见 `DropKind`
+  for (const ext of MIND_EXTENSIONS) table[ext] = 'mind';
   table[BOARD_EXT] = 'boardRef';
   return table;
 })();
@@ -368,11 +400,33 @@ export function cardsForDropPaths(paths: readonly string[], origins: readonly Po
     ];
   }
 
-  return paths.map((path, index) => {
+  return paths.flatMap((path, index) => {
     const kind = dropKindForPath(path);
+    // ★ `.nestmind` 不在这里落卡（`2.2.0`）：它是**白板级脑图**，由 `mindsForDropPaths` 落 ——
+    //   两类对象的形状不同（卡片有 `width/height`，脑图只有一个锚点），
+    //   所以这里跳过它，而不是硬塞进一个 `Card` 返回类型里。
+    if (kind === 'mind') return [];
     const fallback: Point = origins[origins.length - 1] ?? { x: 0, y: 0 };
     const origin = origins[index] ?? fallback;
-    return cardOfKind(kind, path, rectAt(origin, DEFAULT_CARD_SIZES[kind]));
+    return [cardOfKind(kind, path, rectAt(origin, DEFAULT_CARD_SIZES[kind]))];
+  });
+}
+
+/**
+ * 拖进来的 `.nestmind` → **白板级脑图**（`2.2.0`）。
+ *
+ * ★ 与 `cardsForDropPaths` 用**同一份 `origins`**（每个落点都是"这一项的中心"）：
+ *   脑图的 `x/y` 就是**根节点中心**，于是 `origin` 直接用，不必像卡片那样换算左上角。
+ * ★ 返回的空数组 = "这一次拖入里没有脑图"（绝大多数拖入）。
+ */
+export function mindsForDropPaths(paths: readonly string[], origins: readonly Point[]): Mind[] {
+  return paths.flatMap((path, index) => {
+    if (dropKindForPath(path) !== 'mind') return [];
+    const fallback: Point = origins[origins.length - 1] ?? { x: 0, y: 0 };
+    const origin = origins[index] ?? fallback;
+    // 模型不在文件里读（那是视图的异步事）：这里只把 `path` 记下来，
+    // 渲染层读到之后自己画（见 `view/render/MindLayer`）
+    return [createMind({ x: origin.x, y: origin.y, path })];
   });
 }
 
@@ -382,8 +436,12 @@ export function cardsForDropPaths(paths: readonly string[], origins: readonly Po
  * 写成 `switch` 而不是"拼一个联合类型的 overrides 再 `createCard(kind, …)`"：
  * 泛型 `T` 取联合类型时，`content` 的收窄会退化成四个类型的并集，
  * 分类型各写一行才能让 `createCard('noteRef', …)` 拿到真正精确的返回类型。
+ *
+ * ★ 参数收窄成 {@link DropCardType}：`'mind'` 那一支永远不会走到这里
+ *   （调用方已经把它分流出去了），类型上写出来能让"以后再加一种非卡的拖入"时
+ *   TS 直接指出该改的地方。
  */
-function cardOfKind(kind: DropKind, path: string, rect: Rect): Card {
+function cardOfKind(kind: DropCardType, path: string, rect: Rect): Card {
   switch (kind) {
     case 'noteRef':
       return createCard('noteRef', { ...rect, content: { path } });
@@ -395,6 +453,12 @@ function cardOfKind(kind: DropKind, path: string, rect: Rect): Card {
     // 音频卡（`A2`）：同上
     case 'audio':
       return createCard('audio', { ...rect, content: { path, showSize: false } });
+    // PDF 预览卡（`F8`）：还是"一个路径"（同文件卡形状），只是卡面拿来看那一页纸
+    case 'pdf':
+      return createCard('pdf', { ...rect, content: { path, showSize: false } });
+    // `.canvas` 预览卡（`F6`）：同上
+    case 'canvas':
+      return createCard('canvas', { ...rect, content: { path, showSize: false } });
     case 'file':
       return createCard('file', { ...rect, content: { path } });
     case 'boardRef':

@@ -10,6 +10,9 @@
 import { BOARD_SPEC, BOARD_VERSION, BOARD_REF_MINI_SIZE, ID_PREFIX } from '../constants';
 import { createId } from '../util/id';
 import { randomBoardIcon } from '../util/emoji';
+// 内嵌脑图卡（`F4`）：卡片内容的初始形态由**脑图的工厂**造（`createMindFile` 那套
+// "新加字段要接住"的纪律只该在脑图那一侧踩一次）
+import { createMindFile } from '../mind/model/factories';
 import type {
   BoardFile,
   BoardMeta,
@@ -23,7 +26,9 @@ import type {
   EdgeEndpoint,
   Group,
   HexColor,
+  Mind,
 } from './schema';
+import type { MindFile } from '../mind/model/schema';
 
 export interface Size {
   width: number;
@@ -68,6 +73,18 @@ export const DEFAULT_CARD_SIZES: Record<CardType, Size> = {
   // 评论卡比便签略宽一点点：每条前面有一列时间戳，太窄的话正文只剩两三个字一行。
   // 高度按"三条短备注 + 一行输入框"估的，够用又不至于空一大片
   comment: { width: 300, height: 200 },
+  // PDF 预览卡（`F8`）：**A4 竖版比例**（320×400 ≈ 1:1.25）—— 一页纸长什么样，
+  //   卡片就长什么样；横版会把整页压成一条，字号小到读不出
+  pdf: { width: 320, height: 400 },
+  // `.canvas` 预览卡（`F6`）：横版 3:2 —— canvas 本身多半是"一屏摊开"的形状，
+  //   竖着放会把内容压成一条
+  canvas: { width: 360, height: 240 },
+  // 脑图卡（`F3a`）：比预览卡大一圈 —— 它要装下"根 + 3 层"（`EMBED_MAX_DEPTH`），
+  //   太小的话整张图会被缩放得看不清字（卡内不做平移缩放，只能整体缩小）
+  mindRef: { width: 440, height: 320 },
+  // 内嵌脑图卡（`F4`）：这里只是**兜底** —— 新建时按内容算（`sizeForContent` →
+  //   `mindCardSizeFor`），用户要的"尺寸随内容自适应"就落在那一步
+  mind: { width: 440, height: 300 },
 };
 
 export const DEFAULT_COLUMN_SIZE: Size = { width: 320, height: 500 };
@@ -90,6 +107,21 @@ export const DEFAULT_COLUMN_SIZE: Size = { width: 320, height: 500 };
  */
 export function newBoardRefContent(): CardContentMap['boardRef'] {
   return { path: '', preview: 'mini', showCount: true, icon: randomBoardIcon() };
+}
+
+/**
+ * 内嵌脑图卡（`F4`）的初始内容：**中心主题 + 3 个空分支**（用户 2026-09-21 定的）。
+ *
+ * ★ 与 `newBoardRefContent` 同一条纪律：新建走的是**这里**（`CONTENT_FACTORIES`），
+ *   卡片定义自己的 `createDefaultContent` 只是转发 —— 两处各写一份的下场，
+ *   在 `O18` 那轮已经踩过一次（"新建出来不对、重载之后才对"）。
+ * ★ 3 这个数写在这里（而不是卡片文件里）：它与"新建时该长什么样"是一件事，
+ *   而 `cards/**` 只负责把内容画出来。
+ */
+export const INLINE_MIND_BRANCHES = 3;
+
+export function newMindContent(): CardContentMap['mind'] {
+  return { mind: createMindFile({ branches: INLINE_MIND_BRANCHES, title: '' }) };
 }
 
 /** 各类型的空 content。与 `03 §2.7` 一一对应 */
@@ -116,6 +148,14 @@ const CONTENT_FACTORIES: { [K in CardType]: () => CardContentMap[K] } = {
   syncNote: () => ({ key: '', md: '' }),
   // 空线程、未解决：新建的评论卡先是一张"等着写第一条"的空卡（与空便签同一种体面）
   comment: () => ({ entries: [], resolved: false }),
+  // PDF 卡（`F8`）：空路径（卡面画"把 PDF 拖进来"那句引导）；大小那一格不画
+  pdf: () => ({ path: '', showSize: false }),
+  // `.canvas` 卡（`F6`）：空路径（卡面画"把 .canvas 拖进来"那句引导）
+  canvas: () => ({ path: '', showSize: false }),
+  // 脑图卡（`F3a`）：空路径（卡面画"把 .nestmind 拖进来"那句引导）
+  mindRef: () => ({ path: '', showSize: false }),
+  // 内嵌脑图卡（`F4`）：中心主题 + 3 个空分支（见 `newMindContent`）
+  mind: newMindContent,
 };
 
 export function createDefaultContent<T extends CardType>(type: T): CardContentMap[T] {
@@ -183,6 +223,15 @@ export type BoardFileOverrides = {
   settings?: Partial<BoardFile['settings']>;
   columns?: Column[];
   cards?: Card[];
+  /**
+   * 白板级脑图（`2.2.0` 收尾 · 模板对接）：模板也能带树 —— 在此之前
+   * `createBoardFile` 的 overrides 里没有这一格，于是**内置模板无法包含脑图**
+   * （只能靠外部 `board.minds = [...]` 事后补，模板那一路就没法读）。
+   *
+   * ★ **不传 = 这个键就不存在**（缺席 = 没有脑图，`mindContainers` 那条用例守着它）：
+   *   它的缺省不是 `[]` 而是"不写" —— 空白板的文件里不该多一行空数组。
+   */
+  minds?: Mind[];
   edges?: Edge[];
   groups?: Group[];
   revision?: number;
@@ -220,6 +269,7 @@ export function createBoardFile(overrides: BoardFileOverrides = {}): BoardFile {
     cards: [],
     edges: [],
     groups: [],
+    // ★ 这里**没有** `minds: []`：它由 `...rest` 在"传了才写"（见 overrides 的说明）
     ...rest,
   };
 }
@@ -267,18 +317,54 @@ export function createGroup(cardIds: string[], label = ''): Group {
   return { id: createId(ID_PREFIX.group), cardIds: [...cardIds], label };
 }
 
+export type MindOverrides = Partial<Omit<Mind, 'id'>>;
+
+/**
+ * 在白板上放一棵脑图（`2.2.0`）。
+ *
+ * ★ 默认 `path: ''` + **不带模型**：真正的内容由调用方给（内嵌的塞 `mind`、
+ *   文件的给 `path`）—— 工厂不猜"这一次是哪种"，与新建立即要一份空模型的地方
+ *   （工具栏新建）分工清楚：那里显式传 `mind: newMindFile()`。
+ * ★ `x/y` 是**根节点中心**（不是左上角）：脑图没有宽高，也就没有"左上角"这回事。
+ */
+export function createMind(overrides: MindOverrides = {}): Mind {
+  return {
+    id: createId(ID_PREFIX.mind),
+    x: 0,
+    y: 0,
+    z: 1,
+    path: '',
+    ...overrides,
+  };
+}
+
+/** 一份"刚新建"的内嵌脑图模型（中心主题 + `branches` 个空分支） */
+export function newMindModel(branches = 3): MindFile {
+  return createMindFile({ branches, title: '' });
+}
+
 // ─────────────────────────────────────────────────────────────
 // 小工具
 // ─────────────────────────────────────────────────────────────
 
-/** 画布上所有元素（含分栏）的最大层级，用于新建元素时"放到最上层" */
-export function maxZ(board: Pick<BoardFile, 'cards' | 'columns'>): number {
+/**
+ * 画布上所有元素（含分栏、含脑图）的最大层级，用于新建元素时"放到最上层"。
+ *
+ * ★ `minds` 是**可选键**（`2.2.0`）：类型上收成 `Pick<…> & { minds?: … }` 之后，
+ *   老调用点（只传 `cards`/`columns`）一个字都不用改，而传得全的地方也不会漏算脑图的层。
+ */
+export function maxZ(
+  board: Pick<BoardFile, 'cards' | 'columns'> & Pick<Partial<BoardFile>, 'minds'>,
+): number {
   let max = 0;
   for (const card of board.cards) max = Math.max(max, card.z);
   for (const column of board.columns) max = Math.max(max, column.z);
+  for (const mind of board.minds ?? []) max = Math.max(max, mind.z);
   return max;
 }
 
-export function nextZ(board: Pick<BoardFile, 'cards' | 'columns'>): number {
+export function nextZ(
+  board: Pick<BoardFile, 'cards' | 'columns'> & Pick<Partial<BoardFile>, 'minds'>,
+): number {
   return maxZ(board) + 1;
 }

@@ -9,14 +9,14 @@ to your notes.
 - **Platform:** desktop only (`isDesktopOnly: true`). Tested on desktop; mobile is **not**
   verified yet.
 - **Network:** **no background network activity.** Only two features ever make a request, and
-  both only when you click: *fetch link preview* (on by default) and *map card static image*
+  both only when you click: _fetch link preview_ (on by default) and _map card static image_
   (off by default). Rendering, exporting and opening boards issue zero requests.
 - **Data:** everything stays inside your vault. No cloud, no account, no telemetry.
 
 ## Features
 
 - **Infinite canvas** with pan / zoom and a remembered viewport.
-- **Cards:** sticky note · synced note · note reference (can show a single *section*) · image ·
+- **Cards:** sticky note · synced note · note reference (can show a single _section_) · image ·
   map · file · board card · link (with site name / favicon / final URL) · to-do · swatch ·
   ink drawing · comment · title · gallery · video · audio.
 - **Connections:** straight or dashed, smart routing that avoids cards, adjustable curve
@@ -40,10 +40,10 @@ to your notes.
   something first.
 - **Board list sidebar:** folder tree / recently opened / by tag, with filters.
 - **Thumbnail navigator:** click or drag to navigate.
-- **Drag & drop:** drop files in, paste images, or use *Add to board* from a note's context menu.
+- **Drag & drop:** drop files in, paste images, or use _Add to board_ from a note's context menu.
 
 Not implemented yet: the OBS live-streaming set (local read-only HTTP output, transparent
-background, copy-browser-source URL, fixed frame and safe area, per-card *hide while live*,
+background, copy-browser-source URL, fixed frame and safe area, per-card _hide while live_,
 pointer highlight, OBS WebSocket control). Presentation mode itself already works with
 full-screen or window capture.
 
@@ -56,7 +56,7 @@ Install manually:
    [latest release](https://github.com/yisinever/nestBoard/releases/latest).
 2. Create the folder `<your vault>/.obsidian/plugins/nestboard/`.
 3. Put the three files into it.
-4. Obsidian → Settings → Community plugins → turn off *Restricted mode* → enable **Nestboard**.
+4. Obsidian → Settings → Community plugins → turn off _Restricted mode_ → enable **Nestboard**.
 
 ### Build from source
 
@@ -69,7 +69,7 @@ Other scripts: `npm run dev` (watch), `npm run typecheck`, `npm run lint`, `npm 
 
 ## Getting started
 
-1. Create a board from the command palette or the ribbon (*Create new board*).
+1. Create a board from the command palette or the ribbon (_Create new board_).
 2. Add cards from the left toolbar, by dragging files in, or from the canvas context menu.
 3. Right-click a card or a column for its menu; select a single card to get the quick action
    bar (bold / italic / underline / text color / background).
@@ -78,8 +78,8 @@ Other scripts: `npm run dev` (watch), `npm run typecheck`, `npm run lint`, `npm 
 ## Privacy
 
 Nestboard has no account, no telemetry and no background requests. The only two networking
-features are per-click: *fetch link preview* (on by default, can be disabled in settings) and
-*map card static image* (off by default; you choose a tile provider and may need your own API
+features are per-click: _fetch link preview_ (on by default, can be disabled in settings) and
+_map card static image_ (off by default; you choose a tile provider and may need your own API
 key). Everything else — rendering, exporting, switching boards — is fully local.
 
 ## License

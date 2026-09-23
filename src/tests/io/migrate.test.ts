@@ -52,7 +52,7 @@ describe('migrateBoardFile', () => {
     expect(result).toEqual({ ok: false, reason: 'no-migration-path', version: 0 });
   });
 
-  it('注入迁移链后按 0→1 执行，并记录 applied', () => {
+  it('注入迁移链后**逐版本一跳**执行，并记录 applied', () => {
     const steps: MigrationStep[] = [
       {
         to: 1,
@@ -70,6 +70,10 @@ describe('migrateBoardFile', () => {
           };
         },
       },
+      // ★ 链必须**连续**：`BOARD_VERSION` 现在是 `2`（白板可以内建脑图，`2.2.0`），
+      //   所以注入的链也得补上 `{ to: 2 }` —— 少一跳就是 `no-migration-path`
+      //   （那等于"所有 v1 文件都打不开"，默认链里那一步正是为此存在的）
+      { to: 2, description: '恒等（脑图升格为白板对象）', migrate: (value) => value },
     ];
 
     const result = migrateBoardFile(
@@ -79,7 +83,10 @@ describe('migrateBoardFile', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.applied).toEqual(['v1 · 把旧字段 content.text 改名为 content.md']);
+    expect(result.applied).toEqual([
+      'v1 · 把旧字段 content.text 改名为 content.md',
+      'v2 · 恒等（脑图升格为白板对象）',
+    ]);
     expect(result.value.version).toBe(BOARD_VERSION);
     expect(result.value.cards).toEqual([
       { id: 'c_1', type: 'note', content: { md: '迁移后', editorMode: 'markdown' } },

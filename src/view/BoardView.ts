@@ -35,9 +35,59 @@ import {
   TFolder,
   setIcon,
 } from 'obsidian';
-// `Menu` 只在 `onPaneMenu` 的签名里出现（宿主菜单由 Obsidian 建好递进来）⇒ 类型导入就够
+// `Menu` 只在类型位置出现（`onPaneMenu` 的签名；脑图卡的节点菜单走
+// `showMenuAtMouse`，`Menu` 由 `ui/ContextMenus` 建）⇒ 类型导入就够
 import type { Menu, WorkspaceLeaf } from 'obsidian';
 import { boardRefPreviewSize, boardTitleOf } from '../cards/boardRef';
+// 脑图卡（`F3a` / `F4`）："加完节点立刻让我打字"——节点菜单在视图这一层，
+// 卡内编辑器在卡片那一层，两边靠这一个请求槽对接（见 `mind/embed/editRequest.ts`）
+import { requestMindEdit, takeMindEdit } from '../mind/embed/editRequest';
+// 脑图（`F3a`）：白板里的脑图卡直接读写 `.nestmind` —— 模型操作（加节点 / 删除 / 折叠）
+// 与"打开那份脑图"都住在脑图那一侧，这一层只做接线
+import { mindEditKeyOf } from '../mind/embed/MindBridge';
+import type {
+  MindBridge,
+  MindInlineSource,
+  MindNodeFocus,
+  MindNodeMenuRequest,
+} from '../mind/embed/MindBridge';
+// `F4` 起卡内节点也能从底部那条栏改格式：那几个操作与右键菜单共用同一批 `ops`
+// ★ 节点那颗标记也叫 `setIcon`，与 `obsidian` 的同名函数撞名 —— 这里**改名导入**，
+//   obsidian 那个（往按钮里画图标）在本文件里用得很多，改它反而更贵
+import {
+  addChild,
+  addSibling,
+  depthOf,
+  neighborByArrow,
+  promote,
+  removeNodes,
+  rootTextOf,
+  setCollapsed,
+  setIcon as setMindNodeIcon,
+  setNodeStyle,
+} from '../mind/model/ops';
+// ★ 卡内节点的**键位表**（`2.2.0` 收尾 · 用户 2026-09-23："nestmind 里面的操作搬过来就行"）。
+//   纯函数（给一个键盘事件，回答"该做什么"）⇒ 白板不抄一份"哪个键干什么"，
+//   于是两个宿主上的 Tab / 回车 / 方向键**永远不会长歪**。
+import { mindKeyActionOf } from '../mind/view/keys';
+import { directionForStructure } from '../mind/layout/tree';
+import type { MindStylePatch } from '../mind/model/ops';
+// ★ 节点剪贴板（`2.2.0` 收尾 · 用户 2026-09-23）：节点复制粘贴走脑图自己那一份格式，
+//   与 `.nestmind` 视图**同一个模块**读写（认亲 / 双行李只有一处实现）
+import {
+  clipboardLabelOf,
+  getMindClipboard,
+  pasteForest,
+  type MindClipboard,
+} from '../mind/model/clipboard';
+import { nodeClipboardOf, writeMindClipboard } from '../mind/view/systemClipboard';
+import { titleBoldOf } from '../mind/model/palette';
+// 节点上的图片附件要和图片卡一起预加载（导出用）
+import { firstRefOf } from '../mind/model/refs';
+import type { MindFile, MindNode } from '../mind/model/schema';
+// 内嵌脑图卡的「导出为 `.nestmind`」（`F4`）：落盘在脑图那一侧（目录 / 重名顺延 / 序列化）
+import { writeMindToVault } from '../mind/io/newMind';
+import { openMindView } from '../mind/view/host';
 import { cardIconOf } from '../cards/cardIcon';
 import { normalizeImageCardColor } from '../cards/image';
 import { normalizeVideoCardColor } from '../cards/video';
@@ -95,6 +145,7 @@ import {
   ROTATE_HANDLE_ATTR,
   VIEW_TYPE_BOARD,
   cardDisplayHeight,
+  MIND_CONTAINER_ID_ATTR,
 } from '../constants';
 import { unsortedDropPoint } from '../io/homeBoard';
 import { serializeBoard } from '../io/BoardRepository';
@@ -209,6 +260,7 @@ import {
   cardsForDropPaths,
   cascadeOrigins,
   dropHintKey,
+  mindsForDropPaths,
   noteCardForDropText,
   resolveDropText,
 } from '../model/drop';
@@ -223,6 +275,7 @@ import {
   hitTestEdge,
   normalizeEdgeCurve,
   removeEdges,
+  setEdgeEndpoint,
   updateEdges,
 } from '../model/edges';
 import type {
@@ -232,7 +285,13 @@ import type {
   EdgePatch,
   RectLookup,
 } from '../model/edges';
-import { DEFAULT_CARD_SIZES, createCard, createEdge } from '../model/factories';
+import {
+  DEFAULT_CARD_SIZES,
+  createCard,
+  createEdge,
+  createMind,
+  newMindModel,
+} from '../model/factories';
 import { HistoryStack, restoreContent, serializeContent } from '../model/history';
 import {
   MIN_GROUP_SIZE,
@@ -250,11 +309,19 @@ import {
   groupMembers,
   groupOfCard,
   groupOfColumn,
+  // 白板级脑图（`2.2.0`）：挪位置 / 换模型 / 进白板 —— 树内部的编辑在 `mind/model/ops`
+  addMind,
+  cloneJson,
+  duplicateMinds,
+  moveMind,
   patchSyncGroup,
   removeCards,
+  removeMinds,
+  removeMindNodes,
   sendToBack,
   setGroupCollapsed,
   setGroupLabel,
+  setMindModel,
   translateCards,
   ungroupMembers,
   updateCards,
@@ -266,6 +333,7 @@ import {
 } from '../model/ops';
 import {
   buildCardTransfer,
+  buildNodeClipboard,
   parseCardTransfer,
   pasteCardTransfer,
   type CardTransfer,
@@ -291,10 +359,17 @@ import type {
   EdgeCurve,
   HexColor,
   InkPath,
+  Mind,
   NoteVariant,
   ThemeColor,
 } from '../model/schema';
-import { isThemeColor } from '../model/schema';
+import {
+  endpointOfKey,
+  isThemeColor,
+  nodeEndpointKey,
+  splitEndpointKey,
+  type EdgeEndpoint,
+} from '../model/schema';
 import {
   SPLIT_MIN_GROUPS,
   applySplitToSource,
@@ -305,7 +380,13 @@ import {
   type SplitChild,
   type SplitMove,
 } from '../model/split';
-import { NO_FILTER, filteredOutIds, matchedCount, type CardFilter } from '../model/filter';
+import {
+  NO_FILTER,
+  dimmedMindNodeKeys,
+  filteredOutIds,
+  matchedCount,
+  type CardFilter,
+} from '../model/filter';
 // 整理类（T6.07 / T6.08 / F5-06 / F5-07）：模型层负责几何，视图只接命令与历史
 import { columnsByTag, tidyBoard as tidyBoardModel, type TagColumnsResult } from '../model/arrange';
 import { brokenRefsOf, refExistsInVault, type CardRef } from '../model/links';
@@ -313,6 +394,7 @@ import type { OpenTodoEntry } from '../model/todos';
 import {
   addToPresentation,
   clearPresentSteps,
+  explicitPresentSteps,
   movePresentStep,
   presentStepOf,
   removeFromPresentation,
@@ -329,6 +411,7 @@ import {
   roundTo,
   type Point,
   type Rect,
+  type Size,
 } from '../util/geometry';
 import { t, type MessageKey } from '../util/i18n';
 import { createId } from '../util/id';
@@ -356,6 +439,7 @@ import { openSaveTemplateDialog } from '../ui/templateActions';
 import { scaleAdviceOf, scaleHintKey, type ScaleAdvice } from './scale';
 import {
   buildCanvasMenuSpec,
+  buildMindMenuSpec,
   buildCardMenuSpec,
   buildColumnMenuSpec,
   buildEdgeMenuSpec,
@@ -375,6 +459,8 @@ import {
 import { BackgroundLayer } from './render/BackgroundLayer';
 import { CardLayer, RESIZE_HANDLES } from './render/CardLayer';
 import type { ResizeHandle } from './render/CardLayer';
+// 白板级脑图那一层（`2.2.0`）：与卡片层平级 —— 画的是"长在画布上的树"，不是卡里的内容
+import { MindLayer } from './render/MindLayer';
 import { ColumnLayer, columnRect, type ColumnGesture } from './render/ColumnLayer';
 import { GroupLayer } from './render/GroupLayer';
 import { EdgeLayer } from './render/EdgeLayer';
@@ -382,6 +468,17 @@ import { InkLayer } from './render/InkLayer';
 import { createEdgePainter } from './render/EdgeRenderer';
 import { OverlayLayer } from './render/OverlayLayer';
 import { ConnectController } from './interact/ConnectController';
+import { TreeLinkController } from './interact/TreeLinkController';
+import {
+  collapsedTreeCardIds,
+  linkTreeParent,
+  setTreeCollapsed,
+  treeChildrenIds,
+  treeHiddenCountOf,
+  treeLinkState,
+  treeParentOf,
+  unlinkTreeParent,
+} from '../model/tree';
 import { EdgeCurveController } from './interact/EdgeCurveController';
 import {
   CardEventDelegate,
@@ -434,6 +531,23 @@ const NOTE_BAR_FEATURES: ReadonlySet<QuickBarFeature> = new Set<QuickBarFeature>
 ]);
 
 /**
+ * 哪些类型的卡片：**双击标题行 = 就地改标题**（`F5`，用户 2026-09-21）。
+ *
+ * ★ 这一条是"标题编辑与内容编辑分家"的配套：便签 / 同步便签的内容编辑态里**没有**标题格
+ *   （与引用卡——`.md` 文档节点——同款，见 `cards/note.ts` 文件头），于是"卡面那一行字"
+ *   必须自己接住双击 —— 否则鼠标用户改名字就只剩右键菜单一条路。
+ * ★ 名单为什么只有这两类：
+ *   * 引用卡 / 文件卡 / 白板卡：标题取自文件（`titleFilePath`），双击另有语义（打开源），
+ *     改标题一直是右键「编辑标题」那一项；
+ *   * 仅标题卡：整张卡就是那一行字（`content.text`），双击进它自己的编辑态 ——
+ *     改的不是 `card.title`，把它算进来会让双击"看着没反应"（写了另一个字段）。
+ */
+const TITLE_BAND_DOUBLE_CLICK_TYPES: ReadonlySet<CardType> = new Set<CardType>([
+  'note',
+  'syncNote',
+]);
+
+/**
  * 白板卡那条栏（`O38`）：**标记 / 卡片颜色 / 编辑标题**（用户 2026-09-16 指定的三项）。
  *
  * ★ 没有粗 / 斜 / 下划线 / 字色：白板卡**只有一行名字**（在卡外），
@@ -461,6 +575,30 @@ const TITLE_CARD_BAR_FEATURES: ReadonlySet<QuickBarFeature> = new Set<QuickBarFe
   'italic',
   'underline',
   'ink',
+  'color',
+]);
+
+/**
+ * **卡内脑图节点**那条栏（`F4`，用户 2026-09-21："点击脑图节点，在画布上，底部也可以出现
+ * 对应节点的快捷操作栏"）。
+ *
+ * 与标签页里那条（`MindView` 的 `ALL_FEATURES`）逐项对齐：标记 / 粗 / 斜 / 下划线 /
+ * 字色 / 高亮 / **节点底色**。
+ *
+ * ★ 少了三样，都是**卡面这一层还没有对应编辑器**，不是"忘了"：
+ *   * `editNote`（编辑备注）：卡内没有备注编辑器（标签页里那个是 `MindView.beginNoteEdit`）；
+ *   * `insertImage`（给节点挂附件）：要弹库内文件选择器 + 写 `node.refs`，还没接；
+ *   * `link`（节点之间的关联线）：那条线是**脑图画布自己**画的（`MindView` 的 link 会话），
+ *     卡内那套渲染里没有它 —— 接上去要么画不成、要么画在卡片里看不见。
+ *   这三样与"卡片级别的连线"（下一步做的节点↔白板连线）是两回事，别混。
+ */
+const MIND_NODE_BAR_FEATURES: ReadonlySet<QuickBarFeature> = new Set<QuickBarFeature>([
+  'icon',
+  'bold',
+  'italic',
+  'underline',
+  'ink',
+  'highlight',
   'color',
 ]);
 
@@ -513,6 +651,12 @@ export class BoardView extends FileView {
 
   private background: BackgroundLayer | null = null;
   private cardLayer: CardLayer | null = null;
+  /**
+   * 白板级脑图那一层（`2.2.0`）：与卡片层平级，画的是"长在画布上的树"。
+   *
+   * ★ 它不是"某张卡的渲染器"：容器没有宽高、不裁剪、不缩放（见 `MindLayer` 文件头）。
+   */
+  private mindLayer: MindLayer | null = null;
   private columnLayer: ColumnLayer | null = null;
   /**
    * 编组层（O03）：组的包围框 + 标签条（收起 / 展开 / 改名）。
@@ -555,6 +699,8 @@ export class BoardView extends FileView {
   private canvasPressSeen = false;
   /** 连线手势（T1.68）：从卡片锚点拖出、落到目标卡。锚点 DOM 由它自己持有并复用 */
   private connectController: ConnectController | null = null;
+  /** 树连线手势（`F7`）：与普通连线同构、目标是"父→子"的树关系 */
+  private treeLinkController: TreeLinkController | null = null;
   /**
    * 连线弧度手柄（T7.12 / `F3-07`）：单选一条 Free 线时在中点浮出一个小圆点。
    *
@@ -589,6 +735,13 @@ export class BoardView extends FileView {
   }> = [];
   /** Vault 访问桥（T1.42–T1.45）：卡片定义靠它读真实 `.md`，本视图负责造它 */
   private notesBridge: VaultBridge | null = null;
+  /**
+   * 脑图桥（`F3a`）：脑图卡读写的 `.nestmind`。
+   *
+   * ★ 懒建一次（它只是几个闭包，不持有 DOM / 资源），`teardownCanvas` 里清掉 ——
+   *   与其余几座桥同一条：桥的生命周期 = 这次画布会话。
+   */
+  private mindBridge: MindBridge | null = null;
   /** 系统文件操作桥（T1.53）：文件卡的"用系统应用打开 / 读文件大小" */
   private shellBridge: ShellBridge | null = null;
   /**
@@ -856,9 +1009,16 @@ export class BoardView extends FileView {
    * 代价是**必须成对摘除**，所以统一走 `startDragSession` / `endDragSession`。
    */
   private dragListeners: Array<() => void> = [];
-  /** 自动高度待提交（T1.38）：延到下一帧，避免在卡片层遍历 DOM 的中途重入 */
-  private readonly pendingHeights = new Map<string, number>();
-  private heightFlushScheduled = false;
+  /**
+   * 自动尺寸待提交（T1.38 的自动高度 / `F4` 的脑图卡"内容说了算"）：
+   * 延到下一帧，避免在卡片层遍历 DOM 的中途重入。
+   *
+   * ★ 形状从"一个高度"长成"一个尺寸"（`F4`）：脑图卡**宽度也要跟着内容走**
+   *   （见 `requestCardSize`）。两种调用方共用同一条队列与同一个提交 ——
+   *   分两条的话，同一帧里"长高"与"长宽"会各自 `commit` 一次，历史里平白多一条。
+   */
+  private readonly pendingSizes = new Map<string, Size>();
+  private sizeFlushScheduled = false;
   /**
    * 帧调度器（T2.14 / `02 §8.2`「批量写入 rAF 合并」）。
    *
@@ -1024,6 +1184,15 @@ export class BoardView extends FileView {
    *   `*_BAR_FEATURES` 决定（图片卡、待办卡等各有各的编辑方式，不在这条栏上）。
    */
   private quickBar: NodeToolbar | null = null;
+  /**
+   * 卡内脑图**此刻选中的那个节点**（`F4`，用户 2026-09-21）。
+   *
+   * ★ 它是"状态"不是"事件"：栏要一直记着现在操作的是谁，所以整份请求存下来，
+   *   每次刷栏时按 `path` / `inline` **现读**模型（节点可能已经被改过好几轮）。
+   * ★ 与卡片选区的关系：点节点**不会**选中那张卡（那一层被卡片自己 `stopPropagation`
+   *   拦下了），所以这里不能要求"卡也在选区内"；失效判据见 {@link syncQuickBar}。
+   */
+  private mindFocus: MindNodeFocus | null = null;
 
   private readonly boardSubscriptions: Array<() => void> = [];
   private unsubscribeViewport: (() => void) | null = null;
@@ -1197,26 +1366,42 @@ export class BoardView extends FileView {
     this.setSelectionPresentStep(false);
   }
 
-  /** 板上有没有编进演示路径的卡片 */
+  /** 板上有没有编进演示路径的对象（卡或脑图，`2.2.0` 收尾） */
   get hasPresentSteps(): boolean {
-    return this.board?.cards.some((card) => presentStepOf(card) !== null) ?? false;
+    const board = this.board;
+    if (!board) return false;
+    return this.steppablesOf(board).some((entity) => presentStepOf(entity) !== null);
+  }
+
+  /** 能进演示路径的全部对象（卡 + 脑图）—— 判据一处，别再散落（`2.2.0` 收尾） */
+  private steppablesOf(board: BoardFile): Array<Card | Mind> {
+    return [...board.cards, ...(board.minds ?? [])];
+  }
+
+  /** 选中的对象 id（卡 + 脑图）：演示相关的几个入口都按它算 */
+  private selectedSteppableIds(): string[] {
+    return [...this.selection.cardIds, ...this.selection.mindIds];
   }
 
   /** 选中的卡片里至少有一张**还没进**路径（"加入演示"的可用性） */
   get canAddToPresentation(): boolean {
-    if (!this.canManipulateCards) return false;
-    return [...this.selection.cardIds].some((id) => this.presentStepOfId(id) === null);
+    // ★ 闸门是"选中的东西里**有能进演示的**"，不是"有卡片"（用户 2026-09-22 实测：F4）
+    //   —— 选中一棵树时命令面板里从前**根本没有这两条命令**（`available` 为假 ⇒ Obsidian 直接不列）。
+    if (!this.canManipulateSelection) return false;
+    return this.selectedSteppableIds().some((id) => this.presentStepOfId(id) === null);
   }
 
   /** 选中的卡片里至少有一张**已经在**路径里（"移出演示"的可用性） */
   get canRemoveFromPresentation(): boolean {
-    if (!this.canManipulateCards) return false;
-    return [...this.selection.cardIds].some((id) => this.presentStepOfId(id) !== null);
+    if (!this.canManipulateSelection) return false;
+    return this.selectedSteppableIds().some((id) => this.presentStepOfId(id) !== null);
   }
 
   private presentStepOfId(id: string): number | null {
-    const card = this.board?.cards.find((item) => item.id === id);
-    return card ? presentStepOf(card) : null;
+    const board = this.board;
+    if (!board) return null;
+    const entity = this.steppablesOf(board).find((item) => item.id === id);
+    return entity ? presentStepOf(entity) : null;
   }
 
   /**
@@ -1228,7 +1413,8 @@ export class BoardView extends FileView {
    *   —— 相机只在切步（`→` / `←` / 数字键）时动。
    */
   private setSelectionPresentStep(on: boolean): void {
-    const ids = [...this.selection.cardIds];
+    // ★ 脑图也在这个集合里（`2.2.0` 收尾）：选中一棵树时「加入演示 / 移出演示」同样该能用
+    const ids = this.selectedSteppableIds();
     if (ids.length === 0) return;
 
     if (!on) {
@@ -1241,9 +1427,27 @@ export class BoardView extends FileView {
     this.commit(t('history.presentAdd'), (board) => addToPresentation(board, ids));
     // 步骤号在提交**之后**读：把它写进去的正是 `addToPresentation`
     const first = ids[0];
-    const card = this.board?.cards.find((item) => item.id === first);
-    const step = card ? presentStepOf(card) : null;
+    const board = this.board;
+    const entity = board ? this.steppablesOf(board).find((item) => item.id === first) : undefined;
+    const step = entity ? presentStepOf(entity) : null;
     if (step !== null) new Notice(t('notice.presentAdded', { step }));
+  }
+
+  /**
+   * 一棵脑图在演示里取景用的矩形 —— **世界坐标**，与卡片那条 `visualRectOf` 同一套单位。
+   *
+   * ★★ 单位这一条**必须**对齐（`b107` 修的正是它）：`presentTargetViewport` 收的是**世界矩形**
+   *   （它自己算 `screen = world × zoom + offset`，见 `view/presentCamera.ts` 的用例）。
+   *   这一支从前把世界矩形**先换算成了屏幕像素**（乘 zoom + 加平移）再递进去 —— 于是相机
+   *   拿着"已经含当前视口"的数当世界坐标算，落点当然**跟着当前视口跑**：同一个演示步骤，
+   *   从不同地方翻过去，停的位置都不一样（用户 2026-09-23 报的"位置乱飘 / 发生偏差"）。
+   *   ★ 教训：这里**不要**做任何 `toScreen` / 乘 zoom —— 那是渲染层的事，相机只吃世界坐标。
+   *
+   * ★ 几何取**整棵树**、且来自**纯布局**（`MindLayer.viewRectOf`：原点就是根节点中心，
+   *   与量测 / 折叠 / 有没有挂载无关）—— 用户要的"以脑图根节点、且看到全脑图"两半都在这。
+   */
+  private mindVisualRectOf(mindId: string): Rect | null {
+    return this.mindLayer?.viewRectOf(mindId) ?? null;
   }
 
   /** 把一张卡在演示路径里前移 / 后移一位（J-07） */
@@ -1297,9 +1501,40 @@ export class BoardView extends FileView {
     return this.canManipulateSelection && this.selection.cardIds.size > 0;
   }
 
+  /**
+   * 是否有能被**置顶 / 置底**的选区（`2.2.0` 收尾）。
+   *
+   * ★ 卡片与**整棵脑图**都算（两者的 `z` 是同一格 —— 见 `model/ops.reorderContent`）。
+   *   用 `canManipulateCards` 当闸门时，`⌘⇧↑` / `⌘⇧↓` 在"只选中一棵树"时是**灰的**，
+   *   连热键都不会触发（用户 2026-09-22 实测：D 组"快捷键无效、菜单有效"）。
+   */
+  get canReorderSelection(): boolean {
+    return (
+      this.canManipulateSelection &&
+      (this.selection.cardIds.size > 0 || this.selection.mindIds.size > 0)
+    );
+  }
+
   /** 选中卡片数量（工具栏 / 状态栏用） */
   get selectedCount(): number {
     return this.selection.size;
+  }
+
+  /**
+   * 命令可用条件：选区里**有能被复制 / 剪切 / 原地复制的东西**（`⌘C` / `⌘X` / `⌘D`）。
+   *
+   * ★ 卡片与**整棵脑图**都算（`2.2.0` 批 4 五起）：两者都能进剪贴板与原地复制 ——
+   *   搬运载荷里多一个 `minds`（内嵌模型跟着走，节点 id 会重编）。
+   *   分栏仍然不算：它复制出去没有成员（栏内卡片各有归属），语义上不成立。
+   */
+  get canCopySelection(): boolean {
+    return (
+      this.canManipulateSelection &&
+      (this.selection.cardIds.size > 0 ||
+        this.selection.mindIds.size > 0 ||
+        // 节点级（`2.2.0` · O6）：框住几个节点也是"有东西可复制"
+        this.selection.mindNodeKeys.size > 0)
+    );
   }
 
   /** ⌘A：全选卡片 */
@@ -1402,38 +1637,104 @@ export class BoardView extends FileView {
   }
 
   /**
-   * Delete / Backspace：删除选中的卡片与连线（T1.71 / `F3-08`）。
+   * Delete / Backspace：删除选中的卡片、连线与**整棵脑图**（T1.71 / `F3-08` / `2.2.0` 批 5）。
    *
-   * ★ 两者合成**一次** `commit`：分成两次会在撤销链上留下两条记录，而用户眼里
+   * ★ 几者合成**一次** `commit`：分成两次会在撤销链上留下两条记录，而用户眼里
    *   "我选了一堆东西、按了 Delete"就是一个动作（与 `commitDrag` 里
    *   "挪位置 + 解除分栏归属"合成一条同理）。
+   * ★ 分栏**不在这里删**：删一栏要同时决定栏里那些卡怎么办（`O16` 把这件事
+   *   交给了专门的"拆栏 / 解除归属"手势），混进这个键会让 Delete 的后果变得不可预料。
+   * ★ 脑图（`2.2.0` 批 5）可以整体删：它没有"成员"这回事，`removeMinds` 连它身上的线
+   *   一起清（与删卡同一条纪律），而里面的节点是这棵树自己的一部分 —— 删树就是删树。
    */
   deleteSelection(): void {
     const cardIds = [...this.selection.cardIds];
     const edgeIds = [...this.selection.edgeIds];
-    if (cardIds.length === 0 && edgeIds.length === 0) return;
+    const mindIds = [...this.selection.mindIds];
+    // 节点级选中（`2.2.0` 收尾 · 节点级框选）：按树分组后交给 `removeNodes`
+    const nodeKeys = [...this.selection.mindNodeKeys];
+    if (
+      cardIds.length === 0 &&
+      edgeIds.length === 0 &&
+      mindIds.length === 0 &&
+      nodeKeys.length === 0
+    ) {
+      return;
+    }
 
     const changed = this.commit(t('history.delete'), (board) => {
-      // 删卡会连带清掉挂在它身上的边（`removeCards` 负责），两条路径不会打架
+      // 删卡 / 删树都会连带清掉挂在它们身上的边（`removeCards` / `removeMinds` 负责），
+      // 三条路径不会打架（`removeEdges` 只处理"选中的那几条线"）
       let did = cardIds.length > 0 ? removeCards(board, cardIds) : false;
+      if (mindIds.length > 0 && removeMinds(board, mindIds)) did = true;
+      if (nodeKeys.length > 0 && removeMindNodes(board, nodeKeys)) did = true;
+      // ★ 文件树那一半（`2.2.0` 收尾）：节点存在 `.nestmind` 里，板子这一层改不到 ——
+      //   提交**之后**另走仓储（与节点菜单那条完全同源）。见 `deleteFileMindNodes`。
       if (edgeIds.length > 0 && removeEdges(board, edgeIds)) did = true;
       return did;
     });
     if (changed) this.selection.clear();
+    // 文件树那一半（`2.2.0` 收尾 · 节点级框选）：板子提交完之后另走仓储
+    if (nodeKeys.length > 0) this.deleteFileMindNodes(nodeKeys);
   }
 
-  /** ⌘D：原地复制（偏移 {@link DUPLICATE_OFFSET}）并选中副本 */
+  /**
+   * 删除若干节点里属于**文件树**的那部分（`2.2.0` 收尾）。
+   *
+   * ★ 为什么分两步：内嵌树在**板子**里（一次 `commit` = 一步撤销），文件树的节点在
+   *   `.nestmind` 里 —— 只能走 `mindRepository.mutate`（原子写 + revision + 冲突检测），
+   *   与节点菜单那条路完全同源。两者写在同一个方法里的话，一次删除会同时动白板历史
+   *   与另一份文件，撤销只能退一半。
+   * ★ 解析失败的 `.nestmind`（保护态）会抛：一次写不进去不该把删除也弄崩。
+   */
+  private deleteFileMindNodes(keys: readonly string[]): void {
+    const board = this.board;
+    if (!board) return;
+    const perPath = new Map<string, Set<string>>();
+    for (const key of keys) {
+      const { cardId, nodeId } = splitEndpointKey(key);
+      if (nodeId === null) continue;
+      const mind = (board.minds ?? []).find((item) => item.id === cardId);
+      if (!mind || mind.path.length === 0) continue;
+      const bucket = perPath.get(mind.path) ?? new Set<string>();
+      bucket.add(nodeId);
+      perPath.set(mind.path, bucket);
+    }
+    for (const [path, nodeIds] of perPath) {
+      try {
+        this.plugin.mindRepository.mutate(path, (mind) => removeNodes(mind, nodeIds));
+      } catch {
+        // 保护态 / 文件没了：跳过（其余几棵照删）
+      }
+    }
+  }
+
+  /**
+   * ⌘D：原地复制（偏移 {@link DUPLICATE_OFFSET}）并选中副本。
+   *
+   * ★ 卡片与**整棵脑图**（`2.2.0` 批 4 五）一起复制，一次提交（一步撤销）：
+   *   "我选了几样东西、按了 ⌘D"在用户眼里就是一个动作。
+   * ★ 两边的复制都不带连线（`duplicateCards` / `duplicateMinds` 同一条口径）。
+   */
   duplicateSelection(): void {
     const ids = [...this.selection.cardIds];
-    if (ids.length === 0) return;
+    const mindIds = [...this.selection.mindIds];
+    if (ids.length === 0 && mindIds.length === 0) return;
 
     let clones: Card[] = [];
+    let mindClones: Mind[] = [];
     const changed = this.commit(t('history.duplicate'), (board) => {
       clones = duplicateCards(board, ids, DUPLICATE_OFFSET);
-      return clones.length > 0;
+      mindClones = duplicateMinds(board, mindIds, DUPLICATE_OFFSET);
+      return clones.length > 0 || mindClones.length > 0;
     });
-    // 选中副本而不是原卡：用户接着要拖 / 要删的显然是刚复制出来的那几张
-    if (changed) this.selection.set({ cards: clones.map((clone) => clone.id) });
+    // 选中副本而不是原对象：用户接着要拖 / 要删的显然是刚复制出来的那些
+    if (changed) {
+      this.selection.set({
+        cards: clones.map((clone) => clone.id),
+        minds: mindClones.map((clone) => clone.id),
+      });
+    }
   }
 
   /**
@@ -1450,14 +1751,54 @@ export class BoardView extends FileView {
   async copySelection(): Promise<boolean> {
     const board = this.board;
     const ids = [...this.selection.cardIds];
-    if (!board || ids.length === 0) return false;
+    // ★ 整棵脑图也能进剪贴板（`2.2.0` 批 4 五）：载荷里多一个 `minds`
+    const mindIds = [...this.selection.mindIds];
+    const nodeKeys = [...this.selection.mindNodeKeys];
+    if (!board || (ids.length === 0 && mindIds.length === 0 && nodeKeys.length === 0)) return false;
 
-    const text = buildCardTransfer(board, ids);
+    // ★ **只有节点**被选中时走节点剪贴板（`2.2.0` 收尾 · 用户 2026-09-23）。
+    //   节点是"某棵树内部"的东西：它只能粘到**另一棵树的某个节点下面** ⇒ 从前进卡片载荷
+    //   （把每个节点抽成一个"合成容器"）是错的 —— 粘到白板空白处会凭空长出一棵棵树
+    //   （用户报的"变成各种根节点了"）。
+    // ★ 混合选中（卡片 / 整棵树 + 节点）仍走卡片那条：一次 `⌘V` 只有一个落点，
+    //   而"卡片落画布、节点落某个节点下面"要用户先说清楚落哪儿 —— 宁可少搬，不乱搬。
+    if (ids.length === 0 && mindIds.length === 0) return this.copyMindNodes(board, nodeKeys);
+
+    const text = buildCardTransfer(board, ids, mindIds);
     if (text === null) return false;
 
     const ok = await this.clipboardBridge.writeText(text);
-    new Notice(ok ? t('notice.copiedCards', { count: ids.length }) : t('notice.copyFailed'));
+    // 计数把两者一起算：用户选的是"这些对象"，不关心它们内部是哪一类
+    const count = ids.length + mindIds.length;
+    new Notice(ok ? t('notice.copiedCards', { count }) : t('notice.copyFailed'));
     return ok;
+  }
+
+  /**
+   * `⌘C` 落在**脑图节点**上：写进**节点剪贴板**（与 `.nestmind` 视图同一份格式）。
+   *
+   * ★ 只写节点，不写卡片 —— 于是"粘到白板空白处"自然不会长出任何东西（用户 2026-09-23）。
+   * ★ 顺带多了一件事：在卡片里复制的节点可以直接粘进一个 `.nestmind` 视图，反之亦然
+   *   （两边读写的是同一份载荷）。
+   * ★ 系统剪贴板那一份写失败不影响用（内存那一份才是 `⌘V` 的主路径）—— 所以不看返回值。
+   */
+  private async copyMindNodes(board: BoardFile, nodeKeys: readonly string[]): Promise<boolean> {
+    const built = buildNodeClipboard(board, nodeKeys);
+    if (!built) {
+      // 一个能复制的都没有（选中的都是**文件树**里的节点：内容在 `.nestmind` 里，读不到）
+      new Notice(t('notice.mindNodeCopyUnsupported'));
+      return false;
+    }
+    void writeMindClipboard(built.payload);
+    if (built.payload.roots.length === 1) {
+      new Notice(t('notice.mindCopied', { text: clipboardLabelOf(built.payload) }));
+    } else {
+      new Notice(t('notice.mindCopiedMany', { count: String(built.payload.roots.length) }));
+    }
+    if (built.skipped > 0) {
+      new Notice(t('notice.mindNodeCopySkipped', { count: String(built.skipped) }));
+    }
+    return true;
   }
 
   /**
@@ -1483,14 +1824,67 @@ export class BoardView extends FileView {
    * ★ 贴完**选中新卡片**：接着要拖 / 要挪的显然是它们（与 `duplicateSelection` 同一手感）。
    */
   private pasteCards(transfer: CardTransfer): void {
-    let pasted: Card[] = [];
+    let pasted: { cards: Card[]; minds: Mind[] } = { cards: [], minds: [] };
     const changed = this.commit(t('history.paste'), (board) => {
       pasted = pasteCardTransfer(board, transfer, this.pasteAnchor());
-      return pasted.length > 0;
+      return pasted.cards.length > 0 || pasted.minds.length > 0;
     });
     if (!changed) return;
-    this.selection.set({ cards: pasted.map((card) => card.id) });
-    new Notice(t('notice.pastedCards', { count: pasted.length }));
+    this.selection.set({
+      cards: pasted.cards.map((card) => card.id),
+      // ★ 贴出来的整棵也一起选中（`2.2.0` 批 4 五）：接着要拖 / 要挪的显然是它们
+      minds: pasted.minds.map((mind) => mind.id),
+    });
+    new Notice(t('notice.pastedCards', { count: pasted.cards.length + pasted.minds.length }));
+  }
+
+  /**
+   * 把节点剪贴板里的这一簇粘到**指针下的那个脑图节点**下面
+   * （`2.2.0` 收尾 · 用户 2026-09-23："黏贴应该只能黏贴在脑图卡的具体节点上，
+   * 在白板的其他位置黏贴是无效的"）。
+   *
+   * ★ 没有目标节点就**什么都不做**，只给一句话。不猜落点、也不新建一棵树 ——
+   *   节点是树**内部**的东西，凭空给它找个落点就是用户报的那个 bug
+   *   （"现在反而在白板的其他位置可以黏贴，变成各种根节点了"）。
+   * ★ 目标取**指针**下的那个节点（与卡片粘贴的落点同一条准则：用户看哪儿就落哪儿），
+   *   而不是"当前选中的节点"—— 复制之后源节点还选着，拿它当落点会把副本粘进自己里面。
+   */
+  private pasteMindNodes(payload: MindClipboard): void {
+    const key = this.mindLayer?.nodeAt(this.pasteAnchor()) ?? null;
+    const target = key ? this.mindNodeTarget(key) : null;
+    if (!target) {
+      new Notice(t('notice.mindPasteNeedsNode'));
+      return;
+    }
+    this.pasteNodesInto(target.mind, target.nodeId, payload);
+  }
+
+  /** 一个节点端点键（`脑图id/节点id`）→ 它所在的脑图对象 + 节点 id */
+  private mindNodeTarget(key: string): { mind: Mind; nodeId: string } | null {
+    const { cardId, nodeId } = splitEndpointKey(key);
+    if (nodeId === null) return null;
+    const mind = (this.board?.minds ?? []).find((item) => item.id === cardId);
+    return mind ? { mind, nodeId } : null;
+  }
+
+  /**
+   * 把一簇节点插到 `mind` 的 `nodeId` 下面 —— `⌘V`（指针下的节点）与节点右键菜单的
+   * 「粘贴」两处**共用**这一份落法。
+   *
+   * ★ 内嵌树与文件树都走 `mutateMind`：前者进白板撤销栈（`⌘Z` 退得动），后者写那份
+   *   `.nestmind`（原子写 + revision + 冲突检测）—— 与节点菜单那些动作完全同路。
+   * ★ 粘出来的节点**一起选中**（接着就能拖走 / 再复制）：与"粘卡片"那条手感一致。
+   */
+  private pasteNodesInto(mind: Mind, nodeId: string, payload: MindClipboard): void {
+    let created: string[] = [];
+    const changed = this.mutateMind(mind, (file) => {
+      created = pasteForest(file, payload, nodeId) ?? [];
+      return created.length > 0;
+    });
+    if (!changed || created.length === 0) return;
+    this.selection.set({
+      mindNodes: created.map((id) => nodeEndpointKey(mind.id, id)),
+    });
   }
 
   /**
@@ -1576,7 +1970,7 @@ export class BoardView extends FileView {
    */
   exportPng(): void {
     new ExportPngModal(this.app, {
-      hasSelection: this.selection.cardIds.size > 0 || this.selection.columnIds.size > 0,
+      hasSelection: this.hasSelectedObjects,
       summarize: (request) => this.summarizePng(request),
       onExport: (request) => {
         void this.runPngExport(request);
@@ -1615,20 +2009,44 @@ export class BoardView extends FileView {
     const board = this.board;
     if (!board) return { plan: planPngExport(null, request) };
 
-    const bounds = resolveExportBounds(board, request, {
-      // 视口取 `padding: 0`：用户按 ⌘0 之外的任何缩放，"当前视图"就是他此刻看到的那一屏，
-      // 多带一圈预渲染缓冲会导出一块屏幕外其实什么都没有的空白
-      viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
-      selection: this.selectionSet(),
-    });
+    const bounds = resolveExportBounds(
+      board,
+      { ...request, mindModels: this.exportMindModels(board) },
+      {
+        // 视口取 `padding: 0`：用户按 ⌘0 之外的任何缩放，"当前视图"就是他此刻看到的那一屏，
+        // 多带一圈预渲染缓冲会导出一块屏幕外其实什么都没有的空白
+        viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
+        selection: this.selectionSet(),
+      },
+    );
     return { plan: planPngExport(bounds, request) };
   }
 
-  /** 选区 id 集合（卡片 + 分栏）：导出范围要能覆盖"只导我框选的那几个分栏" */
+  /**
+   * 选区 id 集合（卡片 + 分栏 + **脑图**）：导出范围要能覆盖"只导我框选的那几个对象"。
+   *
+   * ★ 脑图（`2.2.0` 批 5）从这一批起也进得来 —— 它是白板级对象，和卡片 / 分栏一样
+   *   在自己的 id 空间里；`resolveExportBounds` 那边按 id 去 `mindsOfBoard` 里挑。
+   */
   private selectionSet(): ReadonlySet<string> {
     const ids = new Set<string>(this.selection.cardIds);
     for (const id of this.selection.columnIds) ids.add(id);
+    for (const id of this.selection.mindIds) ids.add(id);
     return ids;
+  }
+
+  /**
+   * 导出对话框里要不要给「仅选中」这一档（PNG / SVG / PDF / 打印四处共用）。
+   *
+   * ★ 四种对象一并算：少算一类就会出现"明明框住了一棵树，导出对话框里却没有
+   *   '仅选中'"——而用户只会以为自己框选失败了。
+   */
+  private get hasSelectedObjects(): boolean {
+    return (
+      this.selection.cardIds.size > 0 ||
+      this.selection.columnIds.size > 0 ||
+      this.selection.mindIds.size > 0
+    );
   }
 
   private async runPngExport(request: PngExportRequest): Promise<void> {
@@ -1664,6 +2082,8 @@ export class BoardView extends FileView {
           gridSize: board.settings.gridSize,
           images,
           palette,
+          // 文件脑图自己不在白板文件里（`2.2.0` 批 4）：它的模型住仓储内存里，得喂进去
+          mindModels: this.exportMindModels(board),
         });
         pages.push(await canvasToArrayBuffer(element));
       }
@@ -1699,7 +2119,7 @@ export class BoardView extends FileView {
    */
   exportSvg(): void {
     new ExportSvgModal(this.app, {
-      hasSelection: this.selection.cardIds.size > 0 || this.selection.columnIds.size > 0,
+      hasSelection: this.hasSelectedObjects,
       summarize: (request) => this.summarizeSvg(request),
       onExport: (request) => {
         void this.runSvgExport(request);
@@ -1731,11 +2151,17 @@ export class BoardView extends FileView {
 
   /** 按当前选项算导出边界（摘要与真正导出共用，两边绝不会算得不一样） */
   private svgPlanFor(request: SvgExportRequest): SvgPlan {
-    return planSvgExport(this.board, request, {
-      // 视口取 `padding: 0`：理由与 PNG 相同（多带一圈预渲染缓冲会导出屏幕外的空白）
-      viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
-      selection: this.selectionSet(),
-    });
+    // 脑图的模型喂进去（`2.2.0` 批 4）：取景要覆盖那些树，否则会被裁掉一半
+    const models = this.board ? this.exportMindModels(this.board) : undefined;
+    return planSvgExport(
+      this.board,
+      { ...request, mindModels: models },
+      {
+        // 视口取 `padding: 0`：理由与 PNG 相同（多带一圈预渲染缓冲会导出屏幕外的空白）
+        viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
+        selection: this.selectionSet(),
+      },
+    );
   }
 
   private async runSvgExport(request: SvgExportRequest): Promise<void> {
@@ -1756,6 +2182,8 @@ export class BoardView extends FileView {
         background: board.view.background,
         gridSize: board.settings.gridSize,
         transparent: request.transparent,
+        // 与取景同一份模型（`2.2.0` 批 4）：不然"框按树留好了、树却没画出来"
+        mindModels: this.exportMindModels(board),
         // 调色板从画布上读：与 PNG / PDF 共用同一份变量来源，三种导出不会各自跑偏
         palette: readPngPalette(canvas),
       });
@@ -1845,7 +2273,7 @@ export class BoardView extends FileView {
    */
   exportPdf(): void {
     new ExportPdfModal(this.app, {
-      hasSelection: this.selection.cardIds.size > 0 || this.selection.columnIds.size > 0,
+      hasSelection: this.hasSelectedObjects,
       summarize: (request) => this.summarizePdf(request),
       onExport: (request) => {
         void this.runPdfExport(request);
@@ -1891,11 +2319,15 @@ export class BoardView extends FileView {
     const board = this.board;
     if (!board) return planPdfExport(null, request);
 
-    const bounds = resolveExportBounds(board, request, {
-      // 视口取 `padding: 0`：理由与 PNG 相同（多带一圈预渲染缓冲会导出屏幕外的空白）
-      viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
-      selection: this.selectionSet(),
-    });
+    const bounds = resolveExportBounds(
+      board,
+      { ...request, mindModels: this.exportMindModels(board) },
+      {
+        // 视口取 `padding: 0`：理由与 PNG 相同（多带一圈预渲染缓冲会导出屏幕外的空白）
+        viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
+        selection: this.selectionSet(),
+      },
+    );
     return planPdfExport(bounds, request);
   }
 
@@ -1934,6 +2366,8 @@ export class BoardView extends FileView {
           gridSize: board.settings.gridSize,
           images,
           palette,
+          // 文件脑图自己不在白板文件里（`2.2.0` 批 4）：它的模型住仓储内存里，得喂进去
+          mindModels: this.exportMindModels(board),
         });
         // 页码画进**位图**：PDF 里写中文要嵌字体子集，位图零成本且绝不会变方框
         drawPageFooter(ctx, {
@@ -1996,7 +2430,7 @@ export class BoardView extends FileView {
    */
   printBoard(): void {
     new ExportPrintModal(this.app, {
-      hasSelection: this.selection.cardIds.size > 0 || this.selection.columnIds.size > 0,
+      hasSelection: this.hasSelectedObjects,
       summarize: (request) => this.summarizePrint(request),
       onPrint: (request) => {
         void this.runPrintBoard(request);
@@ -2029,11 +2463,15 @@ export class BoardView extends FileView {
     const board = this.board;
     if (!board) return planPrintExport(null, request);
 
-    const bounds = resolveExportBounds(board, request, {
-      // 视口取 `padding: 0`：理由与 PNG / PDF 相同（多带一圈预渲染缓冲会印出屏幕外的空白）
-      viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
-      selection: this.selectionSet(),
-    });
+    const bounds = resolveExportBounds(
+      board,
+      { ...request, mindModels: this.exportMindModels(board) },
+      {
+        // 视口取 `padding: 0`：理由与 PNG / PDF 相同（多带一圈预渲染缓冲会印出屏幕外的空白）
+        viewportRect: request.range === 'viewport' ? this.viewport.visibleBounds(0) : null,
+        selection: this.selectionSet(),
+      },
+    );
     return planPrintExport(bounds, request);
   }
 
@@ -2071,6 +2509,8 @@ export class BoardView extends FileView {
           gridSize: board.settings.gridSize,
           images,
           palette,
+          // 文件脑图自己不在白板文件里（`2.2.0` 批 4）：它的模型住仓储内存里，得喂进去
+          mindModels: this.exportMindModels(board),
         });
         // ★ 页脚**不画进位图**：打印文档是 HTML，真文字比位图清楚、也省一次绘制
         pages.push({
@@ -2243,6 +2683,18 @@ export class BoardView extends FileView {
     for (const card of board.cards) {
       if ((card.type === 'image' || card.type === 'map') && card.content.path.length > 0) {
         paths.add(card.content.path);
+      }
+    }
+    // ★ 脑图节点上的**图片附件**（`2.2.0` 批 4 六）：它和图片卡一样是"内容本身"，
+    //   不预加载的话导出里只能画一块底纹 —— 而画布上那里是有图的。
+    //   ★ 模型来源用 `mindModelForMap`（内嵌的直接读、文件脑图只在**已经读到**时给）：
+    //     这里绝不触发读盘，没读到的那一棵按"这一帧不画"处理，与缩略图同一条口径。
+    for (const mind of board.minds ?? []) {
+      const model = this.mindModelForMap(mind);
+      if (!model) continue;
+      for (const node of model.nodes) {
+        const ref = firstRefOf(node);
+        if (ref?.kind === 'image' && ref.path.length > 0) paths.add(ref.path);
       }
     }
 
@@ -2465,7 +2917,10 @@ export class BoardView extends FileView {
     // 画布内部 —— 它是屏幕坐标的浮层，进 `world` 会跟着缩放平移跑掉。
     // ★ 三个回调都在本视图里落地：面板自己不认识 `Viewport`、不认识设置、不认识模型。
     this.minimap = new Minimap(root, {
-      shapes: () => minimapShapes(this.board),
+      // 脑图也是"板上的东西"（`2.2.0` 批 4）：节点要在地图上占位，否则一棵大树
+      // 在缩略图里完全不存在 —— 地图与现实对不上，比画不准更让人困惑
+      shapes: () =>
+        minimapShapes(this.board, { mindModelOf: (mind) => this.mindModelForMap(mind) }),
       camera: () => ({
         x: this.viewport.x,
         y: this.viewport.y,
@@ -2546,6 +3001,10 @@ export class BoardView extends FileView {
         getOverrideAngles: () => this.dragRotation,
         // 拖动中的临时弧度（T7.12）：同上 —— 拖弧度手柄时模型没变，线却要跟着手弯
         getOverrideCurves: () => this.dragCurve,
+        // 脑图节点端点（`2.2.0` 批 3）：键是 `脑图id/节点id`，盒子由渲染层实测。
+        // ★ 每次重绘取一次（painter 一帧只调一次）—— 与命中侧 `cardRectLookup`
+        //   用的是同一个方法，画出来的线与点得中的线因此永远是同一份几何。
+        getNodeRects: () => this.mindLayer?.nodeRects() ?? null,
       }),
     );
 
@@ -2590,6 +3049,12 @@ export class BoardView extends FileView {
       resolveInk: (color) => this.inkOn(color),
       // 收起 / 展开（`O31`）：标题行上那个小按钮点下来的
       toggleCollapsed: (cardId) => this.toggleCardCollapsed(cardId),
+      // 树折叠的 +N 角标（`F7`）：数子树、点角标展开 —— 判定都在模型层
+      treeBadgeOf: (cardId) => {
+        const current = this.board;
+        return current ? treeHiddenCountOf(current, cardId) : 0;
+      },
+      onTreeBadgeToggle: (cardId) => this.dropTreeBadgeToggle(cardId),
       onAutoHeight: (cardId, height) => this.growCard(cardId, height),
       // 性能档位（T3.22）：复用池占的是常驻内存，弱机档收小一点
       maxPoolPerType: this.perfProfile.maxPoolPerType,
@@ -2598,6 +3063,59 @@ export class BoardView extends FileView {
       a11y: {
         labelOf: (card, state) => cardAriaLabel(card, state),
         hintId: this.cardHintId,
+      },
+    });
+
+    // 白板级脑图（`2.2.0`）：与卡片层**平级**的一层，也挂在世界容器里 ——
+    // 于是它跟着白板缩放一起变（节点与卡片同一个等级），层序则由 `mind.z` 与卡片混排。
+    // ★ 容器里那棵树是 `EmbedMind(placement: 'anchor')`：节点 / 分支线 / 折叠手柄 /
+    //   就地改名 / 加完节点进编辑器 —— 与标签页里的脑图同一套实现，一处没重写。
+    this.mindLayer = new MindLayer(world, {
+      getMinds: () => this.board?.minds ?? [],
+      modelOf: (mind) => this.mindModelOf(mind),
+      isReadOnly: (mind) =>
+        this.isReadOnly() ||
+        (mind.path.length > 0 && this.plugin.mindRepository.isReadOnly(mind.path)) ||
+        mind.locked === true,
+      mutate: (mind, mutator) => this.mutateMind(mind, mutator),
+      onNodeMenu: (mind, nodeId, event) =>
+        this.showMindNodeMenu({
+          path: mind.path,
+          nodeId,
+          event,
+          // ★ 容器 id 占据 `cardId` 那个位置：它对视图来说就是"这次右键属于哪个白板对象"
+          //   （卡片菜单那一套按 id 查不到就该没有 —— 见 `prepareCardMenu` 的 `null` 分支）
+          cardId: mind.id,
+          // ★ "加完节点把光标送进新节点"的请求键 = **脑图 id**：与 `MindLayer` 取请求
+          //   所用的键严格一致（`takeEditRequest: (mind) => takeMindEdit(mind.id)`）。
+          //   ★ 从前这里写的是 `path`（那是老的脑图**卡**的键），而白板级脑图按 id 取 ——
+          //     于是**文件脑图**上"加子节点"之后光标永远进不来（内嵌那张没事，
+          //     因为它走 `inline.requestEdit`，那边用的正是 id）。
+          editKey: mind.id,
+          inline: this.inlineMindSource(mind),
+        }),
+      onNodeFocus: (mind, nodeId) =>
+        this.setMindNodeFocus({
+          path: mind.path,
+          cardId: mind.id,
+          nodeId,
+          inline: this.inlineMindSource(mind),
+        }),
+      onDragStart: (mind, event) => this.beginMindDrag(mind, event),
+      takeEditRequest: (mind) => takeMindEdit(mind.id),
+      resolveResource: (target) => this.notesBridge?.resourceUrl(target) ?? null,
+      refMissing: (target) => (this.notesBridge ? !this.notesBridge.exists(target) : false),
+      renderMarkdown: (markdown, host) => {
+        void MarkdownRenderer.render(this.app, markdown, host, this.currentPath ?? '', this).catch(
+          () => undefined,
+        );
+      },
+      labels: {
+        handle: (state) =>
+          state.collapsed
+            ? t('mind.handle.expand', { count: state.count })
+            : t('mind.handle.collapse'),
+        more: (count) => t('card.mind.more', { count }),
       },
     });
 
@@ -2706,6 +3224,12 @@ export class BoardView extends FileView {
       // 分栏与卡片共用同一个 `SelectionModel`，但走各自的渲染层 ——
       // 两边都订阅同一次通知，绝不会有"选了但没高亮"的中间态
       this.columnLayer?.setSelection(this.selection.columnIds);
+      // 脑图（`2.2.0` 批 5）：同一份选区、第三个渲染层。
+      // ★ 它画的是一棵树的**外接框**（现算），所以这里给的是整个集合而不是增量 ——
+      //   "取消选中"与"重新选中"在同一处收口，不必维护两份状态
+      this.mindLayer?.setSelection(this.selection.mindIds);
+      // 节点级（`2.2.0` 收尾 · 节点级框选）：同一处递过去，两档外观互不干扰
+      this.mindLayer?.setNodeSelection(this.selection.mindNodeKeys);
       // 连线是 Canvas（T1.69）：没有 class 可改，只能让整层重画。
       // 连线层的脏区账本会把"选区变了"放大成一次全量重绘 —— 这是必要代价，
       // 因为选中态改变了**每条**线的画法（不只是被选中的那条：其余的要恢复常态色）
@@ -2747,6 +3271,13 @@ export class BoardView extends FileView {
         (this.board?.columns ?? [])
           .filter((column) => rectsIntersect(this.visualColumnRectOf(column), worldRect))
           .map((column) => column.id),
+      // 脑图（`2.2.0` 批 5）：命中判据交给渲染层 —— 一棵树的外接框是**现算**的
+      //（布局算出来、DOM 实测），模型里既没有尺寸也没有它的轮廓。
+      // ★ 只有**已挂载**的容器能被框到：模型读不到的那棵树只显示一句话，
+      //   框它没有意义（与"过滤不到那一棵就不参与"同一条口径）。
+      mindsIn: (worldRect) => this.mindLayer?.marqueeIn(worldRect) ?? { minds: [], nodes: [] },
+      // `⌘A`：整块板的脑图都算（脑图不属于任何栏，没有"收起来看不见"的例外）
+      allMinds: () => (this.board?.minds ?? []).map((mind) => mind.id),
     });
 
     // 连线手势（T1.68）：hover 端点浮出锚点 → 拖到另一个端点上成边。
@@ -2758,6 +3289,10 @@ export class BoardView extends FileView {
       stateMachine: this.pointerState,
       getBoard: () => this.board,
       onConnect: (fromEndpointId, fromSide, to) => this.connectCards(fromEndpointId, fromSide, to),
+      // 端点重拖（`2.2.0` · O1）：单选一条线时两端浮出手柄，拖完交回来改绑
+      activeEdge: () => this.activeEdgeForEndpointDrag(),
+      onReconnect: (edgeId, end, to) => this.reconnectEdge(edgeId, end, to),
+      subscribeSelection: (listener) => this.selection.onChange(listener),
       canStart: () =>
         !this.navigationController?.isPanning && !this.isReadOnly() && !this.presentation?.active,
       // 锚点 / 落点判定 / 目标高亮都按**看到的位置**算（栏内滚动的成员差一个偏移，T2.03）
@@ -2765,6 +3300,37 @@ export class BoardView extends FileView {
       // ★ 分栏也是端点（`O21`）：它的几何与卡片同出一辙，只是来源不同 ——
       //   折叠态的高度、以及"拖动中的临时矩形"都在这一个函数里收口
       columnRectOf: (column) => this.visualColumnRectOf(column),
+      // 无框卡（`F4` 的脑图卡）**不作为整体**连线：用户 2026-09-21 —— "脑图……也不会
+      // 作为整体对外连线"。它连的是**具体的节点**，整张卡不参与。
+      canAttach: (endpointId) => this.cardAttachableAsWhole(endpointId),
+      // ★ 脑图节点是第三种端点（`2.2.0` 批 3）：hover 到某个节点上浮出它的四个锚点、
+      //   从别处拖过来的线也落在节点上。几何问 `MindLayer`（节点盒子由脑图布局 + DOM
+      //   实测决定，模型里没有）—— 这里只做键与矩形之间的转接，控制器不认识"节点"。
+      nodes: {
+        hit: (world) => this.mindLayer?.nodeAt(world) ?? null,
+        rectOf: (key) => this.mindLayer?.nodeRectOf(key) ?? null,
+      },
+    });
+
+    // 树连线手势（`F7`，定稿 D6）：hover 卡片 → 右上角浮把手 → 拖到另一张卡上
+    // ⇒ 发起方成为父级。**校验不在这里**（self / 成环 / 已有父级由模型层
+    // `tree.treeLinkState` 判，见 `dropTreeLink`），本控制器只交出两个卡片 id。
+    this.treeLinkController = new TreeLinkController({
+      host: canvas,
+      viewport: this.viewport,
+      overlay: this.overlayLayer,
+      stateMachine: this.pointerState,
+      getBoard: () => this.board,
+      onDrop: (parentId, childId) => this.dropTreeLink(parentId, childId),
+      canStart: () =>
+        !this.navigationController?.isPanning && !this.isReadOnly() && !this.presentation?.active,
+      // 与普通连线同一道闸（无框脑图卡不作为整体参与，用户 2026-09-21）
+      canLink: (cardId) => this.cardAttachableAsWhole(cardId),
+      cardRectOf: (card) => this.visualRectOf(card),
+      // 把手别只在 hover 时才出现（`2.2.0` · O2）：单选的卡上也让它浮着
+      getSelectedCardId: () =>
+        this.selection.cardIds.size === 1 ? [...this.selection.cardIds][0] : null,
+      subscribeSelection: (listener) => this.selection.onChange(listener),
     });
 
     // 弧度手柄（T7.12 / `F3-07`）：单选一条 Free 线时中点浮出小圆点，拖它调弯。
@@ -2795,12 +3361,28 @@ export class BoardView extends FileView {
     // 选中一张便签时的**快捷操作栏**（`O38`，与脑图节点共用 `ui/QuickBar`）：
     // 顺序 = 标记 / 加粗 / 斜体 / 下划线 / 字色 / 底色 / 编辑内容（插图暂时不做）
     this.quickBar = buildNodeToolbar(document, {
-      onIcon: (icon) => this.applyCardLook({ icon }),
-      onBold: () => this.toggleCardTitleFlag('bold'),
-      onItalic: () => this.toggleCardTitleFlag('italic'),
-      onUnderline: () => this.toggleCardTitleFlag('underline'),
-      onInk: (ink) => this.applyCardLook({ ink }),
-      onColor: (color) => this.applyCardColor(color),
+      // ★ 每个回调都先问一句"现在操作的是**卡内脑图的节点**吗"（`F4`，用户 2026-09-21）：
+      //   是 → 改那个节点（`applyToFocusedMindNode` 返回 `true`，这件事就到此为止）；
+      //   否 → 走原来那条"改这张卡"的路。两个目标共用**同一条栏**（同 `ui/QuickBar`），
+      //   分工写在每一处，而不是建两条栏各写一份。
+      onIcon: (icon) => {
+        if (!this.applyToFocusedMindNode({ icon })) this.applyCardLook({ icon });
+      },
+      onBold: () => {
+        if (!this.toggleFocusedMindNodeFlag('bold')) this.toggleCardTitleFlag('bold');
+      },
+      onItalic: () => {
+        if (!this.toggleFocusedMindNodeFlag('italic')) this.toggleCardTitleFlag('italic');
+      },
+      onUnderline: () => {
+        if (!this.toggleFocusedMindNodeFlag('underline')) this.toggleCardTitleFlag('underline');
+      },
+      onInk: (ink) => {
+        if (!this.applyToFocusedMindNode({ ink })) this.applyCardLook({ ink });
+      },
+      onColor: (color) => {
+        if (!this.applyToFocusedMindNode({ color })) this.applyCardColor(color);
+      },
       onEditNote: () => {
         const card = this.quickBarTarget();
         if (!card) return;
@@ -2814,8 +3396,11 @@ export class BoardView extends FileView {
       // 「连线」是脑图那条线才有的格子（白板两类卡片的按钮集里没有它）——
       // 栏永远不会画出来，这里只需满足接口
       onLink: () => undefined,
-      // 「文字高亮」（`N3-f`）同理：白板便签的按钮集里没有它（那是脑图标题那一档格式）
-      onHighlight: () => undefined,
+      // 「文字高亮」（`N3-f`）：白板卡片没有这一档，但**卡内脑图节点有**（用户 2026-09-21
+      // 那条栏要的就是与脑图同一套）—— 有节点在操作时改节点，否则什么都不做
+      onHighlight: (highlight) => {
+        this.applyToFocusedMindNode({ highlight });
+      },
       resolveTheme: (color) => this.resolveSwatchColor(color),
     });
     this.quickBar.element.addClass('is-board');
@@ -2843,6 +3428,10 @@ export class BoardView extends FileView {
       // 取景按**外接框**（T7.06）：转 45° 的卡片比它的 `width/height` 高出小半张，
       // 按布局框取景会让它顶到视口边上（用户看到的是"演示时卡片没摆正"）
       visualRectOf: (card) => this.visualBoundsOf(card),
+      // ★ 脑图（`2.2.0` 收尾）：讲到一棵树时取景到**整棵树**（用户 2026-09-23），
+      //   而那份框由 `MindLayer.viewRectOf` 从**纯布局**给出 —— 与量测 / 折叠 / 视口裁剪
+      //   都无关（屏幕外的树也算得出来），所以"看到全脑图"与"景不飘"可以同时成立。
+      mindVisualRect: (mind) => this.mindVisualRectOf(mind.id),
       clearSelection: () => this.selection.clear(),
       fitContent: () => this.fitContent(),
       focusCanvas: () => this.focusCanvas(),
@@ -2971,6 +3560,8 @@ export class BoardView extends FileView {
     // 锚点 DOM 挂在 canvas 上、指针捕获也握在它手里：不拆干净会连带把监听器泄漏给下一块板
     this.connectController?.dispose();
     this.connectController = null;
+    this.treeLinkController?.dispose();
+    this.treeLinkController = null;
     // 弧度手柄同理：它持有一个常驻 DOM 节点 + 宿主上的一批监听器，必须跟着画布一起拆
     this.edgeCurveController?.dispose();
     this.edgeCurveController = null;
@@ -2995,9 +3586,11 @@ export class BoardView extends FileView {
     } finally {
       this.frameQueue.dispose();
     }
-    this.pendingHeights.clear();
-    this.heightFlushScheduled = false;
+    this.pendingSizes.clear();
+    this.sizeFlushScheduled = false;
     this.notesBridge = null;
+    // 脑图桥（`F3a`）：只是几个闭包，但生命周期与这次画布会话一致（下次进来重建）
+    this.mindBridge = null;
     this.shellBridge = null;
     // 剪贴板桥是 `readonly` 且无资源：刻意不在这里清（它不属于"这次画布会话"）
     // ★ 必须 dispose：缓存里握着一批 blob objectURL，不撤掉就是永久泄漏
@@ -3065,6 +3658,11 @@ export class BoardView extends FileView {
     this.unsubscribeSelection = null;
     this.cardLayer?.dispose();
     this.cardLayer = null;
+    // 脑图层（`2.2.0`）与卡片层同生命周期；拖动会话也要收（它挂着 window 监听）
+    this.mindDragCleanup?.();
+    this.mindDragCleanup = null;
+    this.mindLayer?.dispose();
+    this.mindLayer = null;
     this.columnLayer?.dispose();
     this.columnLayer = null;
     this.groupLayer?.dispose();
@@ -3167,6 +3765,30 @@ export class BoardView extends FileView {
         // 外部编辑只同步背景与卡片，**不动视口** —— 别把用户的视线顶走
         if (payload.path === path) this.applyBoard(payload.board);
       }),
+      // 文件脑图（`2.2.0`）：那一份 `.nestmind` 变了（我们改的 / 标签页改的 / 外部编辑）
+      // 就要重画 —— 与卡片时代"每张卡各自 `watch`"同一个意思，只是这里一条订阅管全板
+      //（板上的脑图数量是几十这一档，不值得为每个路径各订一份）
+      // ★ 顺带把"试过但没读到"的记号放开：文件可能刚被建回来（`triedMindPaths`）
+      //
+      // ★★ 两个事件都要**标脏连线层**（`2.2.0` 批 3）：节点成了连线端点之后，
+      //    "那份 `.nestmind` 变了"（在标签页里改名 / 折叠 / 加节点）会挪动节点的盒子，
+      //    而连线画在 Canvas 上 —— 不标脏的话，线会停在**节点原来待着的地方**，
+      //    看起来像"线飘在空中"（这正是卡片时代 `CardLayer` 之外那条老坑的同一种形态）。
+      //    这条路上的模型变化**不经过 `applyBoard`**（那是白板文件自己的变更），
+      //    所以这句必须在这儿显式写。
+      this.plugin.mindRepository.on('changed', (payload) => {
+        this.triedMindPaths.delete(payload.path);
+        this.mindLayer?.sync(this.viewport.visibleBounds());
+        this.edgeLayer?.invalidate();
+        // 树的形状变了 ⇒ 缩略图上那一片格子也要跟着变（批 4）
+        this.minimap?.syncContent();
+      }),
+      this.plugin.mindRepository.on('reloaded', (payload) => {
+        this.triedMindPaths.delete(payload.path);
+        this.mindLayer?.sync(this.viewport.visibleBounds());
+        this.edgeLayer?.invalidate();
+        this.minimap?.syncContent();
+      }),
     );
 
     // 板子已加载：面包屑此时才画（层级链要读别的板文件，早画会读到半截）。
@@ -3180,17 +3802,32 @@ export class BoardView extends FileView {
       this.pendingRevealCardId = null;
       this.revealCard(pendingReveal);
     }
+    // 挂起的"飞到某个脑图节点"（`2.2.0` 批 4）：与上面那条同一个时机 ——
+    // 这一刻脑图层已经同步过，`nodeRectOf` 才拿得到节点真实的盒子
+    const pendingMind = this.pendingRevealMind;
+    if (pendingMind !== null) {
+      this.pendingRevealMind = null;
+      this.revealMindNode(pendingMind.mindId, pendingMind.nodeId);
+    }
   }
 
   private detachBoard(): void {
     for (const unsubscribe of this.boardSubscriptions.splice(0)) unsubscribe();
     this.cardLayer?.clear();
+    this.mindLayer?.clear();
+    // 读盘记账也是"上一块板的"：换板之后 B 板上那些路径要重新试（A 板上读不到的，
+    // 不代表 B 板上也读不到）
+    this.loadingMindPaths.clear();
+    this.triedMindPaths.clear();
     this.columnLayer?.clear();
     // 连线和覆盖提示都属于"上一块板"，换板时必须立刻消失，不能等下一帧
     this.edgeLayer?.invalidate();
     this.overlayLayer?.clear();
     // 选区也是"上一块板的"：留着会让 B 板上出现指向 A 板卡片 id 的幽灵选中态
     this.selection.clear();
+    // 卡内脑图那个"现在操作哪个节点"同理（`F4`）：它带着上一块板的卡片 id，
+    // 留着会让那条栏在 B 板上举着一个不存在的节点
+    this.clearMindNodeFocus();
     // 编辑态同理：新板不能带着 EDITING 开局，否则 ⌘A 会一直让路给一个不存在的编辑器
     this.clearEditingState();
     // 取色会话也是"上一块板的"：留着不但会把颜色吸到新板的色板上，
@@ -3235,7 +3872,10 @@ export class BoardView extends FileView {
    *  * **不碰选中态**：层序变了，选中集合当然还是同一批卡片。
    */
   private reorderSelection(reorder: (board: BoardFile, ids: readonly string[]) => boolean): void {
-    const ids = [...this.selection.cardIds];
+    // ★ 卡片 **与脑图**（`2.2.0` 收尾）：两者的 z 是共用的一格，"对整棵置顶 / 置底"
+    //   就是老计划里那条"整棵的层级调整" —— 从前这里只有卡片，框住一棵树按 `⌘⇧↑`
+    //   什么都不会发生（而它是选中的）。
+    const ids = [...this.selection.cardIds, ...this.selection.mindIds];
     if (ids.length === 0) return;
     // 走 `commit` 而不是裸 `mutate`：层级调整也是可撤销的（T1.48），
     // 而裸 mutate 会让"置顶"成为撤销链上的一段静默跳跃
@@ -3247,8 +3887,13 @@ export class BoardView extends FileView {
   /**
    * 双击卡片主体 → 进入编辑（`02 §3` / `§5.3`）。
    *
-   * 唯一要在这里拦的是**双击链接 / 内嵌内容**：那是 Obsidian 自己的"打开笔记"，
-   * 抢过来会变成"用户想跳转，结果进了编辑框"。其余全交给 `editCard`。
+   * 要在这里拦两件事：
+   *
+   * 1. **双击链接 / 内嵌内容**：那是 Obsidian 自己的"打开笔记"，
+   *    抢过来会变成"用户想跳转，结果进了编辑框"。其余全交给 `editCard`。
+   * 2. **双击卡面标题行**（`F5`）：便签 / 同步便签的标题编辑与内容编辑**分家**
+   *    （内容 = 正文编辑器，与引用卡同款；标题 = 卡面那一行的就地输入），
+   *    于是"双击名字那一行"就该去改名字 —— 见 `TITLE_BAND_DOUBLE_CLICK_TYPES`。
    *
    * ★ `⌘`+双击 = 直接进正文（O01/O02）：双击的语义是"我要改这张卡"，
    *   而 `⌘`+双击是"我就是要改正文"。对标题已经写好、只想补一句话的卡，
@@ -3259,8 +3904,25 @@ export class BoardView extends FileView {
     if (this.presentation?.active) return;
     const target = detail.original.target;
     if (target instanceof HTMLElement && target.closest('a')) return;
+    if (target instanceof HTMLElement && this.editTitleFromTitleBand(detail.cardId, target)) return;
     const raw = detail.original.metaKey || detail.original.ctrlKey;
     this.editCard(detail.cardId, false, raw ? 'raw' : 'title');
+  }
+
+  /**
+   * 双击落在**卡面标题行**上时，就地改标题（`F5`）。
+   *
+   * @returns 是否把这一下收掉了。`false` = 不归它管（别的类型、或没点在标题行上），
+   *          调用方照旧走内容编辑。
+   * ★ 判据只认"这一类卡的标题就是卡面那一行"（`TITLE_BAND_DOUBLE_CLICK_TYPES`），
+   *   并把"能不能真的开出来"交给 `editCardTitle`（未挂载 / 锁定 / 已在编辑标题 ⇒ 它给 `false`，
+   *   于是这一下退回内容编辑，不会变成"双击了什么都没发生"）。
+   */
+  private editTitleFromTitleBand(cardId: string, target: HTMLElement): boolean {
+    const card = this.board?.cards.find((item) => item.id === cardId);
+    if (!card || !TITLE_BAND_DOUBLE_CLICK_TYPES.has(card.type)) return false;
+    if (!target.closest('.nestboard-card-header')) return false;
+    return this.editCardTitle(cardId);
   }
 
   /** 某张卡此刻的呈现模式：只有"正在编辑的那张"是 edit */
@@ -3273,6 +3935,40 @@ export class BoardView extends FileView {
    * 组件挂在传入的 `component` 上，复用同一个等于让旧组件越积越多。
    * 旧组件由 `releaseCardContent` 在换内容 / 回收节点时卸载。
    */
+  /**
+   * 把剪贴板里的一张图片落进库并返回路径（`F5` 卡内粘贴图片）。
+   *
+   * ★ 与"直接粘在画布上变成图片卡"（本文件的 paste 分支）**共用同一份落盘规则**：
+   *   附件目录跟随用户设置、命名跟 `attachmentOptions` —— 复制一份的话，改了设置之后
+   *   两条路会有两种结果，而用户根本分不清自己走的是哪条。
+   * ★ 失败返回 `null`（编辑器一个字都不插），提示在这里发 —— 编辑器没有 Notice 通道。
+   */
+  /**
+   * `[[` 补全的候选（`F5`）：库内全部 `.md` 的路径。
+   *
+   * ★ **不缓存、不订阅**：这份清单本来就常驻内存（`vault.getMarkdownFiles` 读的是
+   *   Obsidian 自己那份索引），补全每敲一个字问一次也只是数组映射；加了缓存反而要
+   *   处理"新建 / 删除 / 改名"三种失效，得不偿失。
+   * ★ 过滤与排序在编辑器那侧（`linkSuggest.rankLinkCandidates`）—— 这里只负责
+   *   "库里有什么"，不替它判"该显示哪几条"。
+   */
+  private linkSuggestions(_query: string): readonly { path: string; label?: string }[] {
+    return this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path }));
+  }
+
+  private async pasteImageToVault(file: File): Promise<string | null> {
+    try {
+      return await this.plugin.attachments.savePastedImage(
+        await file.arrayBuffer(),
+        file.type,
+        this.plugin.attachmentOptions,
+      );
+    } catch (error) {
+      new Notice(t('notice.attachmentFailed', { error: describeError(error) }));
+      return null;
+    }
+  }
+
   private createCardContext(card: Card, contentEl: HTMLElement): CardRenderContext {
     const component = new Component();
     component.load();
@@ -3299,9 +3995,16 @@ export class BoardView extends FileView {
       // 也不该带着"我是被双击进来的"这种身份
       editEntry: mode === 'edit' ? this.editEntry : undefined,
       notes: this.notesBridge ?? undefined,
+      // 脑图卡（`F3a`）：卡面就是那份 `.nestmind`；只读板上一个编辑手势都不接
+      minds: this.mindsBridge(),
+      readOnly: this.isReadOnly(),
       shell: this.shellBridge ?? undefined,
       // 剪贴板（T3.04）：色板卡的"点击复制"
       clipboard: this.clipboardBridge,
+      // 卡内粘贴图片（`F5`）：与"粘在画布上变图片卡"共用同一份落盘规则
+      pasteImage: (file) => this.pasteImageToVault(file),
+      // `[[` 链接补全（`F5`）：库内 md 清单
+      suggestLinks: (query) => this.linkSuggestions(query),
       boards: this.boardNavBridge(),
       // 跨白板反链（T5.04）：引用卡底部的「N 条反链」角标
       backlinks: this.backlinksBridge(),
@@ -3319,8 +4022,183 @@ export class BoardView extends FileView {
       setIcon: (el, name) => setIcon(el, name),
       // 引用卡读完 Vault 才知道自己多高 —— 内容落地后必须让卡片层重量一次（T1.38）
       contentReady: () => this.cardLayer?.remeasure(card.id),
+      // 内容自己要把卡撑大（`F4` 的脑图卡）：里面的节点永远 1:1，卡片长大到装得下
+      //（"尺寸随内容自适应"，见 `requestCardSize`；只增不减、下一帧合并成一次提交）
+      growTo: (size) => this.requestCardSize(card.id, size),
       // 同步便签（T7.04）：把正文写回整个同步组（一张改、全组一起改、一次重绘）
       writeSyncGroup: (key, md) => this.writeSyncGroup(key, md),
+    };
+  }
+
+  // ── 白板级脑图（`2.2.0`）────────────────────────────────────
+
+  /**
+   * 这份脑图此刻的模型：内嵌读 `mind.mind`；**文件脑图去仓储取**（没读到就先起一次读盘）。
+   *
+   * ★ 读到之前返回 `null`：渲染层据此画一句"还没读到 / 文件没了"（`MindLayer`），
+   *   而不是画一棵空树 —— 空树会让人以为"我的脑图被清空了"。
+   */
+  private mindModelOf(mind: Mind): MindFile | null {
+    if (mind.path.length === 0) return mind.mind ?? null;
+    const cached = this.plugin.mindRepository.get(mind.path);
+    if (cached) return cached;
+    // ★ `sync()` 每帧都跑：没读到过的路径**只试一次**（`triedMindPaths`），
+    //   否则一个"文件没了"的脑图会在平移的每一帧都去发一次读盘请求。
+    //   那次尝试失败之后就不必再试 —— 真等到文件回来，仓储的 `changed` 会把这条路重新放开。
+    if (!this.triedMindPaths.has(mind.path)) void this.loadMindModel(mind.path);
+    return null;
+  }
+
+  /**
+   * 导出 / 缩略图用的**文件脑图**模型表（键 = 脑图 id，`2.2.0` 批 4）。
+   *
+   * ★ 内嵌脑图的模型就在 `board.minds[].mind` 里（`drawMinds` 自己会读），
+   *   这里只补"指向一份 `.nestmind`"的那一些 —— 那份数据不在白板文件里。
+   * ★ 没读到的不放进去：那一棵这一次就是没画（与缩略图同一条口径），
+   *   而不是在导出的逐块绘制里同步等一次读盘（那会把 UI 卡住）。
+   */
+  private exportMindModels(board: BoardFile): ReadonlyMap<string, MindFile> {
+    const models = new Map<string, MindFile>();
+    for (const mind of board.minds ?? []) {
+      if (mind.path.length === 0) continue;
+      const model = this.plugin.mindRepository.get(mind.path);
+      if (model) models.set(mind.id, model);
+    }
+    return models;
+  }
+
+  /**
+   * 只在**已经读到**的前提下取模型（缩略图 / 导出用）：**绝不触发读盘**。
+   *
+   * ★ 与 `mindModelOf` 的分工：那个是渲染路径的口子（会顺手发起一次读盘），
+   *   而这个会被缩略图每帧问一遍 —— 在那里发请求等于"平移一下就翻一次库"。
+   *   文件脑图没读到就给 `null`（那一棵这一帧不画，读到之后那两条订阅会重画）。
+   */
+  private mindModelForMap(mind: Mind): MindFile | null {
+    if (mind.path.length === 0) return mind.mind ?? null;
+    return this.plugin.mindRepository.get(mind.path);
+  }
+
+  /** 正在读盘的脑图路径（同一路径不并发读两次） */
+  private readonly loadingMindPaths = new Set<string>();
+  /** 已经试过读、但没读到的路径（见 `mindModelOf`：避免每帧重试） */
+  private readonly triedMindPaths = new Set<string>();
+
+  private async loadMindModel(path: string): Promise<void> {
+    if (this.loadingMindPaths.has(path)) return;
+    this.loadingMindPaths.add(path);
+    this.triedMindPaths.add(path);
+    try {
+      await this.plugin.mindRepository.open(path);
+    } catch {
+      // 文件没了 / 坏了：那句话由渲染层显示（这里不再打扰用户）
+    } finally {
+      this.loadingMindPaths.delete(path);
+      // 读回来了（或失败了）⇒ 让渲染层重画一次（它自己不做异步）
+      this.mindLayer?.sync(this.viewport.visibleBounds());
+      // 节点盒子这一下才出现 ⇒ 连着它的线要跟着被画出来（`2.2.0` 批 3）
+      this.edgeLayer?.invalidate();
+      // 缩略图也才数得出这棵树（批 4）：`syncContent` 内部先比指纹，没变就不重建
+      this.minimap?.syncContent();
+    }
+  }
+
+  /**
+   * **内嵌**脑图的读写口（`MindInlineSource`）：节点右键菜单与底部快捷栏两条路共用。
+   *
+   * ★ 文件脑图给 `undefined`：那份模型在文件里，读写都走 `.nestmind` 仓储
+   *   （与卡片时代的分工一致）。
+   */
+  private inlineMindSource(mind: Mind): MindInlineSource | undefined {
+    if (mind.path.length > 0) return undefined;
+    const id = mind.id;
+    return {
+      cardId: id,
+      read: () => this.board?.minds?.find((item) => item.id === id)?.mind ?? null,
+      mutate: (mutator) => this.mutateMind(mind, mutator),
+      requestEdit: (nodeId) => requestMindEdit(id, nodeId),
+    };
+  }
+
+  /**
+   * 改一次脑图的模型 —— 两条数据源与"从前的脑图卡"完全同路：
+   *
+   * * **内嵌**：一次 `commit` = 白板撤销栈里的**一步**（`⌘Z` 退得动）；
+   * * **文件**：`mutate` 那份 `.nestmind`（原子写 + revision + 冲突检测）。
+   *
+   * ★ 与 `cards/mindCard` 同一条纪律：内嵌那份**深拷贝再改** —— 内存里那一份同时还是
+   *   撤销栈的基线与别处的当前值，就地改会把历史一起改掉。
+   */
+  private mutateMind(mind: Mind, mutator: (file: MindFile) => void | boolean): boolean {
+    if (mind.path.length > 0) {
+      try {
+        return this.plugin.mindRepository.mutate(mind.path, mutator);
+      } catch {
+        // 保护态（解析失败 / 只读）：一次写不进去不该把树画崩
+        return false;
+      }
+    }
+    const current = this.board?.minds?.find((item) => item.id === mind.id)?.mind;
+    if (!current) return false;
+    const next = cloneJson(current) as MindFile;
+    if (mutator(next) === false) return false;
+    return this.commit(t('history.mindEdit'), (board) => setMindModel(board, mind.id, next));
+  }
+
+  /** 脑图拖动会话的 window 监听（与卡片拖动那条**各用各的**，互不干扰） */
+  private mindDragCleanup: (() => void) | null = null;
+
+  /**
+   * 从**根节点**上按下 = 拖整棵（无边界之后唯一一个"移动这棵树"的手势）。
+   *
+   * ★ 手势与卡片拖动同一套纪律：监听挂 `window`（指针拖出画布也收得到）、
+   *   成对摘除；拖动中**只写 DOM**（`MindLayer.setPreview`），松手才提交一次 ——
+   *   模型一动不动，撤销栈里只有一条"移动"。
+   * ★ 不吸附网格 / 不出参考线：那是卡片的排版手段；脑图挪的是"树根那一个点"，
+   *   先把基本手感做实（后续要加时，接口在这里，不必改模型）。
+   */
+  private beginMindDrag(mind: Mind, event: PointerEvent): void {
+    if (this.mindDragCleanup) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = { x: mind.x, y: mind.y };
+    let moved: Point | null = null;
+
+    const onMove = (move: PointerEvent): void => {
+      const zoom = this.viewport.zoom || 1;
+      const point = {
+        x: roundTo(origin.x + (move.clientX - startX) / zoom),
+        y: roundTo(origin.y + (move.clientY - startY) / zoom),
+      };
+      moved = point;
+      this.mindLayer?.setPreview(mind.id, point);
+      // ★ 连线要跟着手走（`2.2.0` 批 3）：节点成了端点之后，"挪这棵树"也会挪动
+      //   线的落点 —— 而连线是 Canvas，**不会**因为 DOM 变了就自己重画。
+      //   卡片拖动那条路（`previewRects`）同样每帧标脏，理由一模一样。
+      this.edgeLayer?.invalidate();
+    };
+    const finish = (commit: boolean): void => {
+      this.mindDragCleanup?.();
+      this.mindDragCleanup = null;
+      // 交还给模型：预览撤掉之后，`sync()` 会按模型位置画（提交过的就是新位置）
+      this.mindLayer?.setPreview(mind.id, null);
+      // 取消那次（没提交）也要重画：线得从"跟着手"回到"按模型"的位置上
+      this.edgeLayer?.invalidate();
+      if (!commit) return;
+      const target = moved;
+      if (!target) return;
+      this.commit(t('history.move'), (board) => moveMind(board, mind.id, target));
+    };
+    const onUp = (): void => finish(true);
+    const onCancel = (): void => finish(false);
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    this.mindDragCleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
   }
 
@@ -3336,6 +4214,8 @@ export class BoardView extends FileView {
       app: this.app,
       sourcePath: this.currentPath ?? '',
       notes: this.notesBridge ?? undefined,
+      // 脑图卡（`F3a`）：双击 / 右键「打开脑图」都走它
+      minds: this.mindsBridge(),
       shell: this.shellBridge ?? undefined,
       boards: this.boardNavBridge(),
       links: this.linkPreviewBridge ?? undefined,
@@ -3348,6 +4228,234 @@ export class BoardView extends FileView {
     };
   }
 
+  /**
+   * 脑图桥（`F3a`）：白板 → `MindRepository` 的那道门。
+   *
+   * ★ 与 `notesBridge` 同一条分工：卡片层只声明能力形状（`mind/embed/MindBridge.ts`），
+   *   读写策略（原子写 / revision / 冲突检测 / 保护态）全在仓储那一侧。
+   * ★ `watch` 只挑**这份文件**的变化转发：仓储的事件是全局的，而每张脑图卡只关心自己
+   *   那一份（不分流的话，改 A 板会把画布上所有脑图卡都重画一遍）。
+   * ★ 懒建一次并缓存：它在每张卡**每一次重画**时都会被取用（`createCardContext`）。
+   */
+  private mindsBridge(): MindBridge {
+    if (this.mindBridge) return this.mindBridge;
+    const repository = this.plugin.mindRepository;
+    const bridge: MindBridge = {
+      exists: (path) => this.app.vault.getAbstractFileByPath(path) instanceof TFile,
+      open: (path) => repository.open(path),
+      get: (path) => repository.get(path),
+      mutate: (path, mutator) => repository.mutate(path, mutator),
+      isReadOnly: (path) => repository.isReadOnly(path),
+      watch: (path, listener) =>
+        repository.on('changed', (payload) => {
+          if (payload.path === path) listener();
+        }),
+      openTab: (path) => {
+        void openMindView(this.app, path);
+      },
+      nodeMenu: (request) => this.showMindNodeMenu(request),
+      // 卡内点了一个节点 ⇒ 底部那条栏换成"这个节点"（`F4`，用户 2026-09-21）
+      nodeFocus: (focus) => this.setMindNodeFocus(focus),
+    };
+    this.mindBridge = bridge;
+    return bridge;
+  }
+
+  /**
+   * 脑图卡里那个**节点**的右键菜单（`F3a`）。
+   *
+   * ★ 为什么画在这一层：菜单要 Obsidian 的 `Menu`，而卡片层不认识它 —— 卡片只把
+   *   "哪个节点、哪一下"递出来（`MindBridge.nodeMenu`）。
+   * ★ 每一项都是**一次 `mutate`**：与仓储同一条路（原子写 + revision + 冲突检测），
+   *   改完由仓储的 `changed` 事件把卡片重画 —— 这里不手动重绘，免得两处各画一遍。
+   * ★ 加节点之后**立刻把光标送进新节点**（`requestMindRefEdit`）：在画布上按 `Enter`/`Tab`
+   *   就是那个手感，卡内不该变成"加了一个空白节点、然后自己去双击它"。
+   * ★ 根节点不给「删除」：那会把整张图删掉（`ops.removeNodes` 也会跳过根，不如根本不摆）。
+   */
+  private showMindNodeMenu(request: MindNodeMenuRequest): void {
+    const inline = request.inline;
+    const mind = inline ? inline.read() : this.plugin.mindRepository.get(request.path);
+    const node = mind?.nodes.find((item) => item.id === request.nodeId);
+    if (!mind || !node) return;
+    const isRoot = node.id === mind.rootId;
+    const collapsed = node.collapsed === true;
+
+    const add = (mutator: (target: MindFile) => void | boolean): boolean => {
+      // 内嵌脑图卡（`F4`）：改的是卡片内容 ⇒ 一次 `updateContent` = 白板撤销栈里的一步
+      if (inline) return inline.mutate(mutator);
+      // 保护态（解析失败）会抛：一次写不进去不该把菜单点崩
+      try {
+        return this.plugin.mindRepository.mutate(request.path, mutator);
+      } catch {
+        return false;
+      }
+    };
+    const focusNewNode = (nodeId: string): void => {
+      if (inline) {
+        inline.requestEdit(nodeId);
+        return;
+      }
+      // ★ 键由**渲染方**给（`mindEditKeyOf`）：白板级脑图按脑图 id、老脑图卡按文件路径 ——
+      //   写死任何一个都会让另一边的请求永远躺在槽里没人取（光标进不来）
+      requestMindEdit(mindEditKeyOf(request), nodeId);
+    };
+    const addThenFocus = (create: (target: MindFile) => string | null): void => {
+      let created: string | null = null;
+      const changed = add((target) => {
+        created = create(target);
+        return created !== null;
+      });
+      if (changed && created !== null) focusNewNode(created);
+    };
+
+    // 这一个节点所在的**容器**（白板上的 `Mind`）—— 粘贴那条要改的是它里面的模型
+    // （`request.cardId` 由渲染方给：白板级脑图与老脑图卡都是它）
+    const container = request.cardId
+      ? (this.board?.minds ?? []).find((item) => item.id === request.cardId)
+      : undefined;
+
+    const items: MenuItemSpec[] = [
+      {
+        id: 'mind-add-child',
+        title: t('menu.mindAddChild'),
+        icon: 'plus',
+        run: () => addThenFocus((target) => addChild(target, node.id)),
+      },
+      {
+        id: 'mind-add-sibling',
+        title: t('menu.mindAddSibling'),
+        icon: 'plus',
+        run: () => addThenFocus((target) => addSibling(target, node.id)),
+      },
+      {
+        id: 'mind-toggle-collapse',
+        title: collapsed ? t('menu.mindExpand') : t('menu.mindCollapse'),
+        icon: collapsed ? 'chevron-down' : 'chevron-right',
+        run: () => {
+          add((target) => setCollapsed(target, node.id, !collapsed));
+        },
+      },
+      {
+        // ★ 「粘贴」落在这**一个节点**上（`2.2.0` 收尾 · 用户 2026-09-23）：节点是树内部
+        //   的东西，白板上别的落点对它没有意义 —— 菜单里指到哪个节点就粘到哪个节点下面。
+        //   ★ 剪贴板里没有节点就置灰：不给"点了没反应"的菜单项。
+        id: 'mind-paste',
+        title: t('menu.mindPaste'),
+        icon: 'clipboard-paste',
+        // ★ 容器（白板上的那个 `Mind`）与 `mind`（模型）是两样东西：粘要改的是容器里的模型
+        disabled: getMindClipboard() === null || container === undefined,
+        run: () => {
+          const payload = getMindClipboard();
+          if (payload && container) this.pasteNodesInto(container, node.id, payload);
+        },
+      },
+      {
+        id: 'mind-delete',
+        title: t('menu.mindDelete'),
+        icon: 'trash-2',
+        disabled: isRoot,
+        run: () => {
+          add((target) => removeNodes(target, new Set([node.id])));
+        },
+      },
+    ];
+
+    // 最后那一项：文件卡**打开**那份 `.nestmind`；内嵌卡没有文件 ⇒ 换成**导出**
+    // （用户 2026-09-21：内嵌脑图卡"右键提供「导出为 `.nestmind`」"）
+    if (inline) {
+      items.push({
+        id: 'mind-export',
+        separatorBefore: true,
+        title: t('menu.mindExportFile'),
+        icon: 'file-output',
+        run: () => {
+          void this.exportInlineMind(mind);
+        },
+      });
+    } else {
+      items.push({
+        id: 'mind-open',
+        separatorBefore: true,
+        title: t('menu.card.openMind'),
+        icon: 'external-link',
+        run: () => {
+          void openMindView(this.app, request.path);
+        },
+      });
+    }
+
+    // ★ **根节点**那一份菜单还要并上"这一整张卡 / 这一整棵树"的项
+    //   （用户 2026-09-21："这些功能都放到脑图的根节点上去"）：
+    //   * 卡片级（颜色 / 锁定 / 复制…）—— `prepareCardMenu` 顺带把选区同步成那张卡；
+    //   * **容器级**（`2.2.0`）：白板级脑图上"删掉这一整棵"只有这一个入口
+    //     （无边界之后，它没有边框可以右键）。
+    if (isRoot && request.cardId) {
+      const cardItems = this.prepareCardMenu(request.cardId) ?? [];
+      const containerItems = this.mindContainerMenuItems(request.cardId);
+      const extra = [...cardItems, ...containerItems];
+      // 第一项前面插一条分隔线（节点级那几项与"整棵 / 整卡"那几项是两码事）
+      items.push(
+        ...extra.map((item, index) => (index === 0 ? { ...item, separatorBefore: true } : item)),
+      );
+    }
+
+    showMenuAtMouse(request.event, items);
+  }
+
+  /**
+   * **容器级**（整棵脑图）的菜单项（`2.2.0`）—— 只有右键**根节点**时才并进来。
+   *
+   * ★ 与卡片级的分界：卡片那套是"一张卡的外观与复制粘贴"（`prepareCardMenu`），
+   *   这里说的是"这一整棵树"——删掉它（连带挂在它身上的连线）。
+   * ★ 传进来的 id 不是脑图（比如卡片）就给空数组：本方法只对 `board.minds` 里的 id 说话。
+   */
+  private mindContainerMenuItems(id: string): MenuItemSpec[] {
+    const board = this.board;
+    const mind = board?.minds?.find((item) => item.id === id);
+    if (!mind) return [];
+    return [
+      {
+        id: 'mind-container-delete',
+        // ★ 与节点级的「删除节点」措辞上要分得清：这条删的是**整棵**
+        title: t('menu.mindDeleteAll'),
+        icon: 'trash',
+        disabled: this.isReadOnly(),
+        run: () => {
+          this.commit(t('history.delete'), (draft) => removeMinds(draft, [id]));
+        },
+      },
+      // 演示四项（`2.2.0` 收尾）：用户 2026-09-22 实测"菜单里没有这一项"。
+      // ★ 放在**容器级**这一组里：根节点的右键菜单会并进这一组，而"加入演示"
+      //   说的正是"这一整棵树"（与上面那条删除整棵同一个粒度）。
+      // ★ 树身（不是节点上）的右键由 `onCanvasContextMenu` 的几何判据兜住，
+      //   两条路都会走到这四项。
+      ...this.mindPresentationItems(id).map((item, index) => ({
+        ...item,
+        separatorBefore: index === 0 ? true : item.separatorBefore,
+      })),
+    ];
+  }
+
+  /**
+   * 把内嵌脑图卡里那份模型导出成一份 `.nestmind`（`F4`）。
+   *
+   * ★ 落盘走 `mind/io/newMind.writeMindToVault`：目录 / 重名顺延 / 序列化都在那一侧，
+   *   这一层只说"把这份模型写出去，然后告诉用户写在哪了"。
+   * ★ 导出**不改卡片**：用户想搬出去就搬，内嵌那份仍在板里（要"搬家"自己删卡即可）。
+   */
+  private async exportInlineMind(mind: MindFile): Promise<void> {
+    try {
+      // ★ 文件名按**根节点文字**（用户 2026-09-22）：根节点空着 ⇒ `未命名脑图`，
+      //   重名由 `uniquePath` 顺延（那一侧本来就有）。模型里的 `meta.title` 对
+      //   白板新建的树是空串，不能当文件名用（从前就落成"未命名脑图"）。
+      const path = await writeMindToVault(this.plugin, mind, { title: rootTextOf(mind) });
+      new Notice(t('notice.mindExported', { path }));
+    } catch (error) {
+      console.warn('[nestboard] 导出脑图失败', describeError(error));
+      new Notice(t('notice.mindExportFailed', { error: describeError(error) }));
+    }
+  }
+
   /** 卸载挂在内容槽上的卡片级组件（换内容、节点回收、视图关闭都会走到） */
   private releaseCardContent(contentEl: HTMLElement): void {
     const component = this.cardComponents.get(contentEl);
@@ -3356,12 +4464,60 @@ export class BoardView extends FileView {
     component.unload();
   }
 
+  /**
+   * 这个端点（卡片 id 或分栏 id）能不能**作为整体**连线（`F4` 起）。
+   *
+   * ★ 无框卡（`chrome: 'bare'`，两张脑图卡）不行：用户 2026-09-21 —— "脑图……也不会作为
+   *   整体对外连线"。它们连的是**卡内的节点**（下一步做），整张卡不参与。
+   * ★ 分栏与其它类型一律能连（这一条只收走"没有盒子"的那些卡）。
+   */
+  private cardAttachableAsWhole(endpointId: string): boolean {
+    const card = this.board?.cards.find((item) => item.id === endpointId);
+    if (!card) return true;
+    return this.cardRegistry.get(card.type)?.chrome !== 'bare';
+  }
+
   // ── 快捷操作栏（`O38`）────────────────────────────────────
 
   /** 把"现在选中的那张卡"回灌给栏（没有就整条收起） */
   private syncQuickBar(): void {
     const bar = this.quickBar;
     if (!bar) return;
+
+    // 卡内节点那一路什么时候失效：**选区里出现了别的卡**（用户改去看别的了）。
+    // ★ 判据不是"选区必须等于那卡"：点卡里的节点**不会**选中那张卡（卡片自己
+    //   `stopPropagation` 拦下了），要求等式成立的话这一路刚设上就被清掉。
+    // ★ 也不要求选区非空：点了空白（选区清空）那一下由 `clearMindNodeFocus` 显式清
+    //   —— 那里才是"用户点了空白"这个事实发生的地方。
+    const selected = [...this.selection.cardIds];
+    if (this.mindFocus && selected.some((id) => id !== this.mindFocus?.cardId)) {
+      this.mindFocus = null;
+    }
+
+    // ★ 卡内脑图选着一个节点时，这条栏说的是**那个节点**（`F4`，用户 2026-09-21）——
+    //   与"选中一张卡"是两条互斥的来路，先判它。
+    const node = this.focusedMindNode();
+    if (node) {
+      const { node: item, mind } = node;
+      bar.setState({
+        writable: this.isMindNodeWritable(node.focus),
+        features: MIND_NODE_BAR_FEATURES,
+        node: {
+          id: item.id,
+          icon: item.icon ?? '',
+          // ★ 默认值要按**层级**取（中心主题默认加粗）：与标签页那条栏逐字同一套
+          //   （`titleBoldOf`），否则"看着是粗的、栏里没亮"，第一次点它反而写一个 `true`
+          bold: item.style?.bold ?? titleBoldOf(depthOf(mind, item.id)),
+          italic: item.style?.italic === true,
+          underline: item.style?.underline === true,
+          color: item.style?.color ?? null,
+          ink: item.style?.ink ?? null,
+          highlight: item.style?.highlight ?? null,
+        },
+      });
+      return;
+    }
+
     const card = this.quickBarTarget();
     const boardRef = card?.type === 'boardRef';
     bar.setState({
@@ -3411,6 +4567,287 @@ export class BoardView extends FileView {
     return card.type === 'note' || card.type === 'titleCard' || card.type === 'boardRef'
       ? card
       : null;
+  }
+
+  // ── 卡内脑图的节点 → 快捷操作栏（`F4`，用户 2026-09-21）───────
+
+  /**
+   * 卡内选中节点变了（`MindBridge.nodeFocus` 打上来的）。
+   *
+   * ★ `nodeId === null` = 卡内不再选中任何节点（节点被删、或卡被重画后那个节点没了）
+   *   ⇒ 整条栏跟着收起，而不是停在"一个已经不存在的节点"上。
+   */
+  private setMindNodeFocus(focus: MindNodeFocus): void {
+    if (focus.nodeId === null) {
+      // 卡内不再选中任何节点 ⇒ 收起那一路（卡片选区不动：用户可能正拿着一张卡在做别的）
+      this.mindFocus = null;
+      this.syncQuickBar();
+      return;
+    }
+    // ★ 把**键盘**交给画布（`2.2.0` 收尾 · Tab / 回车 / 方向键）：卡片里那个节点的
+    //   `pointerdown` 会被卡内自己 `stopPropagation` 拦下（"按住节点不能变成拖整张卡"），
+    //   于是画布**收不到那一下**、也就没机会 `focusCanvas()`。不补这一句的后果是
+    //   "点了节点、按 Tab 毫无反应"，而且只在"用户还没点过画布"时复现（最难查的一类）。
+    this.focusCanvas();
+
+    // ★ 点节点 = "现在的目标就是这个节点" ⇒ 把**卡片选区**清掉。
+    //   不清的话：用户先选了一张卡（哪怕是别的卡）再来点节点，下面 `syncQuickBar`
+    //   那条失效判据会立刻把这一路清掉 —— 表现出来就是"点了节点，栏不出现"。
+    //   也不反过来"把那张卡选上"：无框卡一选中就会画出一圈描边（那个"隐形的框"
+    //   正是用户要去掉的东西）。
+    this.selection.clear();
+    this.mindFocus = focus;
+    this.syncQuickBar();
+  }
+
+  /** 收掉"卡内选中的那个节点"（点了空白 / 换板时）—— 底部那条栏随之收起 */
+  private clearMindNodeFocus(): void {
+    if (!this.mindFocus) return;
+    this.mindFocus = null;
+    this.syncQuickBar();
+  }
+
+  /**
+   * 现在被点中的那个卡内节点（连它的模型一起给出来）。
+   *
+   * ★ 每次都**现读模型**（内嵌卡读卡片内容、文件卡读仓储）：节点可能已经被改过好几轮
+   *   （栏上的按钮、右键菜单、别处编辑），存一份快照就会"栏里显示的是旧值"。
+   */
+  private focusedMindNode(): { focus: MindNodeFocus; mind: MindFile; node: MindNode } | null {
+    const focus = this.mindFocus;
+    if (!focus?.nodeId) return null;
+    const mind = focus.inline ? focus.inline.read() : this.plugin.mindRepository.get(focus.path);
+    const node = mind?.nodes.find((item) => item.id === focus.nodeId) ?? null;
+    if (!mind || !node) return null;
+    return { focus, mind, node };
+  }
+
+  /**
+   * 卡内节点的键位（`2.2.0` 收尾 · 用户 2026-09-23）—— **能接就接，接不了返回 `false`**。
+   *
+   * ── 与 `.nestmind` 视图的关系 ────────────────────────────────
+   *
+   * "哪个键干什么"全在 `mindKeyActionOf` 里（纯函数、两边共用）；这里只做**动作 → 调哪个口**：
+   * 内嵌树走卡片内容（一次 `commit` = 一步撤销）、文件树走 `.nestmind` 仓储 —— 与节点右键
+   * 菜单那几项完全同路（见 `mutateFocusedMind`）。
+   *
+   * ── 刻意**不**搬的两条（各有原因，不是漏了）──────────────────
+   *
+   * * `⌘[` / `⌘]`（进入当前主题 / 返回上一层）：那是**树视图的相机概念**（把某一支当作新的
+   *   根重排），白板上的树是画布上的一个对象，没有"换根"这回事；
+   * * `Space`（折叠 / 展开）与 `D`（拖拽辅助线）：白板把**空格**留给了"空格 + 拖动 = 平移"
+   *   （`NavigationController` 在画布上就先 `preventDefault` 了），而辅助线是树视图自己的
+   *   渲染辅助。折叠在白板上走节点右键菜单（那一项一直在）。
+   */
+  private handleMindNodeKey(event: KeyboardEvent): boolean {
+    // ★ 落在**输入框 / 按钮 / 可编辑块**上的键整条让开（节点标题编辑器自己会
+    //   `stopPropagation`，这一条挡的是其余那些 —— 比如焦点还在底部快捷栏的按钮上时按
+    //   回车，那是"点那个按钮"，不该变成"加个同级节点"）
+    if (isInteractiveKeyTarget(event.target)) return false;
+
+    const current = this.focusedMindNode();
+    if (!current) return false;
+
+    const action = mindKeyActionOf(event);
+    if (action.kind === 'none') return false;
+
+    const { focus, mind, node } = current;
+    switch (action.kind) {
+      case 'add-child':
+      case 'add-sibling': {
+        if (!this.isMindNodeWritable(focus)) return false;
+        const create = action.kind === 'add-child' ? addChild : addSibling;
+        let created: string | null = null;
+        const changed = this.mutateFocusedMind(focus, (file) => {
+          created = create(file, node.id);
+          return created !== null;
+        });
+        if (!changed || created === null) break;
+        // ★ 先**选中新节点**再进编辑器（与 `.nestmind` 那条完全一致）：不选的话键盘还停在
+        //   旧节点上，连按 `Tab` 会一路往同一个父下堆孩子（"我要往下长一层"变成"长一排"）
+        this.focusMindNode(focus, created);
+        // 加完**立刻把光标送进新节点**（与节点菜单那条同一个手感：按一下就打字）
+        this.requestMindNodeEdit(focus, created);
+        break;
+      }
+      case 'promote': {
+        if (!this.isMindNodeWritable(focus)) return false;
+        // 提升一层（与 `.nestmind` 的 `Shift+Tab` 同义）；根节点没有上一层 ⇒ `promote` 自己跳过
+        this.mutateFocusedMind(focus, (file) => promote(file, node.id));
+        break;
+      }
+      case 'edit-title': {
+        if (!this.isMindNodeWritable(focus)) return false;
+        this.requestMindNodeEdit(focus, node.id);
+        break;
+      }
+      case 'delete': {
+        // ★ 有**节点级框选**时让下面那道统一处理（它认整个选区，还管文件树那一半）；
+        //   这里只管"只点了这一个节点、没框选别的东西"。
+        if (this.selection.mindNodeKeys.size > 0) return false;
+        if (!this.isMindNodeWritable(focus)) return false;
+        // 借道 `deleteSelection`：内嵌进白板撤销栈、文件树写 `.nestmind` —— 与 Delete 键同源
+        this.selection.set({ mindNodes: [nodeEndpointKey(focus.cardId, node.id)] });
+        this.deleteSelection();
+        break;
+      }
+      case 'move': {
+        const next = neighborByArrow(mind, node.id, action.direction, {
+          vertical: directionForStructure(mind.view.structure ?? 'logic-right') === 'down',
+          // ★ 侧别问布局（`MindLayer.sideOf`）：左右镜像在"挂在左边的那一支"上是反的，
+          //   而那是**布局**才知道的事（答不出时按"孩子在右"兜底）
+          side: this.mindLayer?.sideOf(focus.cardId, node.id) ?? 1,
+        });
+        if (next === null) return false;
+        this.focusMindNode(focus, next);
+        break;
+      }
+      default:
+        // 聚焦两键 / 折叠 / 辅助线：见上面那段"刻意不搬"（交给下面的分支或原地不动）
+        return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  /**
+   * 改一次**焦点节点所在**的那份模型。
+   *
+   * ★ 两条数据源各走各的（与节点右键菜单同源）：内嵌树在**卡片内容**里 ⇒ `inline.mutate`
+   *   （一次 `commit` = 白板撤销栈里的一步）；文件树在 `.nestmind` 里 ⇒ 仓储
+   *   （原子写 + revision + 冲突检测）。保护态 / 只读一律**安静地失败** ——
+   *   一次写不进去不该把按键弄崩。
+   */
+  private mutateFocusedMind(
+    focus: MindNodeFocus,
+    mutator: (file: MindFile) => void | boolean,
+  ): boolean {
+    if (focus.inline) return focus.inline.mutate(mutator);
+    try {
+      return this.plugin.mindRepository.mutate(focus.path, mutator);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 让卡内某个节点的标题**进编辑器**（"加完节点就打字" / `F2` 两处共用）。
+   *
+   * ★ 请求键与**渲染方取请求的那把**必须一致：白板级脑图（含文件树）按**脑图 id**
+   *   （`MindLayer` 的 `takeEditRequest(mind) => takeMindEdit(mind.id)`），内嵌树走
+   *   `inline.requestEdit` —— 写死成别的，请求会永远躺在槽里没人取（表现为"光标进不来"，
+   *   这一条 `2.2.0` 批 4 修过一次）。
+   */
+  private requestMindNodeEdit(focus: MindNodeFocus, nodeId: string): void {
+    if (focus.inline) {
+      focus.inline.requestEdit(nodeId);
+      return;
+    }
+    requestMindEdit(focus.cardId, nodeId);
+  }
+
+  /**
+   * 把"现在选中的那个卡内节点"换成另一个（方向键）。
+   *
+   * ★ 优先让**渲染方**去选（`MindLayer.selectNode` ⇒ `EmbedMind.selectNode`）：那条路与
+   *   "用户自己点一下"完全同路 —— 卡内选中框、底部那条快捷操作栏（经 `onSelect` 回到
+   *   `setMindNodeFocus`）都会跟着到位。
+   * ★ 那棵树此刻没挂载（屏幕外被裁掉 / 模型还没读到）⇒ 渲染方选不了，这里**自己记账**：
+   *   至少让 Tab / 回车 / F2 接着落在正确的节点上（手里那把 `mindFocus` 就是"当前节点"）。
+   */
+  private focusMindNode(focus: MindNodeFocus, nodeId: string): void {
+    if (this.mindLayer?.selectNode(focus.cardId, nodeId) === true) return;
+    this.setMindNodeFocus({ ...focus, nodeId });
+  }
+
+  /** 卡内那个节点能不能改（白板只读 / 文件卡还要看那份 `.nestmind` 是不是保护态） */
+  private isMindNodeWritable(focus: MindNodeFocus): boolean {
+    if (this.isReadOnly()) return false;
+    return focus.inline ? true : !this.plugin.mindRepository.isReadOnly(focus.path);
+  }
+
+  /**
+   * 改卡内那个节点一次。
+   *
+   * ★ 两条数据源与右键菜单那一条**完全同路**（`showMindNodeMenu` 的 `add`）：
+   *   内嵌卡走 `inline.mutate`（= 一次 `updateContent` = 白板撤销栈里的一步），
+   *   文件卡走 `.nestmind` 仓储（原子写 + revision + 冲突检测）。
+   * ★ 文件卡那边没有"白板提交 → 重画 → `syncQuickBar`"这条链，所以这里自己刷一次栏
+   *   （内嵌卡刷两次也无害：同一个状态写两遍）。
+   */
+  private editFocusedMindNode(mutator: (mind: MindFile) => void | boolean): void {
+    const target = this.focusedMindNode();
+    if (!target || !this.isMindNodeWritable(target.focus)) return;
+    const { focus } = target;
+    if (focus.inline) {
+      focus.inline.mutate(mutator);
+    } else {
+      // 保护态（解析失败的 `.nestmind`）会抛：一次写不进去不该把栏点崩
+      try {
+        this.plugin.mindRepository.mutate(focus.path, mutator);
+      } catch {
+        return;
+      }
+    }
+    this.syncQuickBar();
+  }
+
+  /**
+   * 把栏上那一下应用到**卡内那个节点**；没有节点在操作时返回 `false`（交给"改这张卡"）。
+   *
+   * 与 `MindView` 的 `applyNodeStyle` / `toggleTitleFlag` 逐项对齐：标记走 `setIcon`，
+   * 其余（粗 / 斜 / 下划线 / 字色 / 高亮 / 底色）走 `setNodeStyle`。
+   */
+  private applyToFocusedMindNode(patch: {
+    icon?: string;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    color?: CardColor | null;
+    ink?: HexColor | null;
+    highlight?: HexColor | null;
+  }): boolean {
+    const target = this.focusedMindNode();
+    if (!target) return false;
+    const { node } = target;
+
+    // 标记只对单个节点有意义（一个节点一个标记）—— 这里本来就是单选
+    if (patch.icon !== undefined) {
+      const icon = patch.icon;
+      this.editFocusedMindNode((mind) => setMindNodeIcon(mind, node.id, icon));
+      return true;
+    }
+
+    const style: MindStylePatch = {
+      bold: patch.bold,
+      italic: patch.italic,
+      underline: patch.underline,
+      color: patch.color,
+      ink: patch.ink,
+      highlight: patch.highlight,
+    };
+    this.editFocusedMindNode((mind) => setNodeStyle(mind, node.id, style));
+    return true;
+  }
+
+  /**
+   * 粗 / 斜 / 下划线的开关（卡内节点版）。
+   *
+   * ★ 判据是"**当前生效值**取反"：中心主题默认就是加粗的（`titleBoldOf`），
+   *   按"数据键取反"的话第一次点它反而会写一个 `true` —— 看着像没反应（标签页那条踩过）。
+   */
+  private toggleFocusedMindNodeFlag(flag: 'bold' | 'italic' | 'underline'): boolean {
+    const target = this.focusedMindNode();
+    if (!target) return false;
+    const { node, mind } = target;
+    const current =
+      flag === 'bold'
+        ? (node.style?.bold ?? titleBoldOf(depthOf(mind, node.id)))
+        : node.style?.[flag] === true;
+    this.applyToFocusedMindNode({ [flag]: !current });
+    return true;
   }
 
   /** 栏里改**卡面外观**（标记 / 粗斜下划线 / 字色）：一个入口，删键纪律都在 `updateCardLook` 里 */
@@ -3622,6 +5059,9 @@ export class BoardView extends FileView {
     // ★ 收起状态要**赶在**标脏之前推下去（O03）：晚一步的话这次刷新会按旧账本画一帧
     this.syncHiddenCards();
     this.cardLayer?.refresh();
+    // 脑图层（`2.2.0`）没有"标脏等裁剪"那一套：容器数量是几十这一档，直接对齐最省事
+    //（幂等：静止时只做几次数值比较，见 `MindLayer.sync`）
+    this.mindLayer?.sync(this.viewport.visibleBounds());
     // 栏里的"现在按着哪个态"（标记 / 粗斜下划线 / 色块）跟着这一帧走：改了外观之后
     // 选区可能没变，只靠上面那次订阅会漏掉（与脑图 `paint()` 里那一句同一条理由）
     this.syncQuickBar();
@@ -3673,18 +5113,27 @@ export class BoardView extends FileView {
       // 连线的同一种幽灵：删了一条线再撤销、或外部改了文件，都可能让选区里
       // 留下已不存在的边 id（下次按 Delete 就会去删空气）
       const aliveEdges = new Set(board.edges.map((edge) => edge.id));
+      // 脑图（`2.2.0` 批 5）同理：框选之后再撤销掉"新建那棵树"，选区里那个 id 就悬空了
+      const aliveMinds = new Set((board.minds ?? []).map((mind) => mind.id));
 
       const keptCards = [...this.selection.cardIds].filter((id) => aliveCards.has(id));
       const keptColumns = [...this.selection.columnIds].filter((id) => aliveColumns.has(id));
       const keptEdges = [...this.selection.edgeIds].filter((id) => aliveEdges.has(id));
+      const keptMinds = [...this.selection.mindIds].filter((id) => aliveMinds.has(id));
 
-      // ★ 三类一次 `set()` 给全：`set` 是"整体替换"，省略的那类会被清空
+      // ★ 四类一次 `set()` 给全：`set` 是"整体替换"，省略的那类会被清空
       if (
         keptCards.length !== this.selection.cardIds.size ||
         keptColumns.length !== this.selection.columnIds.size ||
-        keptEdges.length !== this.selection.edgeIds.size
+        keptEdges.length !== this.selection.edgeIds.size ||
+        keptMinds.length !== this.selection.mindIds.size
       ) {
-        this.selection.set({ cards: keptCards, columns: keptColumns, edges: keptEdges });
+        this.selection.set({
+          cards: keptCards,
+          columns: keptColumns,
+          edges: keptEdges,
+          minds: keptMinds,
+        });
       }
     }
 
@@ -3749,7 +5198,9 @@ export class BoardView extends FileView {
     const hint = this.emptyHintEl;
     if (!hint) return;
     const board = this.board;
-    const visible = board !== null && board.cards.length === 0;
+    // ★ 脑图也算内容（用户 2026-09-22 实测：往空板里插一棵树，那句"这块白板还是空的"
+    //   还杵在那儿）。分栏**不算** —— 这条口径没变（见上面那段注释）。
+    const visible = board !== null && board.cards.length === 0 && (board.minds?.length ?? 0) === 0;
     if (visible === this.lastEmptyHintVisible) return;
     this.lastEmptyHintVisible = visible;
     hint.toggleClass('is-visible', visible);
@@ -4042,6 +5493,7 @@ export class BoardView extends FileView {
     const canvas = this.canvasEl;
     if (!canvas) return;
     this.cardLayer?.clear();
+    this.mindLayer?.clear();
     this.columnLayer?.clear();
     canvas.querySelector('.nestboard-notice')?.remove();
     const notice = canvas.createDiv({ cls: 'nestboard-notice' });
@@ -4121,6 +5573,9 @@ export class BoardView extends FileView {
     this.overlayLayer?.sync(this.viewport);
     // 裁剪依赖视口：平移缩放时旧卡片离场、新卡片进场，节点从复用池取（T1.25 / T1.26）
     this.cardLayer?.sync(this.viewport);
+    // 脑图层（`2.2.0`）：与卡片同在世界层里，跟着同一份视口重排
+    //（容器拖动期间它**不写位置** —— 那几帧归手势，见 `MindLayer.setPreview`）
+    this.mindLayer?.sync(this.viewport.visibleBounds());
     // ★ 紧跟着补画拖动预览：`sync` 刚把卡片按模型位置重排过，手上那一张会弹回原位
     //   （T2.14，见 `reapplyDragPreview`）
     this.reapplyDragPreview();
@@ -4271,7 +5726,11 @@ export class BoardView extends FileView {
   private dropPathsAt(paths: readonly string[], clientX: number, clientY: number): void {
     const center = this.dropCenterOf(clientX, clientY);
     if (!center || paths.length === 0) return;
-    this.placeDropCards(cardsForDropPaths(paths, cascadeOrigins(paths.length, center)), center);
+    const origins = cascadeOrigins(paths.length, center);
+    // 两类对象两条落法：`.nestmind` 是**白板级脑图**（只有一个锚点），
+    // 其余是有宽高的卡片 —— 两个函数各自认自己那一部分，互不干扰
+    this.placeDropMinds(mindsForDropPaths(paths, origins));
+    this.placeDropCards(cardsForDropPaths(paths, origins), center);
   }
 
   /**
@@ -4333,13 +5792,31 @@ export class BoardView extends FileView {
     return this.addFilesFromVault(paths, at ?? undefined);
   }
 
-  /** 路径 → 卡片 → 落地（`addFilesFromVault` 那条路没有指针位置，给它一个中心点） */
+  /** 路径 → 卡片 / 脑图 → 落地（`addFilesFromVault` 那条路没有指针位置，给它一个中心点） */
   private placeDroppedCards(paths: readonly string[], center: Point): boolean {
     if (paths.length === 0) return false;
-    return this.placeDropCards(
-      cardsForDropPaths(paths, cascadeOrigins(paths.length, center)),
-      center,
-    );
+    const origins = cascadeOrigins(paths.length, center);
+    const placedMinds = this.placeDropMinds(mindsForDropPaths(paths, origins));
+    const placedCards = this.placeDropCards(cardsForDropPaths(paths, origins), center);
+    return placedMinds || placedCards;
+  }
+
+  /**
+   * 脑图落地（`2.2.0`）：`.nestmind` 拖进来 = 白板上多出**一棵树**。
+   *
+   * ★ 与卡片那条路的三处不同，都是刻意的：
+   *   ① **不进分栏** —— 栏是"一列卡片"的容器，一棵可向任意方向长的树塞进一栏没有意义；
+   *   ② 不按类型问默认色 / 不做错开落位（一个落点就是一棵树，落点已经由调用方算好）；
+   *   ③ 落完**不选中**（脑图这会儿还没有"容器级选区"，见 `12 §4.3`）—— 用户接着点节点就行。
+   * ★ 模型不在文件里读：容器只记 `path`，渲染层读到之后自己画（`MindLayer`）。
+   */
+  private placeDropMinds(minds: readonly Mind[]): boolean {
+    const board = this.board;
+    if (!board || minds.length === 0 || this.isReadOnly()) return false;
+    return this.commit(t('history.create'), (draft) => {
+      for (const mind of minds) addMind(draft, mind);
+      return true;
+    });
   }
 
   /**
@@ -4492,6 +5969,19 @@ export class BoardView extends FileView {
 
     const clipboard = event.clipboardData;
     if (!clipboard) return;
+
+    // ★ 节点剪贴板（`2.2.0` 收尾 · 用户 2026-09-23）：白板上**别的落点对它无效** ——
+    //   它只认"指针下正好是一个脑图节点"（粘成那个节点的子级），没有目标就只说一句话。
+    //   从前这一份是塞进卡片载荷的"合成容器"，于是粘到空白处会长出一棵棵新树。
+    const nodePayload = nodeClipboardOf(
+      clipboard.getData('text/html'),
+      clipboard.getData('text/plain'),
+    );
+    if (nodePayload) {
+      event.preventDefault();
+      this.pasteMindNodes(nodePayload);
+      return;
+    }
 
     // ★ 卡片搬运（T4.15 / `F7-07`）**第一个判**：那是我们自己写进剪贴板的一段文本，
     //   认出来就直接落卡。不先判的话它会掉进下面的 `resolveDropText` —— 那段 JSON
@@ -4857,12 +6347,16 @@ export class BoardView extends FileView {
       });
     }
     for (const column of board.columns) rects.set(column.id, columnRect(column));
+    // 脑图节点（`2.2.0` 批 3）：键是 `脑图id/节点id`，几何由渲染层实测给出
+    //（`MindLayer.nodeRects`）—— 与绘制侧那份**同源**，所以"画在节点上的线"
+    // 也**点得中**（命中 / 框选 / 弧度手柄全走这一张表）
+    for (const [key, rect] of this.mindLayer?.nodeRects() ?? []) rects.set(key, rect);
     // 视觉补丁（栏内滚动 + 拖动预览）要**盖住**模型值：命中的是屏幕上那条线
     const override = this.visualOverrides();
     if (override) {
       for (const [id, rect] of override) rects.set(id, rect);
     }
-    return (cardId) => rects.get(cardId) ?? null;
+    return (endpointKey) => rects.get(endpointKey) ?? null;
   }
 
   /**
@@ -4932,16 +6426,63 @@ export class BoardView extends FileView {
    *   `cardId`（卡片 id 或分栏 id，共用同一套 id 空间），而"能不能连"的判定
    *   统一在 `model/edges.addEdges` 那一处（这一层不做第二遍校验）。
    */
-  private connectCards(
-    fromEndpointId: string,
-    fromSide: AnchorSide,
-    to: { cardId: string } | { cardId: null; point: Point },
+  /**
+   * 此刻能不能拖端点（`2.2.0` · O1）：**恰好选中一条线**、可写、非演示。
+   *
+   * ★ 与 `EdgeCurveController.activeCurveEdge()` 分开命名（那边还要求是自由走线）：
+   *   端点重拖对**所有**线都有意义 —— 恰恰是"拖到空地上的自由端线"最需要它。
+   */
+  private activeEdgeForEndpointDrag(): { id: string; from: EdgeEndpoint; to: EdgeEndpoint } | null {
+    const board = this.board;
+    if (!board || this.isReadOnly() || this.presentation?.active) return null;
+    if (this.selection.edgeIds.size !== 1) return null;
+    const [id] = this.selection.edgeIds;
+    const edge = board.edges.find((item) => item.id === id);
+    return edge ? { id: edge.id, from: edge.from, to: edge.to } : null;
+  }
+
+  /**
+   * 端点重拖落地（`2.2.0` · O1）：把某条线的一端改成新的落点。
+   *
+   * ★ 目标端点由**键**翻成 `EdgeEndpoint`（`endpointOfKey`；节点的键是 `脑图id/节点id`），
+   *   与 `connectCards` 同一套 —— 两条路各写一份翻法迟早分叉。
+   * ★ 一律 `side: null`（自动选边），与"拉新线时终点那一端"同一条。
+   */
+  private reconnectEdge(
+    edgeId: string,
+    end: 'from' | 'to',
+    to: { key: string } | { key: null; point: Point },
   ): void {
+    if (to.key === null) {
+      const point = to.point;
+      this.commit(t('history.connect'), (board) =>
+        setEdgeEndpoint(board, edgeId, end, { key: null, point }),
+      );
+      return;
+    }
+    const { cardId, nodeId } = splitEndpointKey(to.key);
+    this.commit(t('history.connect'), (board) =>
+      setEdgeEndpoint(board, edgeId, end, {
+        key: cardId,
+        side: null,
+        ...(nodeId === null ? {} : { nodeId }),
+      }),
+    );
+  }
+
+  private connectCards(
+    fromKey: string,
+    fromSide: AnchorSide,
+    to: { key: string } | { key: null; point: Point },
+  ): void {
+    // ★ 两端都由**端点键**翻成 `EdgeEndpoint`（`endpointOfKey`，`2.2.0` 批 3）：
+    //   卡片 / 分栏 / 整棵脑图是它们自己的 id，脑图节点是 `脑图id/节点id` ——
+    //   翻法是纯字符串，控制器那边因此始终不必知道"节点"是什么。
+    // ★ 起点用用户按下的那一面，终点一律"自动选边"（`side: null`）：从哪面进用户
+    //   通常没想，交给自动判定之后节点挪到另一侧时线会自己翻面。
     const edge = createEdge(
-      { cardId: fromEndpointId, side: fromSide },
-      to.cardId === null
-        ? { cardId: '', side: null, point: to.point }
-        : { cardId: to.cardId, side: null },
+      endpointOfKey(fromKey, fromSide),
+      to.key === null ? { cardId: '', side: null, point: to.point } : endpointOfKey(to.key, null),
     );
     this.commit(t('history.connect'), (board) => addEdges(board, [edge]));
   }
@@ -4977,14 +6518,21 @@ export class BoardView extends FileView {
    *   预填的正是"改名时该打进去的那半截"（`renameCardFileWithTitle` 会把扩展名拼回去）。
    * ★ 白板卡的迷你形态与展开形态共用这一条路：卡面上的名字都取自 `content.path`，
    *   文件一改名，两处一起跟着变。
+   * ★ `F5`：便签 / 同步便签的标题**也走这一条**（它们没有文件，改的就是 `card.title`），
+   *   入口除了右键菜单还有"双击卡面标题行"（见 `editTitleFromTitleBand`）。
+   *
+   * @returns 是否真的把输入框开出来了（未挂载 / 锁定 / 已经在编辑标题 ⇒ `false`）。
+   *          调用方据此决定要不要退回别的动作（双击那条路会退回内容编辑）。
    */
-  private editCardTitle(cardId: string): void {
+  private editCardTitle(cardId: string): boolean {
     const card = this.board?.cards.find((item) => item.id === cardId);
-    if (!card) return;
+    if (!card) return false;
     const path = this.cardRegistry.titleFilePath(card);
-    this.cardLayer?.editTitle(cardId, {
-      initial: path === null ? card.title : splitName(path).base,
-    });
+    return (
+      this.cardLayer?.editTitle(cardId, {
+        initial: path === null ? card.title : splitName(path).base,
+      }) ?? false
+    );
   }
 
   /**
@@ -5173,8 +6721,11 @@ export class BoardView extends FileView {
       let pastedIds: string[] = [];
       const pasted = this.plugin.repository.mutate(targetPath, (target) => {
         const added = pasteCardTransfer(target, payload, at);
-        pastedIds = added.map((card) => card.id);
-        return added.length > 0;
+        // ★ 只记**卡片**的 id（`2.2.0` 批 4 五起载荷里还可能有整棵脑图）：
+        //   这一条路是"把卡片拖到另一块板"的同伴记账，撤销时要按 id 把那批卡删掉 ——
+        //   而 `moveCompanions` 那一套只认卡片（拖出来的是卡片，脑图没有拖出去这个手势）
+        pastedIds = added.cards.map((card) => card.id);
+        return added.cards.length > 0 || added.minds.length > 0;
       });
       if (!pasted) return;
 
@@ -5897,7 +7448,10 @@ export class BoardView extends FileView {
     // 定义没注册就不该"静默建一张画不出来的卡"：宁可什么都不做
     if (!definition) return;
 
-    const size = definition.defaultSize;
+    const content = definition.createDefaultContent();
+    // ★ 尺寸：默认取类型的 `defaultSize`；类型若能**按内容算**（`sizeForContent`，
+    //   `F4` 的内嵌脑图卡就是它）就以那个为准 —— 用户要的"尺寸随内容自适应"
+    const size = definition.sizeForContent?.(content) ?? definition.defaultSize;
     const card = createCard(type, {
       // 以点击处为**中心**：双击空白时用户脑子里的位置是"就这儿"，
       // 让卡片左上角对齐光标会把它整体推到右下角
@@ -5908,11 +7462,20 @@ export class BoardView extends FileView {
       title: '',
       // ★ 按**类型**取默认色（图片卡 = 纯黑"相框"）：见 `newCardColor` 的说明
       color: this.newCardColor(type),
-      content: definition.createDefaultContent(),
+      content,
     }) as Card;
     // ★ 上面这处 `as Card`：`type` 在这个位置是联合类型，`createCard` 返回的是
     //   `CardOf<联合>`（类型与内容仍一一对应），但 TS 无法把一次泛型调用证明成判别联合。
     //   放行点只此一处，形状由 `definition` 与 `createCard` 双重保证。
+
+    // ★ 内嵌脑图卡（`F4`）：它**没有"整卡编辑态"**这回事（编辑发生在卡内那一层：
+    //   点节点改名 / 右键加节点），改成"把光标送进中心主题"——与"加子节点之后立刻打字"
+    //   共用同一个请求槽（`mind/embed/editRequest`）。
+    //   ★★ 这一句**必须排在 `commit` 之前**：卡片是在 `commit` 里第一次被画出来的，
+    //   而 `EmbedMind` 就在那一帧取这个请求。排在 commit 之后的话，那一帧已经过去了，
+    //   再也没人来取（"新建之后光标没进中心主题"报的就是这个）。
+    //   真正的聚焦由 `EmbedMind` 推迟一帧执行，所以下面那句 `focusCanvas()` 抢不走它。
+    if (card.type === 'mind') requestMindEdit(card.id, card.content.mind.rootId);
 
     if (!this.commit(t('history.create'), (board) => addCards(board, [card]))) return;
     this.selection.set({ cards: [card.id] });
@@ -5920,7 +7483,7 @@ export class BoardView extends FileView {
     // 编辑态不是"落卡"的一部分，而是类型自己的选择（`autoEditOnCreate`，O13）：
     // 评论卡新建出来是一张空线程，用户第一件想做的事通常是**先把它拖到想说的地方**，
     // 所以它明确要求停在这一步（卡片已选中，拖拽区完整）。
-    if (definition.autoEditOnCreate !== false) this.enterEditMode(card.id);
+    if (card.type !== 'mind' && definition.autoEditOnCreate !== false) this.enterEditMode(card.id);
   }
 
   /**
@@ -5934,6 +7497,8 @@ export class BoardView extends FileView {
    *
    * `entry` 决定"从哪一步开始"（O01）：双击那条路带 `'title'`，`⌘`+双击 /
    * `⌘`+Enter 带 `'raw'`（跳过标题，直接给正文）。
+   * ★ `F5` 起**便签 / 同步便签不再按它分支**：两者的编辑态都只有正文一格
+   *   （与引用卡——`.md` 文档节点——同款），标题走卡面那一行的就地输入。
    */
   private editCard(id: string, force = false, entry: EditEntry = 'title'): void {
     if (this.isReadOnly()) return;
@@ -6740,6 +8305,13 @@ export class BoardView extends FileView {
       return;
     }
     layer.setDimmed(filteredOutIds(board, this.cardFilter, (id) => this.brokenCardIds.has(id)));
+    // 脑图节点也参与过滤（`2.2.0` 批 4）：**按节点**变淡（不是整棵），且**只认文本维度**
+    //（节点没有类型 / 链接，见 `dimmedMindNodeKeys` 的两条口径）。
+    // ★ 模型来源与搜索面板 / 缩略图同一个（`mindModelForMap` 是只读那一份）：
+    //   读不到 `.nestmind` 的那一棵不参与（宁可少过滤一棵，也不在这层同步等读盘）。
+    this.mindLayer?.setDimmed(
+      dimmedMindNodeKeys(board, this.cardFilter, (mind) => this.mindModelForMap(mind)),
+    );
     layer.setGrouped(groupedCardIdsOf(board));
     this.filterBar?.refresh();
   }
@@ -6761,6 +8333,9 @@ export class BoardView extends FileView {
   private hiddenCardIds(board: BoardFile): Set<string> {
     const hidden = collapsedCardIds(board);
     for (const id of collapsedColumnCardIds(board)) hidden.add(id);
+    // 树折叠（`F7`）：折叠父卡 ⇒ 整棵子树藏起来（父卡留着显示 +N）。
+    // 判据照旧只有模型层一份 —— 连线 / 框选 / 命中问的是同一个问题。
+    for (const id of collapsedTreeCardIds(board)) hidden.add(id);
     return hidden;
   }
 
@@ -7060,10 +8635,15 @@ export class BoardView extends FileView {
 
     const panel = new SearchPanel(this.app, {
       board: () => this.board,
+      // 脑图节点的文字也要能搜（`2.2.0` 批 4）：指向 `.nestmind` 的树只有这里拿得到模型
+      // ★ 用"只读"那一份（`mindModelForMap`）：搜索每敲一个字就重算一次，
+      //   在那儿发读盘请求等于"打一句话翻好几次库"
+      mindModelOf: (mind) => this.mindModelForMap(mind),
       onPick: (hit, index) => {
         // 每次落地都记一笔：用户一次键都没按就直接 Esc 时，进度也不至于丢
         this.lastSearch = { query: this.searchPanel?.query ?? '', index };
-        this.revealCard(hit.cardId);
+        if (hit.mind) this.revealMindNode(hit.mind.mindId, hit.mind.nodeId);
+        else this.revealCard(hit.cardId);
       },
       onClose: (snapshot) => {
         // ★ 面板自己关掉（Esc）时视图也要放手，否则 ⌘G 会去操作一个已经关闭的面板
@@ -7124,8 +8704,31 @@ export class BoardView extends FileView {
     this.cardLayer?.flash(card.id);
   }
 
+  /**
+   * 飞到**脑图的某个节点**（`2.2.0` 批 4：搜索结果落在节点上时的落地动作）。
+   *
+   * ★ 与 `revealCard` 同一条思路：**先飞到中心，再选中它** —— 选中框是"就是这一个"
+   *   的持续标记（`EmbedMind` 那圈描边 + 底部那条快捷操作栏）。
+   * ★ 取不到那个节点的盒子（它所在的分支被折叠收起来了 / 那份 `.nestmind` 还没读到）
+   *   ⇒ 退回"飞到树根那一点"：至少把那棵树送到眼前，比什么都不做好得多。
+   */
+  private revealMindNode(mindId: string, nodeId: string): void {
+    const mind = this.board?.minds?.find((item) => item.id === mindId);
+    if (!mind) return;
+
+    const rect = this.mindLayer?.nodeRectOf(nodeEndpointKey(mindId, nodeId)) ?? null;
+    const center = rect
+      ? { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      : { x: mind.x, y: mind.y };
+    this.viewport.centerOn(center);
+    // 选中（连底部那条栏一起换过去）；节点已经不在画面上就什么都不做
+    this.mindLayer?.focusNode(mindId, nodeId);
+  }
+
   /** 白板未就绪时挂起的定位请求（见 `revealCardById`） */
   private pendingRevealCardId: string | null = null;
+  /** 白板未就绪时挂起的"飞到某个脑图节点"（见 `revealMindNodeById`） */
+  private pendingRevealMind: { mindId: string; nodeId: string } | null = null;
 
   /**
    * **外部**定位入口（T5.03 反链面板 / T5.06 `obsidian://` 协议）。
@@ -7142,6 +8745,20 @@ export class BoardView extends FileView {
       return;
     }
     this.pendingRevealCardId = cardId;
+  }
+
+  /**
+   * **外部**定位到脑图的某个节点（`2.2.0` 批 4：跨板搜索结果落在节点上）。
+   *
+   * ★ 与 `revealCardById` 完全同形 —— 连"板子还没读完就先挂起"这条都一样，
+   *   因为调用方几乎总是在 `openBoardView()` 之后立刻调。
+   */
+  revealMindNodeById(mindId: string, nodeId: string): void {
+    if (this.board) {
+      this.revealMindNode(mindId, nodeId);
+      return;
+    }
+    this.pendingRevealMind = { mindId, nodeId };
   }
 
   /**
@@ -7270,10 +8887,16 @@ export class BoardView extends FileView {
     const raw = await this.notesBridge?.read(path);
     if (!raw) return null;
     try {
-      const parsed = JSON.parse(raw) as { cards?: unknown; columns?: unknown };
+      const parsed = JSON.parse(raw) as {
+        cards?: unknown;
+        columns?: unknown;
+        minds?: unknown;
+      };
       return {
         cards: Array.isArray(parsed.cards) ? parsed.cards.length : 0,
         columns: Array.isArray(parsed.columns) ? parsed.columns.length : 0,
+        // 脑图（`2.2.0` 收尾）：缺键 = 一块没有树的老板子，不是"读不出来"
+        minds: Array.isArray(parsed.minds) ? parsed.minds.length : 0,
       };
     } catch {
       return null;
@@ -7521,7 +9144,8 @@ export class BoardView extends FileView {
    *
    * ★ 走 `commit` 而不是裸改 `board.settings`：设置是白板文件的一部分，改动要落盘、
    *   要递增 `revision`（否则下次打开又变回去）。
-   * ★ 但它**不进撤销栈** —— `serializeContent` 只快照四个内容数组（见 `model/history.ts`），
+   * ★ 但它**不进撤销栈** —— `serializeContent` 只快照五类**内容实体**
+   *   （卡 / 分栏 / 脑图 / 线 / 编组，见 `model/history.ts`），
    *   所以 `⌘Z` 不会把网格开关翻回去（"撤销一下板子自己动了"很吓人）。
    * ★ 打开时提示里带上步长：用户改过 `gridSize` 之后，"吸附到 8 还是 16"是他最想确认的事。
    */
@@ -8318,18 +9942,33 @@ export class BoardView extends FileView {
    *   分成两份实现的话，右键与长按迟早会漏掉彼此后来加的一项。
    */
   private openCardMenu(cardId: string, at: MouseEvent | { x: number; y: number }): void {
-    const board = this.board;
-    if (!board) return;
-    const card = board.cards.find((item) => item.id === cardId);
-    if (!card) return;
+    const items = this.prepareCardMenu(cardId);
+    if (items === null) return;
+    if (at instanceof MouseEvent) showMenuAtMouse(at, items);
+    else showMenuAtPoint(at, items);
+  }
 
-    // 右击 / 长按一张**没被选中**的卡 → 先把选区换成它。不换的话"改颜色"会作用在
-    // 上一次选中的那批卡上 —— 用户看着 A 卡，改的却是 B 卡
+  /**
+   * 卡片菜单的**那一串项**（右键 / 长按 / 脑图卡的**根节点**三处共用）。
+   *
+   * ★ 抽出来是为了根节点那一份（`F4`：无框之后卡片级入口挂在根节点上）能**原样**并进来 ——
+   *   三处各写一份的话，往后加一项菜单必然漏掉其中一处。
+   * ★ 副作用是有意的：右击 / 长按一张**没被选中**的卡要先把选区换成它。不换的话
+   *   "改颜色"会作用在上一次选中的那批卡上 —— 用户看着 A 卡，改的却是 B 卡。
+   *
+   * @returns 菜单项；`null` = 没有这张卡（调用方什么都不做）
+   */
+  private prepareCardMenu(cardId: string): MenuItemSpec[] | null {
+    const board = this.board;
+    if (!board) return null;
+    const card = board.cards.find((item) => item.id === cardId);
+    if (!card) return null;
+
     if (!this.selection.hasCard(card.id)) this.selection.set({ cards: [card.id] });
     const ids = new Set(this.selection.cardIds);
     const selection = board.cards.filter((item) => ids.has(item.id));
 
-    const items = buildCardMenuSpec({
+    return buildCardMenuSpec({
       selection,
       target: card,
       actions: this.cardMenuActions(),
@@ -8342,13 +9981,43 @@ export class BoardView extends FileView {
       // 规格层不认识类型名册（与 `inlineEdit` 同一种约定）
       hiddenItems: this.hiddenMenuItemsOf(card.type),
       grouped: groupOfCard(board, card.id) !== null,
+      // 树关系（`F7`）：规格层看不见 `board.edges`，由这里算好递进去
+      //（子级数 / 是否已折叠 / 有没有父级 —— 三个树菜单项的出场判据）
+      tree: {
+        childCount: treeChildrenIds(board, card.id).length,
+        collapsed: card.treeCollapsed === true,
+        hasParent: treeParentOf(board, card.id) !== null,
+      },
       // 只读板（归档锁定 / 保护态）：规格层把会写模型的项全部置灰，
       // 只放行"打开源笔记 / 打开子板 / 拉预览"这三个纯读动作（T4.06）
       readOnly: this.isReadOnly(),
     });
+  }
 
-    if (at instanceof MouseEvent) showMenuAtMouse(at, items);
-    else showMenuAtPoint(at, items);
+  /** 点卡片上的「+N」角标：展开子级（与菜单里「展开子级」同一条提交路径） */
+  private dropTreeBadgeToggle(cardId: string): void {
+    this.commit(t('history.treeCollapse'), (board) => {
+      const card = board.cards.find((item) => item.id === cardId);
+      return setTreeCollapsed(board, cardId, card?.treeCollapsed !== true);
+    });
+  }
+
+  /**
+   * 树连线松手（`F7`）：判定在模型层（`treeLinkState`），这里只分流 ——
+   * `ok` 提交进撤销链；成环 / 已有父级弹提示（D1：拒绝，不静默、不覆盖）；
+   * self（落回自己）= "算了"，静默取消。
+   */
+  private dropTreeLink(parentId: string, childId: string): void {
+    const board = this.board;
+    if (!board) return;
+    const state = treeLinkState(board, parentId, childId);
+    if (state === 'ok') {
+      this.commit(t('history.treeLink'), (next) => linkTreeParent(next, parentId, childId));
+      return;
+    }
+    if (state === 'cycle') new Notice(t('notice.treeCycle'));
+    else if (state === 'has-parent') new Notice(t('notice.treeHasParent'));
+    // 'self' / 'not-card'：前者是用户的"算了"，后者到不了这里（创建侧只认卡片）
   }
 
   /** 把菜单项接到视图能力上（`cards/` 层不认识这些方法，绑定在这一层完成） */
@@ -8362,6 +10031,18 @@ export class BoardView extends FileView {
         this.commit(t('history.title'), (board) => updateCards(board, ids(), { showTitle: show })),
       // 收起 / 展开（`O31`）：右键菜单那一项
       toggleCollapse: (id) => this.toggleCardCollapsed(id),
+      // 树折叠（`F7`）：把这张卡的子级收成 +N / 展开回去（判定与展开的"删键"都在模型层）
+      toggleTreeCollapse: (id) =>
+        this.commit(t('history.treeCollapse'), (board) =>
+          setTreeCollapsed(
+            board,
+            id,
+            !(board.cards.find((c) => c.id === id)?.treeCollapsed === true),
+          ),
+        ),
+      // 解除一层父子关系（`F7`）：删掉那条树线（子卡、孙卡都不动）
+      unlinkTreeParent: (id) =>
+        this.commit(t('history.treeUnlink'), (board) => unlinkTreeParent(board, id)),
       setColor: (color) =>
         this.commit(t('history.color'), (board) => updateCards(board, ids(), { color })),
       setAccent: (accent) =>
@@ -8472,8 +10153,23 @@ export class BoardView extends FileView {
     //   用户看到的是"分栏菜单里全是画布的动作"。
     if (isInsideColumn(event.target)) return;
 
+    // 脑图容器上的右键（`2.2.0` 收尾 · 演示对接）：树是白板的一等公民，
+    // 它该有自己的菜单（这一批放演示四项）。★ 节点上的右键由 `EmbedMind` 自己接走
+    // （节点菜单），那一侧会 `preventDefault` + `stopPropagation`，到不了这里。
     const rect = canvas.getBoundingClientRect();
     const screen = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    // ★ 两条判据一起用：DOM 上找得到就最快（正好压在节点上那种），找不到再按**几何**
+    //   判一次（树身上那些缝隙 —— 容器是 0×0 的锚点，DOM 那里根本没有可命中的面）。
+    const mindId =
+      this.resolveMindIdAt(event.target) ??
+      this.mindLayer?.mindAtPoint(this.viewport.toWorld(screen)) ??
+      null;
+    if (mindId !== null) {
+      event.preventDefault();
+      if (!this.selection.hasMind(mindId)) this.selection.set({ minds: [mindId] });
+      this.showMindMenu(mindId, event);
+      return;
+    }
 
     // 连线的右键（T1.69）：线画在空白处，不先判就会被画布菜单抢走。
     // ★ 右击一条没选中的线就选中它 —— 菜单里的动作必须作用在"用户指着的那条线"上，
@@ -8488,6 +10184,78 @@ export class BoardView extends FileView {
 
     event.preventDefault();
     this.showCanvasMenu(this.viewport.toWorld(screen), event);
+  }
+
+  /**
+   * 右键落点是不是某个脑图容器；是则给出它的 id。
+   *
+   * ★ 只认容器（`data-mind-id`）—— 节点自己有 `data-mind-node-id` 与一套菜单，
+   *   由 `EmbedMind` 接走（见 `onCanvasContextMenu` 里的说明）。
+   */
+  private resolveMindIdAt(target: EventTarget | null): string | null {
+    if (!(target instanceof HTMLElement)) return null;
+    const el = target.closest<HTMLElement>(`[${MIND_CONTAINER_ID_ATTR}]`);
+    return el?.getAttribute(MIND_CONTAINER_ID_ATTR) ?? null;
+  }
+
+  /**
+   * 一棵脑图的右键菜单（`2.2.0` 收尾 · 演示对接）。
+   *
+   * ★ 与卡片菜单同一条纪律：菜单要 Obsidian 的 `Menu`，而 `MindLayer` 不认识它 ——
+   *   视图在这一层把"规格（`buildMindMenuSpec`）"接到"能力（`commit` 那几个动作）"上。
+   */
+  private showMindMenu(mindId: string, event: MouseEvent): void {
+    const board = this.board;
+    if (!board) return;
+    const mind = (board.minds ?? []).find((item) => item.id === mindId);
+    if (!mind) return;
+
+    showMenuAtMouse(event, this.mindPresentationItems(mindId));
+  }
+
+  /**
+   * 一棵树的**演示四项**（`2.2.0` 收尾）。
+   *
+   * ★ 两处右键共用一份：**树身**（`showMindMenu`）与**树里的任意节点**
+   *   （`showMindNodeMenu` —— 那一份菜单本来就有树级的「导出为 .nestmind」，
+   *   用户 2026-09-22 实测的 F1 就是"在节点上右键，菜单里没有加入演示"）。
+   *   两份各写一遍的话，加入演示的措辞与可用性迟早分叉。
+   * ★ 动作按**树 id**走，不按选区：右键一棵树之后再选它与否，都该改这一棵。
+   */
+  private mindPresentationItems(mindId: string): MenuItemSpec[] {
+    const board = this.board;
+    if (!board) return [];
+    const ordered = explicitPresentSteps(board);
+    const index = ordered.findIndex((item) => item.id === mindId);
+    return buildMindMenuSpec(
+      {
+        inPresentation: index >= 0,
+        canMoveEarlier: index > 0,
+        canMoveLater: index >= 0 && index < ordered.length - 1,
+      },
+      {
+        addToPresentation: () => this.addMindToPresentation(mindId),
+        removeFromPresentation: () => this.removeMindFromPresentation(mindId),
+        moveEarlier: () => this.moveCardPresentStep(mindId, -1),
+        moveLater: () => this.moveCardPresentStep(mindId, 1),
+      },
+    );
+  }
+
+  /** 把**这一棵**树加进演示路径（右键菜单用；与选区那条走同一个提交与提示） */
+  private addMindToPresentation(mindId: string): void {
+    this.commit(t('history.presentAdd'), (board) => addToPresentation(board, [mindId]));
+    const step = this.presentStepOfId(mindId);
+    if (step !== null) new Notice(t('notice.presentAdded', { step }));
+  }
+
+  /** 把**这一棵**树移出演示路径 */
+  private removeMindFromPresentation(mindId: string): void {
+    if (
+      this.commit(t('history.presentRemove'), (board) => removeFromPresentation(board, [mindId]))
+    ) {
+      new Notice(t('notice.presentRemoved'));
+    }
   }
 
   /**
@@ -8528,6 +10296,8 @@ export class BoardView extends FileView {
       // ★ 只读板（归档锁定 / 保护态）上会改模型的项**一个都不传**，只留"看"的与解锁：
       //   空白处右键本来就该是"在这儿放点什么"，一排灰着的"新建便签"没有信息量
       //   （卡片菜单那边相反的取舍 —— 那边是"这张卡能干嘛"，灰着才说得清边界）
+      // 过滤条开关（`2.2.0` · O3）：**只读板上也给** —— 它不改模型，只是"换一种看法"
+      toggleFilter: () => this.toggleCardFilter(),
       ...(readOnly
         ? {}
         : {
@@ -8543,6 +10313,9 @@ export class BoardView extends FileView {
             // 新增的四张卡（`A1`–`A4`，用户 2026-09-18："新增的卡片类型都要放到右键菜单里"）
             newTitleCard: () => this.createCardAt(world, 'titleCard'),
             newGallery: () => this.createCardAt(world, 'gallery'),
+            // 内嵌脑图卡（`F4`，用户 2026-09-21："直接在白板内部建立的脑图"）——
+            // 一张"空白纸"：落下来就是"中心主题 + 3 个空分支"，光标直接进中心主题
+            newMind: () => this.createMindAt(world),
             // ★ 视频 / 音频要先弹库内文件选择器，而**菜单一关会把它一起带走** ⇒
             //   延到下一拍再开（菜单先收干净，模态框才不会被连带关掉）。
             //   用 `clientPointOf` 锁住"右键的那一处"，而不是"延后那一刻的指针"。
@@ -8766,6 +10539,14 @@ export class BoardView extends FileView {
 
     if (this.isEditingCard || this.isReadOnly()) return;
 
+    // ★ 卡内节点（`2.2.0` 收尾 · 用户 2026-09-23）：**键盘先归它** —— Tab 加子级、
+    //   回车加同级、方向键换选中、F2 改名、Shift+Tab 提升一层、Delete 删掉它，
+    //   与 `.nestmind` 视图**同一张键位表**（`mindKeyActionOf`）。
+    //   ★ 它在"只认卡片"的那些键**之前**：焦点在某个节点上时，Tab/回车该归那棵树，
+    //     而不是去开卡片编辑器（那是"选中一张卡"的语义）。
+    //   ★ 没接下的（返回 `false`）照旧往下走：`⌘` 组合、空格平移、卡片那一套都不受影响。
+    if (this.handleMindNodeKey(event)) return;
+
     // 分栏相关的组合键（`F2-7-7` / `F2-7-8`）先处理：
     // ★ 它们与"选中了什么"无关（选区里没有卡片时也要能按），所以必须排在
     //   下面那句 `cardIds.size === 0` 的提前返回之前
@@ -8822,6 +10603,18 @@ export class BoardView extends FileView {
       return;
     }
 
+    // ★ 删除**必须排在下面那道"只认卡片"的早退之前**（用户 2026-09-22 实测：C5/C6）：
+    //   从前这里先 `if (cardIds.size === 0) return`，于是"只选中一棵树 / 几个节点"
+    //   按 Delete **毫无反应** —— 而 `deleteSelection()` 早就两种都认。
+    //   把它放在早退之前，是"这道早退管的是下面那些**只对卡片有意义**的键"这件事
+    //   唯一说得通的写法。
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.deleteSelection();
+      return;
+    }
+
     if (this.selection.cardIds.size === 0) return;
 
     const delta = nudgeDelta(event.key, event.shiftKey);
@@ -8834,13 +10627,6 @@ export class BoardView extends FileView {
         (board) => translateCards(board, [...this.selection.cardIds], delta.x, delta.y),
         'nudge',
       );
-      return;
-    }
-
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault();
-      event.stopPropagation();
-      this.deleteSelection();
       return;
     }
 
@@ -8902,6 +10688,15 @@ export class BoardView extends FileView {
     // 演示聚焦还在飞（J-06）：用户一按指针就停飞 —— 让动画和手动平移抢画面，
     // 看起来像"这块板卡住了"（与 `cancelFlight` 的说明一致）
     this.presentation?.cancelFlight();
+
+    // 按在**卡片之外**（空白 / 分栏背景）= "不看那个节点了"：卡内脑图那一路收掉，
+    // 底部那条栏随之收起（`F4`）。
+    // ★ 判据与下面那条长按同源（`resolveCardElement` 为 `null`）；点**卡片**的按下
+    //   不会走到这一句（卡内节点自己 `stopPropagation`，卡片空白区则由选区订阅那条路
+    //   处理 —— 那时选区换成了那张卡，`syncQuickBar` 会把旧节点清掉）。
+    if (this.canvasEl !== null && resolveCardElement(event.target, this.canvasEl) === null) {
+      this.clearMindNodeFocus();
+    }
 
     // 空白处长按 → 新建菜单（T3.21 / `02 §6`）。★ 只对触摸 / 笔生效：
     // 桌面鼠标按住不动半秒弹菜单纯属干扰（而右键本来就好用）。
@@ -8968,37 +10763,64 @@ export class BoardView extends FileView {
    * 在遍历途中改模型会让 `board.cards` 在迭代中被替换 —— 轻则漏渲染，重则半截状态。
    */
   private growCard(cardId: string, height: number): void {
-    // `O31`：收起卡的内容槽是 `display:none`，此时量出来的高度没有意义
-    if (this.board?.cards.find((card) => card.id === cardId)?.collapsed === true) return;
-    const pending = this.pendingHeights.get(cardId) ?? 0;
-    if (height <= pending) return;
-    this.pendingHeights.set(cardId, height);
-    this.flushHeights();
+    const card = this.board?.cards.find((item) => item.id === cardId);
+    if (!card) return;
+    this.requestCardSize(cardId, { width: card.width, height });
   }
 
-  private flushHeights(): void {
-    if (this.heightFlushScheduled) return;
-    this.heightFlushScheduled = true;
+  /**
+   * 把某张卡撑到**至少**这个尺寸（两个方向都只增不减，超出的部分下一帧一次性提交）。
+   *
+   * ★ 两个调用方：自动高度（`growCard`，宽度原样传回）与**脑图卡**的"内容说了算"
+   *   （`F4`，见 `cards/registry.ts` 的 `growTo`）。
+   * ★ 只增不减的理由（与自动高度同一条）：**分不清**"这个尺寸是内容撑出来的还是用户
+   *   手拉的"，缩回去就是危险的那一侧 —— 用户摆好的版面被一次内容变动压扁，还没法撤销回来。
+   *   （脑图卡现在没有缩放手柄，尺寸完全由内容决定，但这条纪律仍然留着：将来再加手动尺寸时
+   *   不必回头改这里。）
+   */
+  private requestCardSize(cardId: string, size: Size): void {
+    // `O31`：收起卡的内容槽是 `display:none`，此时量出来的尺寸没有意义
+    const card = this.board?.cards.find((item) => item.id === cardId);
+    if (!card || card.collapsed === true) return;
+    if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return;
+
+    const pending = this.pendingSizes.get(cardId);
+    const next = {
+      width: Math.max(size.width, pending?.width ?? 0),
+      height: Math.max(size.height, pending?.height ?? 0),
+    };
+    // 现值已经够大 = 不用提交（这是绝大多数情况：内容没变过就不该碰模型）
+    if (next.width <= card.width && next.height <= card.height) return;
+    this.pendingSizes.set(cardId, next);
+    this.flushSizes();
+  }
+
+  private flushSizes(): void {
+    if (this.sizeFlushScheduled) return;
+    this.sizeFlushScheduled = true;
     window.requestAnimationFrame(() => {
-      this.heightFlushScheduled = false;
-      const targets = new Map(this.pendingHeights);
-      this.pendingHeights.clear();
+      this.sizeFlushScheduled = false;
+      const targets = new Map(this.pendingSizes);
+      this.pendingSizes.clear();
       if (targets.size === 0) return;
 
       this.commit(
         t('history.resize'),
         (board) => {
           const rects: CardRect[] = [];
-          for (const [id, height] of targets) {
+          for (const [id, size] of targets) {
             const card = board.cards.find((item) => item.id === id);
-            // 目标比现值矮就跳过：卡片可能刚被用户手动拉高过（自动高度只增不减）
-            if (!card || height <= card.height) continue;
-            rects.push({ id, x: card.x, y: card.y, width: card.width, height });
+            // 目标比现值小就跳过：卡片可能刚被用户手动拉大过（自动尺寸只增不减）
+            if (!card) continue;
+            const width = Math.max(size.width, card.width);
+            const height = Math.max(size.height, card.height);
+            if (width <= card.width && height <= card.height) continue;
+            rects.push({ id, x: card.x, y: card.y, width, height });
           }
           return applyCardRects(board, rects);
         },
-        // 同一批自动长高合并成一步撤销：否则"粘贴一大段文字"会在历史里留下十几条记录
-        'auto-height',
+        // 同一批自动尺寸合并成一步撤销：否则"连加五个节点"会在历史里留下五条记录
+        'auto-size',
       );
     });
   }
@@ -9006,13 +10828,16 @@ export class BoardView extends FileView {
   private contentBounds(): Rect | null {
     const board = this.board;
     if (!board) return null;
-    // 编组只是虚线框、连线本身没有面积，参与"适应内容"的只有卡片与分栏。
+    // 编组只是虚线框、连线本身没有面积，参与"适应内容"的只有卡片 / 分栏 / 脑图。
     // ★ 卡片取**外接框**（T7.06）：转 45° 的卡片比它的 `width/height` 高出小半张，
     //   按布局框"适应内容"会让它压在视口边上（缩到头也放不下整个白板）。
     //   0° 的卡片 `rotatedBoundsOf` 原样返回，于是这条改动对存量白板是零影响。
+    // ★ 脑图（`2.2.0`）：它**模型里没有尺寸**，框只能问渲染层现算（`MindLayer.bounds`）——
+    //   漏掉的话"缩放至全部"会把它留在屏幕外，而那看起来就像"脑图没被当回事"。
     return boundsOf([
       ...board.cards.map((card) => rotatedBoundsOf(card, card.rotation ?? 0)),
       ...board.columns,
+      ...(this.mindLayer?.bounds().map((entry) => entry.rect) ?? []),
     ]);
   }
 
@@ -9175,6 +11000,17 @@ export class BoardView extends FileView {
       create('note', 'sticky-note', 'toolbar.note', 'note'),
       // 仅标题卡（用户 2026-09-18："新建标题卡也放到左侧菜单上，位置在便签卡之后"）
       create('titleCard', 'tag', 'toolbar.titleCard', 'titleCard'),
+      // 内嵌脑图（`2.2.0`）：不再是"一种卡"，而是**白板级的一棵树**（`Mind`）
+      // ★ 与其它几项同一套手势（点 = 落在视口中心 / 拖 = 落在松手处），只是落法不同：见 `createMindAtClient`
+      {
+        id: 'mind',
+        icon: 'network',
+        label: t('toolbar.mind'),
+        group: 'create',
+        enabled: () => !this.isReadOnly(),
+        activate: () => this.createMindAtClient(null),
+        drop: (client) => this.createMindAtClient(client),
+      },
       // ★ `O26`：工具条**不再放「同步便签」**（用户要求收起来）。
       //   能力一个都没少 —— 命令面板里的「新建同步便签」（`COMMAND_IDS.newSyncNote`）、
       //   卡片右键的「新建同步副本」都仍在；要常驻工具条可自行绑定 / 反馈给我们。
@@ -9342,6 +11178,37 @@ export class BoardView extends FileView {
     const world = this.worldFromClient(client);
     if (!world) return;
     this.createCardAt(world, type);
+  }
+
+  /** 工具条 / 画布菜单：在 `client` 处新建一棵**内嵌**脑图（`2.2.0`） */
+  createMindAtClient(client: { x: number; y: number } | null): void {
+    const world = this.worldFromClient(client);
+    if (!world) return;
+    this.createMindAt(world);
+  }
+
+  /**
+   * 新建一棵**内嵌**脑图（`2.2.0`）：中心主题 + 3 个空分支，锚点落在点击处。
+   *
+   * ★ 与 `createCardAt` 分开（不是"给 `createCardAt` 加一个类型分支"）：脑图
+   *   **没有宽高、没有整卡编辑态、不进分栏** —— 那几步对它是空转，混在一条路上
+   *   只会让"卡片那条路"多出四处例外。
+   * ★ 新建之后要做的事是"把光标送进中心主题"：请求必须排在 `commit` **之前**
+   *   （`EmbedMind` 在第一次画完之后取这个请求，与 `F4` 那条手感同源）。
+   */
+  private createMindAt(world: Point): void {
+    if (this.isReadOnly()) return;
+    const model = newMindModel();
+    const mind = createMind({
+      // 锚点是**根节点中心**：以点击处为中心更符合"就放这儿"的直觉
+      x: roundTo(world.x),
+      y: roundTo(world.y),
+      path: '',
+      mind: model,
+    });
+    requestMindEdit(mind.id, model.rootId);
+    if (!this.commit(t('history.create'), (board) => addMind(board, mind))) return;
+    this.focusCanvas();
   }
 
   /** 工具条：新建一个空分栏（`02 §2` 的 [分栏]） */
@@ -9914,6 +11781,9 @@ export class BoardView extends FileView {
   applyAppearanceSettings(): void {
     // 变量挂在视图的根容器上：卡片层 / 分栏层都在它里面，一次写入全层生效
     applyCardStyleVariables(this.contentEl, this.plugin.settings);
+    // ★ 外观档（原版 / 拟物，`F2`）**不在这里写**：它的作用面跨容器（白板 / 嵌入板 /
+    //   右键菜单 / 设置面板），所以挂在 `document.body` 上，由 `main.ts` 统一维护 ——
+    //   见那个 `applyStyleMode`。
   }
 
   /**
@@ -10069,6 +11939,13 @@ export class BoardView extends FileView {
         icon: 'tag',
         label: 'toolbar.titleCard',
         run: () => this.createCardAtClient('titleCard', null),
+      },
+      // 内嵌脑图（`2.2.0`）：白板级的一棵树（不再是卡）—— 落下来就是"中心主题 + 3 个空分支"
+      {
+        id: 'mind',
+        icon: 'network',
+        label: 'toolbar.mind',
+        run: () => this.createMindAtClient(null),
       },
       {
         id: 'map',
@@ -10246,6 +12123,12 @@ const TRAIL_DEPTH_LIMIT = 12;
 const EDGE_HIT_TOLERANCE_PX = 8;
 
 /** 卡片 → 拖动控制器的矩形入参（只取几何，不带卡片引用） */
+/** 这一下按键是不是落在"自己在用键"的元素上（输入框 / 按钮 / 可编辑块） */
+function isInteractiveKeyTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.closest('input, textarea, select, button, [contenteditable="true"]') !== null;
+}
+
 function toCardRect(card: Card): CardRect {
   return {
     id: card.id,

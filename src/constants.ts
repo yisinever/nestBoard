@@ -72,7 +72,28 @@ export const CANVAS_EXT = 'canvas';
 
 /** 规范标识与数据版本（03 §2.2） */
 export const BOARD_SPEC = 'nestboard/1';
-export const BOARD_VERSION = 1;
+/**
+ * 当前插件**认识**的最高数据版本（`03 §2.2`）。
+ *
+ * ★ `2` = 白板里可以出现 `minds[]`（脑图升格为白板对象，`2.2.0`）。v1 → v2 **不需要改
+ *   任何文本**（新键是可选键），所以迁移链上那一步是恒等的，见 `io/migrate.ts`。
+ * ★ **写盘时不一定写它**：见 {@link LEGACY_BOARD_VERSION} —— 文件的版本号跟着**它真正
+ *   用到的东西**走。
+ */
+export const BOARD_VERSION = 2;
+
+/**
+ * "什么新东西都没用到"的板子写回去的版本号（`1`）。
+ *
+ * ★ 为什么不是无脑写 `BOARD_VERSION`：老插件（`2.1.4` 及更早）见到 `version > 1` 会
+ *   **进只读保护态**（`migrate.ts` 的 `future-version` + `main.ts` 的提示），那是刻意的
+ *   保护 —— 但它意味着"升级一次，所有板子都打不开了"。
+ * ★ 于是规则是：**一块板只要没有脑图（`minds` 缺席 / 空），就仍然写 `1`** ——
+ *   这类板子老新版本**双向完全互通、一个字节都不差**（用户 2026-09-21 明确问过这一条）。
+ *   真的建了脑图才写 `2`，那时老版本会**明确拒绝**（提示 + 只读保护 + 不写盘），
+ *   而不是"能打开、保存时把脑图丢掉"。这条比"能打开"重要得多（见 `12 §4.6`）。
+ */
+export const LEGACY_BOARD_VERSION = 1;
 
 /**
  * 脑图的规范标识与数据版本（`06 §3`）。
@@ -85,6 +106,15 @@ export const MIND_VERSION = 1;
 
 /** 序列化缩进：2 空格，人类可读、git diff 友好（03 §2.1） */
 export const BOARD_JSON_INDENT = 2;
+
+/**
+ * 白板级脑图**容器**元素上的属性名（`2.2.0`）。
+ *
+ * ★ 与 `CARD_ID_ATTR` / `COLUMN_ID_ATTR` / `GROUP_ID_ATTR` 同一套做法：
+ *   命中测试、诊断、以及"这个 DOM 属于哪个白板对象"都读这一个名字，不散落字符串。
+ * ★ 值 = 容器的 id（`Mind.id`）——连线端点、选区、撤销都认同一个 id。
+ */
+export const MIND_CONTAINER_ID_ATTR = 'data-mind-id';
 
 /** 新白板目录的**默认值**（真正生效的值在 `settings.newBoardFolder`，T1.74 / `F11-05`） */
 export const DEFAULT_BOARD_FOLDER = 'Boards';

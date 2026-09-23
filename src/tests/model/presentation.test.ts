@@ -16,6 +16,8 @@ import {
   clampStepIndex,
   clearPresentSteps,
   explicitPresentSteps,
+  explicitPresentSteps as explicitStepsForTest,
+  findPresentTarget,
   movePresentStep,
   nextPresentStep,
   nextStepIndex,
@@ -23,11 +25,94 @@ import {
   presentationOrder,
   previousStepIndex,
   readingOrder,
+  readingTargets,
   removeFromPresentation,
   setPresentStep,
   stepIndexFromDigit,
 } from '../../model/presentation';
-import type { BoardFile, Column } from '../../model/schema';
+import type { BoardFile, Card, Column, Mind } from '../../model/schema';
+import { createMind } from '../../model/factories';
+
+/**
+ * `2.2.0` 收尾 · 演示对接：**脑图也能进演示路径**。
+ *
+ * 口径与卡片完全一致（同一个 `presentStep`、同一份阅读顺序），所以这里钉的是三件事：
+ * ① 一棵树是**一块**（不拆成节点）；② 卡与脑图混排时步骤号说了算、同号按位置；
+ * ③ `readingOrder`（`arrange` 在用）**只返回卡片**，不被脑图搅乱。
+ */
+describe('presentation × 脑图（2.2.0 收尾）', () => {
+  function mindAt(x: number, y: number): Mind {
+    return createMind({ path: '', x, y });
+  }
+
+  function boardWithMind(): BoardFile {
+    const board = boardWithCards();
+    board.minds = [mindAt(0, 600)];
+    return board;
+  }
+
+  it('★ 阅读顺序：一棵树算**一块**，按锚点参与排序；卡片彼此顺序不变', () => {
+    const board = boardWithMind();
+    const targets = readingTargets(board);
+    expect(titles(targets)).toEqual(['A', 'B', 'C', 'D', '(脑图)']);
+    // `arrange` 用的那一份**只取卡片**（脑图不在它的搬运范围里）
+    expect(readingOrder(board).map((card) => card.title)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('★ 显式步骤：卡与脑图混排，按号升序', () => {
+    const board = boardWithMind();
+    const mind = board.minds![0];
+    const byTitle = (title: string): Card => board.cards.find((c) => c.title === title)!;
+    setPresentStep(board, byTitle('C').id, 1);
+    setPresentStep(board, mind.id, 2);
+    setPresentStep(board, byTitle('A').id, 3);
+
+    expect(titles(presentationOrder(board))).toEqual(['C', '(脑图)', 'A']);
+  });
+
+  it('★ 加入 / 移出 / 前移 / 清空：对脑图与卡片是同一套', () => {
+    const board = boardWithMind();
+    const mind = board.minds![0];
+    const card = board.cards[0];
+
+    expect(addToPresentation(board, [card.id, mind.id])).toBe(true);
+    expect(presentStepOf(card)).toBe(1);
+    expect(presentStepOf(mind)).toBe(2);
+    // 已在路径里的再加一次 = 没变化
+    expect(addToPresentation(board, [mind.id])).toBe(false);
+    // 下一号跟着最大值走
+    expect(nextPresentStep(board)).toBe(3);
+
+    // 前移：树挪到卡片前面（号互换）
+    expect(movePresentStep(board, mind.id, -1)).toBe(true);
+    expect(explicitPresentSteps(board).map((item) => item.id)).toEqual([mind.id, card.id]);
+    // 到头再前移 = 不动
+    expect(movePresentStep(board, mind.id, -1)).toBe(false);
+
+    expect(removeFromPresentation(board, [mind.id])).toBe(true);
+    expect(presentStepOf(mind)).toBeNull();
+    expect(setPresentStep(board, card.id, 5)).toBe(true);
+    expect(clearPresentSteps(board)).toBe(true);
+    expect(presentStepOf(card)).toBeNull();
+    expect(explicitStepsForTest(board)).toEqual([]);
+  });
+
+  it('`findPresentTarget` 两种都找得到（找不到给 `null`）', () => {
+    const board = boardWithMind();
+    expect(findPresentTarget(board, board.minds![0].id)?.kind).toBe('mind');
+    expect(findPresentTarget(board, board.cards[0].id)?.kind).toBe('card');
+    expect(findPresentTarget(board, 'c_不存在')).toBeNull();
+  });
+});
+
+const titles = (
+  targets: readonly (
+    { kind: 'card'; card: { title: string } } | { kind: 'mind' } | { title: string }
+  )[],
+): string[] =>
+  targets.map((item) =>
+    'kind' in item ? (item.kind === 'card' ? item.card.title : '(脑图)') : item.title,
+  );
 
 /** 固定 id 的分栏：`createColumn` 的 id 是随机生成的，而本组用例要靠 id 认"栏" */
 function column(id: string, x: number, y: number): Column {
@@ -50,8 +135,6 @@ const idOf = (board: BoardFile, title: string): string => {
   if (!card) throw new Error(`没有标题为 ${title} 的卡片`);
   return card.id;
 };
-
-const titles = (cards: readonly { title: string }[]): string[] => cards.map((card) => card.title);
 
 describe('presentationOrder', () => {
   it('一张都没编过 → 按阅读顺序讲全部（先上后下、先左后右）', () => {

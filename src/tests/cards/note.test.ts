@@ -68,16 +68,15 @@ function renderNote(
   return { el, updateContent, updateCard, setMode };
 }
 
-/** 便签卡编辑态的**标题**框（两格里的第一格） */
-function titleOf(el: FakeElement): FakeElement {
-  const input = el.children[0] as FakeElement;
-  input.focus();
-  return input;
-}
-
-/** 便签卡编辑态的**正文**编辑器（两格里的第二格） */
+/**
+ * 便签卡编辑态里**唯一**那一格：正文编辑器。
+ *
+ * ★ `F5`（用户 2026-09-21）起编辑态里**没有标题格** —— 便签的内容编辑与引用卡
+ *   （`.md` 文档节点）同款，只有正文；标题走卡面那一行的就地输入（视图侧
+ *   `BoardView.editCardTitle`）。这条断言本身就是那次收口的回归线。
+ */
 function bodyOf(el: FakeElement): FakeTextarea {
-  const textarea = (el.children[1] as FakeElement).children[0] as unknown as FakeTextarea;
+  const textarea = el.children[0] as unknown as FakeTextarea;
   textarea.focus();
   return textarea;
 }
@@ -222,88 +221,50 @@ describe('右键菜单 · 深色便签（入口已隐藏）', () => {
 
 // ── 编辑态接线 ────────────────────────────────────────────────
 
-describe('编辑态接线（O22：标题框 + 正文框两格，参考待办卡）', () => {
-  it('两格各管一块：标题进标题框、正文进编辑器', () => {
+describe('编辑态接线（F5：只有正文一格，与文档节点同款）', () => {
+  it('★ 内容槽里只有正文编辑器 —— **没有**标题那一格', () => {
     const { el } = renderNote({ title: '卡名', md: '原文' }, 'edit');
 
     expect(el.classList.contains('nestboard-note-edit')).toBe(true);
-    expect(titleOf(el).className).toBe('nestboard-note-title-input');
-    expect(titleOf(el).value).toBe('卡名');
+    expect(el.children.length).toBe(1);
     expect(bodyOf(el).className).toBe('nestboard-mde-input');
     expect(bodyOf(el).value).toBe('原文');
   });
 
-  it('光标先落在标题框上（正文那格不抢）', () => {
-    const { el } = renderNote({ title: '卡名', md: '原文' }, 'edit');
-    // 直接读节点，不走 titleOf/bodyOf —— 那两个 helper 自己会 focus
-    const title = el.children[0] as FakeElement;
-    const body = (el.children[1] as FakeElement).children[0] as unknown as FakeTextarea;
-    expect(title.focused).toBe(true);
-    expect(body.focused).toBe(false);
+  it('★ 两种入口（双击的 `title` / `⌘`+双击的 `raw`）落到同一个编辑器上', () => {
+    for (const editEntry of ['title', 'raw'] as const) {
+      const { el } = renderNote({ title: '卡名', md: '原文' }, 'edit', { editEntry });
+
+      expect(el.children.length).toBe(1);
+      expect((el.children[0] as unknown as FakeTextarea).className).toBe('nestboard-mde-input');
+    }
   });
 
-  it('标题框按 Enter → 焦点交给正文，且**不提交**（写进模型就等于这次编辑结束了）', () => {
-    const { el, updateCard, setMode } = renderNote({ title: '', md: '' }, 'edit');
-    const input = titleOf(el);
-    input.value = '写了一半';
-    input.emit('keydown', createKeyEvent({ key: 'Enter' }));
+  it('★ 提交只写正文（`updateContent`），一个字都不碰 `card.title`', () => {
+    const { el, updateContent, updateCard } = renderNote({ title: '卡名', md: '原文' }, 'edit');
+    const textarea = bodyOf(el);
+    textarea.value = '改过的正文';
+    press(textarea, 'Enter', true);
 
-    expect(bodyOf(el).focused).toBe(true);
+    expect(updateContent).toHaveBeenCalledWith({ md: '改过的正文' });
+    // 标题另有入口（卡面那一行的就地输入）——编辑器里根本没有它
     expect(updateCard).not.toHaveBeenCalled();
-    expect(setMode).not.toHaveBeenCalled();
   });
 
-  it('★ 标题框失焦且焦点离开卡片 → 标题与正文**一次写回**（updateCard），并回显示态', () => {
-    const { el, updateCard, setMode } = renderNote({ title: '旧名', md: '原文' }, 'edit');
-    const input = titleOf(el);
-    input.value = '新名';
-    bodyOf(el).value = '改过的正文';
-    input.emit('blur', { relatedTarget: null });
-
-    expect(updateCard).toHaveBeenCalledTimes(1);
-    expect(updateCard).toHaveBeenCalledWith({ title: '新名', content: { md: '改过的正文' } });
-    expect(setMode).toHaveBeenCalledWith('display');
-  });
-
-  it('正文里 `⌘Enter`：有改动 → 一次写回 md 并切回显示态（标题没动就不带）', () => {
-    const { el, updateCard, setMode } = renderNote({ title: '卡名', md: '原文' }, 'edit');
+  it('正文里 `⌘Enter` 后切回显示态', () => {
+    const { el, updateContent, setMode } = renderNote({ title: '卡名', md: '原文' }, 'edit');
     bodyOf(el).value = '改过了';
     press(bodyOf(el), 'Enter', true);
 
-    expect(updateCard).toHaveBeenCalledWith({ title: undefined, content: { md: '改过了' } });
+    expect(updateContent).toHaveBeenCalledWith({ md: '改过了' });
     expect(setMode).toHaveBeenCalledWith('display');
   });
 
-  it('`Esc`（正文里）且一个字没改 → 不写模型，只切回显示态', () => {
-    const { el, updateCard, setMode } = renderNote({ title: '卡名', md: '原文' }, 'edit');
+  it('`Esc` 且一个字没改 → 不写模型，只切回显示态', () => {
+    const { el, updateContent, setMode } = renderNote({ title: '卡名', md: '原文' }, 'edit');
     press(bodyOf(el), 'Escape');
 
-    expect(updateCard).not.toHaveBeenCalled();
+    expect(updateContent).not.toHaveBeenCalled();
     expect(setMode).toHaveBeenCalledWith('display');
-  });
-
-  it('标题框按 `Esc` → 放弃**这一格**，正文那格照旧收下', () => {
-    const { el, updateCard } = renderNote({ title: '原名', md: '原文' }, 'edit');
-    const input = titleOf(el);
-    input.value = '改了一半';
-    bodyOf(el).value = '正文改了';
-    input.emit('keydown', createKeyEvent({ key: 'Escape' }));
-
-    expect(updateCard).toHaveBeenCalledWith({ title: undefined, content: { md: '正文改了' } });
-  });
-
-  it('`⌘`+双击那条路（`editEntry: raw`）只有正文一格，`⌘Enter` 直接写回正文', async () => {
-    const { el, updateCard } = renderNote({ title: '忽略', md: '原文' }, 'edit', {
-      editEntry: 'raw',
-    });
-    const textarea = el.children[0] as unknown as FakeTextarea;
-    await Promise.resolve();
-
-    expect(textarea.className).toBe('nestboard-mde-input');
-    expect(el.children.length).toBe(1); // 没有标题框那一格
-
-    textarea.value = '只有正文';
-    press(textarea, 'Enter', true);
-    expect(updateCard).toHaveBeenCalledWith({ title: undefined, content: { md: '只有正文' } });
   });
 });

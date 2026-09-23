@@ -140,6 +140,20 @@ export interface NestboardSettings {
   /** 卡片正文字体（CSS `font-family`，T3.24）。`''` = 跟随主题 */
   cardFontFamily: string;
   /**
+   * **卡片外观档**（`F2` / `11 §6`）。
+   *
+   * * `classic` —— 2.1.3 那套（边框 + 单层阴影）。**默认，也是回归基线**：
+   *   不切档时观感与 2.1.3 逐像素一致。
+   * * `neumorph` —— 拟物档：保留卡片主色（§6 的 13a 选了 b），只借"双阴影 + 内阴影 + 无边框"
+   *   的光影；额外参数与作用面见 `§6` 的 13a–13j。
+   *
+   * ★ 与 `cardCornerRadius` 同类：**全局一份偏好**，不写进白板文件 ——
+   *   "我要不要拟物"是这个人对界面的口味，不是某块板的样子。
+   * ★ 深色主题下**同样生效**（13c 选了 a：参数另调，而不是回落原版），
+   *   所以这里没有"跟随主题"那一档（13j 选了 a：就两档）。
+   */
+  cardStyle: CardStyleMode;
+  /**
    * 新建白板的默认背景（T3.25 / `F11-04`）。
    *
    * ★ 与 `defaultCardColor` 同一条规矩：写进**新文件**的 `view.background`，
@@ -225,6 +239,14 @@ export interface NestboardSettings {
   alwaysFullImage: boolean;
 }
 
+/**
+ * 卡片外观档（`F2`）。
+ *
+ * ★ 只两档、且**默认 `classic`**：旧数据文件里没有这个字段 ⇒ 升级后观感一个字都不变
+ *   （`§7` 的回归基线正是"原版档与 2.1.3 逐像素一致"）。
+ */
+export type CardStyleMode = 'classic' | 'neumorph';
+
 /** 与旧版 `--nestboard-radius-lg` 的兜底值（`--radius-m` 的 10px）保持一致，升级不改变观感 */
 export const DEFAULT_CARD_CORNER_RADIUS = 10;
 /** 与 `.nestboard-card` 原本继承的 `--font-ui-small`（≈13px）最接近的整数值 */
@@ -247,6 +269,7 @@ export const DEFAULT_SETTINGS: NestboardSettings = {
   cardCornerRadius: DEFAULT_CARD_CORNER_RADIUS,
   cardFontSize: DEFAULT_CARD_FONT_SIZE,
   cardFontFamily: '',
+  cardStyle: 'classic',
   defaultBackground: 'dots',
   alwaysFullImage: true,
   snapshotEnabled: true,
@@ -323,6 +346,9 @@ export function normalizeSettings(raw: unknown): NestboardSettings {
       DEFAULT_SETTINGS.cardFontSize,
     ),
     cardFontFamily: normalizeFontFamily(source.cardFontFamily),
+    // ★ 只有显式写成 `neumorph` 才切档：旧数据 / 手改坏的字符串一律留在原版 ——
+    //   外观档是"要不要换个样子"的开关，猜错方向的代价（一屏卡突然全变）比保守大得多
+    cardStyle: source.cardStyle === 'neumorph' ? 'neumorph' : 'classic',
     defaultBackground: normalizeBackground(source.defaultBackground),
     // ★ 默认开：只有显式 `false` 才算关。旧数据文件里没有这个字段 → 升级后自动有快照保护
     snapshotEnabled: source.snapshotEnabled !== false,

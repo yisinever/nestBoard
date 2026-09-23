@@ -28,7 +28,14 @@ import {
   NOTE_DARK_TEXT,
 } from '../../export/toPng';
 import type { PngPalette } from '../../export/toPng';
-import { createBoardFile, createCard, createColumn, createEdge } from '../../model/factories';
+import {
+  createBoardFile,
+  createCard,
+  createColumn,
+  createEdge,
+  createMind,
+} from '../../model/factories';
+import { createMindFile, createMindNode } from '../../mind/model/factories';
 import type { BoardFile } from '../../model/schema';
 import { textToArrayBuffer } from '../../util/encoding';
 import { t } from '../../util/i18n';
@@ -742,6 +749,75 @@ describe('renderBoardSvg / 层次', () => {
     expect(background).toBeLessThan(column);
     expect(column).toBeLessThan(edge);
     expect(edge).toBeLessThan(card);
+  });
+});
+
+/**
+ * 白板级脑图进 SVG（`2.2.0` 批 4）。
+ *
+ * 与 PNG 那一组同一条理由：脑图不再是一张卡之后，导出图里那棵树必须**还在**。
+ * ★ SVG 这里还能多钉一件事：分支线用的是脑图那边**原样的 `d` 字符串**
+ *   （`edgePathOf`），所以断言"C 命令"就等于在说"导出与屏幕画的是同一条曲线"。
+ */
+describe('renderBoardSvg / 白板级脑图', () => {
+  /** 一棵"根 + 2 个分支"的内嵌脑图，落脚 `(100, 100)` */
+  function mindBoard(): { board: BoardFile; branchId: string } {
+    const model = createMindFile({ rootText: '中心' });
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '甲', order: 0 }));
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '乙', order: 1 }));
+    const board = createBoardFile();
+    board.minds = [createMind({ x: 100, y: 100, path: '', mind: model })];
+    return { board, branchId: model.nodes[1].id };
+  }
+
+  it('★★ 树画进去了：分支线（曲线）+ 节点文字，且整棵按锚点平移', () => {
+    const { board } = mindBoard();
+    const svg = renderBoardSvg(board, planOf(board), renderOptions());
+
+    // 父子连线：SVG 直接复用原样的 `d`（含三次贝塞尔）
+    expect(svg).toContain(' C ');
+    expect(svg).toContain('translate(');
+    expect(svg).toContain('>中心</text>');
+    expect(svg).toContain('>甲</text>');
+  });
+
+  it('★ 只有一棵树的板子也能导出（取景把它算进去了）', () => {
+    const { board } = mindBoard();
+    const plan = planOf(board);
+    // 从前 `boardContentBounds` 只认卡片 / 分栏 ⇒ 这种板子会被判成"没有内容可导"
+    expect(plan.width).toBeGreaterThan(0);
+    expect(plan.height).toBeGreaterThan(0);
+  });
+
+  it('★ 文件脑图没给模型 ⇒ 不画（也不参与取景）', () => {
+    const board = createBoardFile();
+    board.minds = [createMind({ x: 100, y: 100, path: 'Minds/一份.nestmind' })];
+    const svg = renderBoardSvg(board, planOf(board), renderOptions());
+
+    expect(svg).not.toContain('>中心</text>');
+    expect(planOf(board).width).toBe(0);
+  });
+
+  it('★ 指着**节点**的连线也画得出来（端点表里有节点）', () => {
+    const { board, branchId } = mindBoard();
+    const mindId = board.minds![0].id;
+    board.cards = [createCard('note', { id: 'c_1', x: 0, y: 0, width: 80, height: 60 })];
+    board.edges = [
+      createEdge({ cardId: 'c_1', side: null }, { cardId: mindId, nodeId: branchId, side: null }),
+    ];
+
+    const svg = renderBoardSvg(board, planOf(board), renderOptions());
+    // 那条线的端点落在节点上（而不是落在整棵脑图的锚点某处）：线本身在 ≠ 说明不了，
+    // 所以再给一块"端点指向不存在的节点"的板子做差集
+    const ghost = createBoardFile();
+    ghost.cards = board.cards;
+    ghost.minds = board.minds;
+    ghost.edges = [
+      createEdge({ cardId: 'c_1', side: null }, { cardId: mindId, nodeId: 'n_不存在', side: null }),
+    ];
+    const without = renderBoardSvg(ghost, planOf(ghost), renderOptions());
+
+    expect(svg.length).toBeGreaterThan(without.length);
   });
 });
 

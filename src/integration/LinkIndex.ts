@@ -40,6 +40,7 @@
  * 模块约束：**不 import `obsidian`**，可直接在 node 下单测。
  */
 
+import { tagsOfCard } from '../model/tags';
 import { parseBoardFile } from '../io/boardText';
 import { splitName } from '../util/fileName';
 import type { BoardFile } from '../model/schema';
@@ -215,12 +216,29 @@ export interface ExtractedLink {
   label: string;
 }
 
+/** 一处**卡内/节点上**写下的标签（`F1` 追记：侧栏标签面板要能展开到"哪张卡在用"） */
+export interface ExtractedTag {
+  tag: string;
+  /** 写它的那一处（白板 = 卡 id；脑图 = 节点 id）；空串 = 只有文档级信息 */
+  anchorId: string;
+  /** 那一处的标题（可空） */
+  label: string;
+}
+
 /** 一份文档扫出来的东西 */
 export interface ExtractedDoc {
   /** 文档标题（白板 / 脑图的 `meta.title`） */
   title: string;
   links: ExtractedLink[];
   tags: string[];
+  /**
+   * 标签 → 写它的那一处（可选）。
+   *
+   * ★ 缺席 = 这份文档只报"有这些标签"（脑图那份提取器就是如此）：
+   *   `recordOf` 会替它造出 `anchorId: ''` 的条目，面板照样列得出这份文档，
+   *   只是展开不到具体卡片。新提取器**不必**为了兼容而补一个空数组。
+   */
+  tagHits?: ExtractedTag[];
 }
 
 /**
@@ -250,6 +268,15 @@ export type LinkResolver = (target: string, sourcePath: string) => string | null
 interface DocRecord {
   links: LinkHit[];
   tags: Set<string>;
+  /** 卡片级标签命中（带 `docPath` / `docTitle`，与 `LinkHit` 同一条"文档中立"的路子） */
+  tagHits: TagHit[];
+}
+
+/** 一条卡片级标签命中（侧栏标签面板用） */
+export interface TagHit extends ExtractedTag {
+  /** 写它的那份文档（vault 相对路径） */
+  docPath: string;
+  docTitle: string;
 }
 
 export interface LinkIndexOptions {
@@ -397,6 +424,8 @@ export class LinkIndex {
     const moved: DocRecord = {
       tags: record.tags,
       links: record.links.map((hit) => ({ ...hit, docPath: newPath })),
+      // 标签命中也嵌着 `docPath`：改名时不改的话，面板点开它会打开一个不存在的路径
+      tagHits: record.tagHits.map((hit) => ({ ...hit, docPath: newPath })),
     };
     this.records.set(newPath, moved);
     this.publish();
@@ -470,6 +499,16 @@ export class LinkIndex {
   /** 某块板的内联标签 */
   tagsOf(path: string): string[] {
     return [...(this.records.get(path)?.tags ?? [])].sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * 某份文档里**每一处**写下的标签（卡片级；`F1` 追记的侧栏标签面板用它展开）。
+   *
+   * ★ 与 `tagsOf` 的分工：那个答"这块板有哪些标签"（去重），这个答"分别写在哪张卡上"。
+   *   两者都从同一份 `tagHits` 来 —— 不会再出现"标签列表里有、展开却找不到"。
+   */
+  tagHitsOf(path: string): TagHit[] {
+    return [...(this.records.get(path)?.tagHits ?? [])];
   }
 
   /** 全部出链（调试 / 统计用） */
@@ -603,6 +642,10 @@ export function extractBoardDoc(boardPath: string, text: string): ExtractedDoc |
 function recordOf(doc: ExtractedDoc, path: string, resolve: LinkResolver | undefined): DocRecord {
   return {
     tags: new Set(doc.tags),
+    // 提取器没给卡片级信息时**替它造**：文档级标签照样列得出来（见 `ExtractedDoc.tagHits`）
+    tagHits: (doc.tagHits ?? doc.tags.map((tag) => ({ tag, anchorId: '', label: '' }))).map(
+      (hit) => ({ ...hit, docPath: path, docTitle: doc.title }),
+    ),
     links: doc.links.map((link) => ({
       ...link,
       docPath: path,
@@ -619,14 +662,30 @@ function extractBoardFile(board: BoardFile, boardPath: string): ExtractedDoc {
   const links: ExtractedLink[] = [];
   const tags = new Set<string>();
 
+  const tagHits: ExtractedTag[] = [];
+  const seenTagHits = new Set<string>();
+  /** 卡片正文（有 md 的那几类）与标签各扫各的口径，见下 */
   for (const card of board.cards) {
-    // ★ 只扫 `note`（内联卡，`F10-08` 的原话）。`todo` / `swatch` / `ink` 的正文
-    //   也存在文件里、也可能写 `[[链接]]`，但把它们算进来的话，侧栏上"内联卡反链"
-    //   这个说法就不成立了 —— 要么扩大范围并改名，要么守住边界，这里选后者。
+    // ★ **标签：全部卡型**（`F1`）。与插件自己的标签口径同一份实现（`tagsOfCard`
+    //   —— 过滤条 / 搜索用的就是它）：不然会出现"过滤条里搜得到 `#纪要`、OB 里搜不到"
+    //   这种没法解释的不一致。白板里任何一张卡上写过这个标签，都该在库里找得到它。
+    for (const tag of tagsOfCard(card)) {
+      tags.add(tag);
+      // 同一张卡上同一个标签只记一条（标题里写过、正文里又写一次是常事）
+      const key = `${card.id}\u0000${tag}`;
+      if (seenTagHits.has(key)) continue;
+      seenTagHits.add(key);
+      tagHits.push({ tag, anchorId: card.id, label: card.title });
+    }
+
+    // ★ **链接：只扫 `note`**（内联卡，`F10-08` 的原话）。`todo` / `swatch` / `ink`
+    //   的正文也存在文件里、也可能写 `[[链接]]`，但把它们算进来的话，侧栏上
+    //   "内联卡反链"这个说法就不成立了 —— 要么扩大范围并改名，要么守住边界，这里选后者。
+    //   （标签与链接在这里**故意不同口径**：反链是"这句话提到了那篇笔记"，用户是在
+    //    便签里写句子的；而标签是"这块板属于哪个议题"，哪张卡上写都作数。）
     if (card.type !== 'note') continue;
 
     const scan = scanInlineText(card.content.md);
-    for (const tag of scan.tags) tags.add(tag);
     for (const hit of scan.links) {
       links.push({
         excerpt: hit.excerpt,
@@ -641,7 +700,7 @@ function extractBoardFile(board: BoardFile, boardPath: string): ExtractedDoc {
   // 保留参数是为了与脑图那份**同一个签名**（端口的一致性比省一个参数重要）
   void boardPath;
 
-  return { title, links, tags: [...tags] };
+  return { title, links, tags: [...tags], tagHits };
 }
 
 /** 稳定的展示顺序：先按文档标题，再按那一处的标题，最后按原始目标 */

@@ -16,6 +16,7 @@ import {
   edgePathOf,
   edgeTrunkPathOf,
 } from '../layout/edges';
+import { titleMaxWidthFor } from '../layout/measure';
 import {
   MIND_LINK_ARROW_SIZE,
   linkArrowEnds,
@@ -24,6 +25,7 @@ import {
   linkPathOf,
 } from '../layout/links';
 import type { NodeBox } from '../layout/tree';
+import type { Size } from '../../util/geometry';
 import type { MindEdgeStyle } from '../model/schema';
 import { OUTLINE_VIEW_ICON, TREE_VIEW_ICON } from './viewToggleIcons';
 
@@ -380,6 +382,13 @@ export function applyNodePalette(
   //   两边各写一份迟早会漂（估算用 14 而 CSS 是 30，第一帧就会明显错位）。
   const depth = options.depth ?? 1;
   el.style.setProperty('--nestboard-mind-title-size', `${titleSizeOf(depth)}px`);
+  // ★ 标题一行最多"29 个英文单位"，超出**在节点内换行**（用户 2026-09-21）：
+  //   上限随**层级字号**变（根 30 / 一层 18 / 其余 14 各不一样），因此由这里算好写成变量；
+  //   算它的函数与布局的估算（`measure.ts`）**是同一个**，换行位置不会两边各说各话。
+  el.style.setProperty(
+    '--nestboard-mind-title-max-width',
+    `${titleMaxWidthFor(titleSizeOf(depth))}px`,
+  );
 
   // ★ 加粗的判据是"用户设过就听用户的，否则按层级"（根是加粗的）——
   //   `bold: false` 是有意义的值（`08 §3.2` 的优先级表第 2 条），所以这里用 `??` 而不是 `||`
@@ -450,6 +459,15 @@ export function buildTitleEditor(
 }
 
 /**
+ * 同层等宽的**下限**写在节点元素上的那个 CSS 变量名。
+ *
+ * ★ 提成常量是因为它现在有**三个**读写点：`applyNodeBox` 写、样式表读、
+ *   而 `measureNodeSizes` 要**暂时摘掉**它（见那里的说明）——三处各写一份字符串，
+ *   迟早有一处拼错，而拼错的表现是"同层等宽莫名失效"。
+ */
+export const MIND_NODE_MIN_WIDTH_VAR = '--nestboard-mind-node-min-width';
+
+/**
  * 把节点摆到布局给的位置上。
  *
  * ★ **只写 `left` / `top`，不写宽高**：写了宽高，`offsetWidth` 量到的就是自己刚写下的
@@ -459,6 +477,48 @@ export function buildTitleEditor(
 export function applyNodeBox(el: HTMLElement, box: NodeBox): void {
   el.style.left = `${box.x}px`;
   el.style.top = `${box.y}px`;
+  // ★ 同层等宽的**下限**（用户 2026-09-21）：布局给的是"这一层至少多宽"，撑开交给样式表的
+  //   `min-width: var(--nestboard-mind-node-min-width)`。这里仍然**不写 `width`** ——
+  //   所以 `offsetWidth` 量到的依旧是真的（本文件顶部那条纪律：尺寸不能自证）。
+  if (box.minWidth === undefined) el.style.removeProperty(MIND_NODE_MIN_WIDTH_VAR);
+  else {
+    el.style.setProperty(MIND_NODE_MIN_WIDTH_VAR, `${Math.round(box.minWidth)}px`);
+  }
+}
+
+/**
+ * 量一批节点的尺寸 —— **宽度是"内容真宽"**（量之前先把同层下限摘掉）。
+ *
+ * ── 为什么非摘不可（`2.2.0` 收尾 · 用户 2026-09-22 报的"超过第二级同层就不齐"）──
+ *
+ * `min-width` **只抬高、不压低**：上一帧写下下限之后，下一个窄节点的 `offsetWidth` 里
+ * 已经含着那一档撑开的宽度。布局再算"这一层最宽的是谁"时，算出来就是"刚才那个下限"
+ * ⇒ "比最宽的窄"一个都不成立 ⇒ **下限当场消失**（渲染层会把它摘掉）、节点又参差不齐。
+ * 摘掉再量，量到的才是**内容自己**要多宽 —— 这是本文件顶部那条"尺寸不能自证"的落实。
+ *
+ * ★ 高度反过来：**恢复下限之后**再读。宽度撑开换行行数就少，高度要按**对齐后**的宽度算，
+ *   否则节点底下留一截空白、兄弟间距虚高。
+ * ★ 摘掉与装回在**同一帧**里完成（中间只读一次 `offsetWidth`）：浏览器只在最后画一次，
+ *   用户看不到中间态。
+ */
+export function measureNodeSizes(
+  entries: Iterable<readonly [string, HTMLElement]>,
+): Map<string, Size> {
+  const list = [...entries];
+  const saved = list.map(([, el]) => el.style.getPropertyValue(MIND_NODE_MIN_WIDTH_VAR));
+  for (const [, el] of list) el.style.removeProperty(MIND_NODE_MIN_WIDTH_VAR);
+  // 第一次读会强制一次重排，之后几次都是白读 —— 所以"摘掉 → 全量读 → 装回"只需要一次重排
+  const widths = list.map(([, el]) => el.offsetWidth);
+  list.forEach(([, el], index) => {
+    const value = saved[index] ?? '';
+    if (value.length > 0) el.style.setProperty(MIND_NODE_MIN_WIDTH_VAR, value);
+  });
+
+  const sizes = new Map<string, Size>();
+  list.forEach(([id, el], index) => {
+    sizes.set(id, { width: widths[index] ?? 0, height: el.offsetHeight });
+  });
+  return sizes;
 }
 
 // ─────────────────────────────────────────────────────────────

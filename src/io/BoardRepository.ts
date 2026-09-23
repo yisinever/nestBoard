@@ -18,8 +18,10 @@
 
 import {
   BOARD_JSON_INDENT,
+  BOARD_VERSION,
   DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   DEFAULT_RELOAD_DEBOUNCE_MS,
+  LEGACY_BOARD_VERSION,
 } from '../constants';
 import type { BoardFile, BoardViewState } from '../model/schema';
 import { normalizeBoardFile, safeJsonParse, type ValidationIssue } from '../model/validate';
@@ -92,9 +94,25 @@ export interface BoardSaveObserver {
   afterSave(payload: { path: string; boardId: string; revision: number; text: string }): void;
 }
 
-/** 序列化后的白板文本（2 空格缩进 + 末尾换行，`git diff` 友好） */
+/**
+ * 序列化后的白板文本（2 空格缩进 + 末尾换行，`git diff` 友好）。
+ *
+ * ★ **版本号在这里定**，而不是"模型里是什么就写什么"：规则是
+ *   "文件的 `version` = 它真正用到的东西所需的版本" ——
+ *   没有脑图（`minds` 缺席 / 空）的板子一律写 {@link LEGACY_BOARD_VERSION}（`1`），
+ *   于是老插件（`2.1.4` 及更早）读它、写它都**完全正常**；
+ *   只有真建了脑图才写 `BOARD_VERSION`（`2`），那时老插件会**明确拒绝**
+ *   （`future-version` → 只读保护态 + 提示），而不是静默把脑图丢掉。
+ *   （用户 2026-09-21 专门问过这一条，见 `12 §4.6`。）
+ */
 export function serializeBoard(board: BoardFile): string {
-  return `${JSON.stringify(board, null, BOARD_JSON_INDENT)}\n`;
+  return `${JSON.stringify(withBoardVersion(board), null, BOARD_JSON_INDENT)}\n`;
+}
+
+/** 写盘用的那一份：版本号跟着内容走（见 `serializeBoard` 的说明） */
+function withBoardVersion(board: BoardFile): BoardFile {
+  const version = (board.minds?.length ?? 0) > 0 ? BOARD_VERSION : LEGACY_BOARD_VERSION;
+  return board.version === version ? board : { ...board, version };
 }
 
 /**

@@ -31,6 +31,7 @@
  */
 
 import { THUMB_SIZE } from '../io/ThumbnailCache';
+import type { MindFile } from '../mind/model/schema';
 import type { BoardFile } from '../model/schema';
 import {
   planPngExport,
@@ -56,6 +57,21 @@ export const BOARD_THUMB_PADDING = 8;
  */
 export const BOARD_THUMB_MAX_LINES = 4;
 
+/**
+ * **内嵌**脑图的模型（`2.2.0` 批 4）：模型就在白板文件里，缩略图这一层自己拿得到。
+ *
+ * ★ 指向 `.nestmind` 的那些拿不到（它们住脑图仓储的内存里，而缩略图的调用点
+ *   手上只有一份 `BoardFile`）⇒ 那些树在缩略图里**不出现**。要修得让"板缩略图"
+ *   能拿到仓储，那是接口问题，记在 `11 §12`。
+ */
+function inlineMindModels(board: BoardFile): ReadonlyMap<string, MindFile> {
+  const models = new Map<string, MindFile>();
+  for (const mind of board.minds ?? []) {
+    if (mind.path.length === 0 && mind.mind) models.set(mind.id, mind.mind);
+  }
+  return models;
+}
+
 export interface BoardThumbPlan {
   /** 唯一的瓦片 = 整板外接框（已向外对齐到整数世界像素） */
   tile: PngTile;
@@ -77,7 +93,11 @@ export function planBoardThumbnail(
   board: BoardFile,
   max: number = THUMB_SIZE,
 ): BoardThumbPlan | null {
-  const bounds = resolveExportBounds(board, { range: 'all', padding: BOARD_THUMB_PADDING });
+  const bounds = resolveExportBounds(board, {
+    range: 'all',
+    padding: BOARD_THUMB_PADDING,
+    mindModels: inlineMindModels(board),
+  });
   if (!bounds) return null;
 
   // ★ 借 `planPngExport` 只为了拿"向外对齐后的外接框"：`alignTile` 是那边的私有函数，
@@ -216,6 +236,16 @@ export function paintBoardThumbnail(
   plan: BoardThumbPlan,
   palette: PngPalette,
   images?: ReadonlyMap<string, CanvasImageSource>,
+  /**
+   * **文件脑图**的模型（`2.2.0` 批 4），键是脑图 id。
+   *
+   * ★ 内嵌脑图的模型就在 `board.minds[].mind` 里，**这里自己补上**（`inlineMindModels`）；
+   *   指向 `.nestmind` 的那些不在白板文件里 —— 只有拿得到脑图仓储的调用方才能喂进来。
+   *   现有几个调用点（笔记嵌入 / 模板目录 / 文件浏览器缩略图）手上只有一份 `BoardFile`，
+   *   所以那些地方的**文件脑图暂时不出现**（内嵌脑图照旧出现）。
+   *   这一条记在 `11 §12`：要修就得让"板缩略图"能拿到仓储，那是另一个接口问题。
+   */
+  mindModels?: ReadonlyMap<string, MindFile>,
 ): void {
   renderTile(ctx, board, plan.tile, {
     scale: plan.scale,
@@ -225,5 +255,8 @@ export function paintBoardThumbnail(
     palette,
     maxLines: BOARD_THUMB_MAX_LINES,
     images,
+    // 与 `planBoardThumbnail` 取景时必须是**同一份**：不然会出现
+    // "框按树留好了、树却没画出来"（或反过来）
+    mindModels: mindModels ?? inlineMindModels(board),
   });
 }

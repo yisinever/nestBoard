@@ -24,7 +24,12 @@ import { normalizeIcon } from '../util/emoji';
 import { normalizeHex } from '../util/color';
 import { boundsOf, normalizeAngle, roundTo, type Point, type Rect } from '../util/geometry';
 import { createGroup, nextZ } from './factories';
-import type { BoardFile, Card, CardColor, CardTitleStyle, Group, HexColor } from './schema';
+// 换掉内嵌脑图的模型时顺带清"指向已删节点"的线（`2.2.0` 批 3）
+import { pruneMindNodeEdges } from './edges';
+import { removeNodes } from '../mind/model/ops';
+import { splitEndpointKey } from './schema';
+import type { BoardFile, Card, CardColor, CardTitleStyle, Group, HexColor, Mind } from './schema';
+import type { MindFile } from '../mind/model/schema';
 
 // ─────────────────────────────────────────────────────────────
 // 查询
@@ -39,47 +44,54 @@ export function cardById(board: BoardFile, id: string): Card | null {
 // ─────────────────────────────────────────────────────────────
 
 /** 与 `CardLayer.sortCardsByZ` 同一套次序语义：z 为主，id 兜底保证确定性 */
-function byZ(a: Card, b: Card): number {
+function byZ(a: { z: number; id: string }, b: { z: number; id: string }): number {
   return a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 /**
- * 把选中卡片整体移到最上层或最下层，**保持它们彼此之间的相对次序**。
+ * 把选中的**内容对象**（卡片 + 脑图，`2.2.0` 收尾）整体移到最上层或最下层，
+ * **保持它们彼此之间的相对次序**。
  *
- * 只改选中项自己的 `z`，不动其他卡片的数值：
+ * 只改选中项自己的 `z`，不动其他对象的数值：
  * 全量重排 z 会把整份文件写花（几十张卡的数字全变），也让 diff 不可读。
+ *
+ * ★ 为什么卡片与脑图**放在同一个序列里**排：它们的 `z` 本来就是**共用的一格**
+ *   （分栏 `1..n` 在最下面，卡片 / 脑图从 `10` 起混排，见 `templates.assignZ`），
+ *   层序要表达的是"谁压在谁上面"—— 把两者分开排的话，"把这张卡置顶"会得到一个
+ *   它仍压在树下面的结果（那时用户看到的是"置顶没生效"）。
+ * ★ 分栏不参与：它的 z 是"栏底"那一层，`reorderSelection` 也从不带它。
  */
-function reorderCards(board: BoardFile, ids: readonly string[], toFront: boolean): boolean {
+function reorderContent(board: BoardFile, ids: readonly string[], toFront: boolean): boolean {
   if (ids.length === 0) return false;
 
   const selectedIds = new Set(ids);
-  const current = [...board.cards].sort(byZ);
-  const selected = current.filter((card) => selectedIds.has(card.id));
-  const rest = current.filter((card) => !selectedIds.has(card.id));
+  const current = [...board.cards, ...(board.minds ?? [])].sort(byZ);
+  const selected = current.filter((item) => selectedIds.has(item.id));
+  const rest = current.filter((item) => !selectedIds.has(item.id));
 
-  // 没选中任何卡 / 全选 → 次序不可能变
+  // 没选中任何对象 / 全选 → 次序不可能变
   if (selected.length === 0 || rest.length === 0) return false;
 
   const desired = toFront ? [...rest, ...selected] : [...selected, ...rest];
-  if (desired.every((card, index) => card === current[index])) return false;
+  if (desired.every((item, index) => item === current[index])) return false;
 
-  // 锚点取"未选中卡片"的最上/最下层，选中项贴着它排开，不与未选中项交错
+  // 锚点取"未选中对象"的最上/最下层，选中项贴着它排开，不与未选中项交错
   const anchor = toFront ? rest[rest.length - 1].z : rest[0].z;
 
-  selected.forEach((card, index) => {
-    card.z = toFront ? anchor + index + 1 : anchor - selected.length + index;
+  selected.forEach((item, index) => {
+    item.z = toFront ? anchor + index + 1 : anchor - selected.length + index;
   });
   return true;
 }
 
-/** 置顶（`⌘⇧↑`，F2-00-4） */
+/** 置顶（`⌘⇧↑`，F2-00-4）：卡片与脑图都在这个集合里 */
 export function bringToFront(board: BoardFile, ids: readonly string[]): boolean {
-  return reorderCards(board, ids, true);
+  return reorderContent(board, ids, true);
 }
 
 /** 置底（`⌘⇧↓`，F2-00-4） */
 export function sendToBack(board: BoardFile, ids: readonly string[]): boolean {
-  return reorderCards(board, ids, false);
+  return reorderContent(board, ids, false);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -946,4 +958,199 @@ export function groupBounds(board: BoardFile, groupId: string): Rect | null {
   if (!group) return null;
   const members = new Set(group.cardIds);
   return boundsOf(board.cards.filter((card) => members.has(card.id)));
+}
+
+// ─────────────────────────────────────────────────────────────
+// 白板级脑图（`2.2.0`）：与卡片 / 分栏 / 编组平级的对象
+//
+// ★ 这里只放"改白板上那棵树"的动作（进出白板 / 挪位置 / 换模型 / 删掉）。
+//   树内部的结构编辑（加节点 / 删除 / 折叠 / 改字）在 `mind/model/ops.ts` ——
+//   脑图那一套操作与 `.nestmind` 完全共用，白板这一侧一个字都不重写。
+// ─────────────────────────────────────────────────────────────
+
+/** 这块板上的脑图（`minds` 缺席 = 没有）：给空数组，调用方不必到处判 `?.` */
+export function mindsOf(board: BoardFile): readonly Mind[] {
+  return board.minds ?? [];
+}
+
+export function mindById(board: BoardFile, id: string): Mind | null {
+  return board.minds?.find((mind) => mind.id === id) ?? null;
+}
+
+/** 往白板里放一棵脑图（默认压到最上层，理由同 `addCards`） */
+export function addMind(board: BoardFile, mind: Mind, toFront = true): boolean {
+  if (toFront) mind.z = nextZ(board);
+  if (!board.minds) board.minds = [];
+  board.minds.push(mind);
+  return true;
+}
+
+/**
+ * 移动一棵脑图 —— 写的是**根节点中心**（`Mind.x/y`）。
+ *
+ * ★ 其它节点的位置**不落盘**（由 `layout/` 算）：这正是"脑图不是一堆卡片"在数据上的样子。
+ *   拖整棵只有"挪那一个点"这一件事，与卡片"每张各记一份 x/y"形成对照。
+ */
+export function moveMind(board: BoardFile, id: string, point: Point): boolean {
+  const mind = mindById(board, id);
+  if (!mind) return false;
+  const x = roundTo(point.x);
+  const y = roundTo(point.y);
+  if (mind.x === x && mind.y === y) return false;
+  mind.x = x;
+  mind.y = y;
+  return true;
+}
+
+/**
+ * 换掉一棵**内嵌**脑图的模型（结构编辑的写回口）。
+ *
+ * ★ 与 `patchSyncGroup` 同一条纪律：**不就地改** `mind.mind` 里的字段，而是整份换掉 ——
+ *   老对象可能正被撤销栈的快照共享（"撤销之后又被写回一次"那类最难查的 bug）。
+ * ★ 文件脑图走 `.nestmind` 仓储（`mutate`），**不经过这里**。
+ * ★ 顺带清掉"指向这棵树里**已经不在的节点**"的连线（`2.2.0` 批 3）：与 `removeCards`
+ *   同一条纪律 —— 删掉的东西不该在文件里留一堆既画不出来又删不掉的线。
+ *   这里做得到是因为**清单就在手上**（`next` 就是新模型），而文件脑图那条路不做
+ *   （清单在另一份文件里，见 `pruneMindNodeEdges` 的说明）。
+ */
+export function setMindModel(board: BoardFile, id: string, next: MindFile): boolean {
+  const mind = mindById(board, id);
+  if (!mind || mind.mind === next) return false;
+  mind.mind = next;
+  pruneMindNodeEdges(board, id, new Set(next.nodes.map((node) => node.id)));
+  return true;
+}
+
+/**
+ * 复制一棵脑图（`⌘D` 与剪贴板粘贴共用，`2.2.0` 批 4 五）。
+ *
+ * ── 两条口径 ──────────────────────────────────────────────
+ *
+ * * **内嵌脑图**：节点 id 必须换新（否则"复制出来的那棵"与原树共用一批节点 id，
+ *   而连线端点正是按 `脑图id/节点id` 认节点的 —— 那种板子打开后线会串到另一棵树上）。
+ *   `rootId` / `parentId` 一律按映射表重写，`meta.id` 也重新发一个（它是这份模型自己的身份）。
+ * * **文件脑图**（`path` 非空）：**只复制容器**，`path` 照搬 —— 两份容器指向同一份
+ *   `.nestmind`，与"两枚引用卡指向同一篇笔记"是同一条语义（改文件两边都变）。
+ *   于是它的节点 id **一个都不改**：那些 id 属于那份文件，改了才是错的。
+ *
+ * ★ 与 `duplicateCards` 一样**不复制连线**：端点只在一侧的那些线搬过去就是悬空引用。
+ *
+ * @returns 新的容器（`x/y` 还没偏移，交给调用方）+ 它内部几层 id 的映射
+ *   （`nodeIds`：老节点 id → 新节点 id；文件脑图给空表）
+ */
+export function cloneMindForCopy(mind: Mind): { mind: Mind; nodeIds: Map<string, string> } {
+  const nodeIds = new Map<string, string>();
+  const clone: Mind = { ...mind, id: createId(ID_PREFIX.mind) };
+  if (mind.path.length > 0 || !mind.mind) {
+    delete clone.mind;
+    return { mind: clone, nodeIds };
+  }
+
+  const model = cloneJson(mind.mind) as MindFile;
+  const nodes = model.nodes.map((node) => {
+    const id = createId(ID_PREFIX.mindNode);
+    nodeIds.set(node.id, id);
+    return { ...node, id };
+  });
+  clone.mind = {
+    ...model,
+    meta: { ...model.meta, id: createId(ID_PREFIX.mind) },
+    rootId: nodeIds.get(model.rootId) ?? model.rootId,
+    // `parentId` 也要跟着换：漏一处就会得到"某些节点悬空、整支消失"的树
+    nodes: nodes.map((node) =>
+      node.parentId === null ? node : { ...node, parentId: nodeIds.get(node.parentId) ?? null },
+    ),
+  };
+  return { mind: clone, nodeIds };
+}
+
+/**
+ * 原地复制若干棵脑图（`⌘D`）：新 id + 偏移 + 压到最上层。
+ *
+ * ★ **不复制连线**（与 `duplicateCards` 同一条口径）；也**不进编组**（脑图不是编组成员）。
+ * ★ 副本不继承 `locked` 之外的界面状态：那本来就只有 `locked` 一项存在模型里。
+ */
+export function duplicateMinds(
+  board: BoardFile,
+  ids: readonly string[],
+  offset: Point = { x: 0, y: 0 },
+): Mind[] {
+  if (ids.length === 0) return [];
+  const wanted = new Set(ids);
+  const sources = (board.minds ?? []).filter((mind) => wanted.has(mind.id));
+  if (sources.length === 0) return [];
+
+  const clones: Mind[] = [];
+  for (const source of sources) {
+    const { mind } = cloneMindForCopy(source);
+    mind.x = roundTo(source.x + offset.x);
+    mind.y = roundTo(source.y + offset.y);
+    mind.z = nextZ(board);
+    // 直接推进去而不是走 `addMind`：`addMind` 会把 `z` 再抬一次，而这里已经算好了
+    if (!board.minds) board.minds = [];
+    board.minds.push(mind);
+    clones.push(mind);
+  }
+  return clones;
+}
+
+/**
+ * 删掉一棵脑图，并**连带清掉指着它的连线**（与 `removeCards` 同一条纪律）。
+ *
+ * ★ 连线端点只认"一个白板级 id"（`EdgeEndpoint.cardId`），所以这里只要按 id 扫一遍 ——
+ *   分栏、卡片、脑图三种端点共用同一份清理逻辑，谁也漏不掉。
+ * ★ 编组不用管：脑图不是编组成员（编组只装卡片与分栏）。
+ */
+/**
+ * 删除若干**节点**（`2.2.0` 收尾 · 节点级框选）。
+ *
+ * @param keys 节点端点键（`nodeEndpointKey(脑图id, 节点id)`）
+ *
+ * ★ **只碰内嵌的树**：文件树的节点存在那份 `.nestmind` 里，这条纯函数读不到 ——
+ *   调用方（`BoardView.deleteSelection`）另外走仓储，两条路合起来才是"删掉这些节点"。
+ * ★ 删完**顺手清掉指向它们的连线**（`pruneMindNodeEdges`，与 `setMindModel` 同一条）：
+ *   被删掉的节点不该在文件里留一堆画不出来又删不掉的线。
+ *   ★ 文件树那一路**不清线**：节点清单在别处（`.nestmind`），而"那边删了节点、
+ *     这边线先留着"是既有的口径（见 `pruneMindNodeEdges` 的注释）—— 加回来线就回来。
+ * ★ 根节点由 `removeNodes` 自己跳过（删一棵树的根 = 删整棵树，那是另一个动作）。
+ */
+export function removeMindNodes(board: BoardFile, keys: readonly string[]): boolean {
+  if (keys.length === 0 || !board.minds) return false;
+
+  // 按树分组，只收**内嵌**那种（`path` 为空 = 树在板子里）
+  const inline = new Map<string, Set<string>>();
+  for (const key of keys) {
+    const { cardId, nodeId } = splitEndpointKey(key);
+    if (nodeId === null) continue;
+    const mind = board.minds.find((item) => item.id === cardId);
+    if (!mind || mind.path.length > 0 || !mind.mind) continue;
+    const bucket = inline.get(cardId) ?? new Set<string>();
+    bucket.add(nodeId);
+    inline.set(cardId, bucket);
+  }
+
+  let changed = false;
+  for (const [mindId, nodeIds] of inline) {
+    const mind = board.minds.find((item) => item.id === mindId);
+    if (!mind?.mind) continue;
+    if (!removeNodes(mind.mind, nodeIds)) continue;
+    changed = true;
+    pruneMindNodeEdges(board, mindId, new Set(mind.mind.nodes.map((node) => node.id)));
+  }
+  return changed;
+}
+
+export function removeMinds(board: BoardFile, ids: readonly string[]): boolean {
+  if (ids.length === 0 || !board.minds) return false;
+  const targets = new Set(ids);
+  const before = board.minds.length;
+  board.minds = board.minds.filter((mind) => !targets.has(mind.id));
+  if (board.minds.length === before) return false;
+
+  board.edges = board.edges.filter(
+    (edge) => !targets.has(edge.from.cardId) && !targets.has(edge.to.cardId),
+  );
+  // 全删光时把键去掉：与"可选键缺席即默认"同一条纪律（老插件读它要逐字节一样）
+  if (board.minds.length === 0) delete board.minds;
+  return true;
 }

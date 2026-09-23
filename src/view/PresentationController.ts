@@ -15,8 +15,8 @@
  */
 
 import { Notice, setIcon } from 'obsidian';
-import { CARD_ID_ATTR } from '../constants';
-import type { BoardFile, Card } from '../model/schema';
+import { CARD_ID_ATTR, MIND_CONTAINER_ID_ATTR } from '../constants';
+import type { BoardFile, Card, Mind } from '../model/schema';
 import {
   clampStepIndex,
   nextStepIndex,
@@ -24,6 +24,7 @@ import {
   previousStepIndex,
   stepIndexFromDigit,
 } from '../model/presentation';
+import type { PresentTarget } from '../model/presentation';
 import type { Rect } from '../util/geometry';
 import { t } from '../util/i18n';
 import {
@@ -56,6 +57,13 @@ export interface PresentationHost {
   board(): BoardFile | null;
   /** 卡片在屏幕上的**视觉**矩形（含栏内滚动偏移，T2.03） */
   visualRectOf(card: Card): Rect;
+  /**
+   * 一棵脑图取景用的矩形（`2.2.0` 收尾 · 演示对接）—— **世界坐标**：
+   * 与 `visualRectOf` 同一套单位（相机自己算 `screen = world × zoom + offset`，
+   * 见 `presentTargetViewport`）。缺省 = 本视图不认脑图几何（老调用方 / 测试）
+   * ⇒ 讲到脑图那一步**不飞相机**，其余照常。
+   */
+  mindVisualRect?(mind: Mind): Rect | null;
   clearSelection(): void;
   /** 适应全部内容（`O` 总览复用画布已有的那套） */
   fitContent(): void;
@@ -84,8 +92,8 @@ function prefersReducedMotion(): boolean {
 
 export class PresentationController {
   private activeState = false;
-  private order: Card[] = [];
-  private currentCardId: string | null = null;
+  private order: PresentTarget[] = [];
+  private currentId: string | null = null;
   private barEl: HTMLElement | null = null;
   private countEl: HTMLElement | null = null;
   private frame: number | null = null;
@@ -103,13 +111,13 @@ export class PresentationController {
 
   /** 当前步骤下标（`0` 起）；不在演示态时为 `-1` */
   get index(): number {
-    if (!this.activeState || this.currentCardId === null) return -1;
-    const index = this.order.findIndex((card) => card.id === this.currentCardId);
+    if (!this.activeState || this.currentId === null) return -1;
+    const index = this.order.findIndex((item) => item.id === this.currentId);
     return index >= 0 ? index : 0;
   }
 
-  /** 当前正在讲的那张卡 */
-  get currentCard(): Card | null {
+  /** 当前正在讲的那一步（卡或脑图） */
+  get currentTarget(): PresentTarget | null {
     const index = this.index;
     return index >= 0 ? (this.order[index] ?? null) : null;
   }
@@ -134,7 +142,7 @@ export class PresentationController {
 
     this.activeState = true;
     this.order = order;
-    this.currentCardId = order[0].id;
+    this.currentId = order[0].id;
     this.host.clearSelection();
     this.host.containerEl.classList.add(PRESENTING_CLASS);
     this.buildBar();
@@ -173,10 +181,10 @@ export class PresentationController {
     }
 
     const previousIndex = Math.max(0, this.index);
-    const keptIndex = order.findIndex((card) => card.id === this.currentCardId);
+    const keptIndex = order.findIndex((item) => item.id === this.currentId);
     this.order = order;
     // 当前那张还在就留在它身上；被删了就落到**同一位置**的那张（不回第一张）
-    this.currentCardId =
+    this.currentId =
       order[keptIndex >= 0 ? keptIndex : clampStepIndex(previousIndex, order.length)].id;
 
     this.updateBar();
@@ -200,9 +208,9 @@ export class PresentationController {
   /** 跳到某一步并聚焦它 */
   goto(index: number): void {
     if (!this.activeState) return;
-    const card = this.order[clampStepIndex(index, this.order.length)];
-    if (!card) return;
-    this.currentCardId = card.id;
+    const target = this.order[clampStepIndex(index, this.order.length)];
+    if (!target) return;
+    this.currentId = target.id;
     this.render();
   }
 
@@ -288,8 +296,11 @@ export class PresentationController {
     for (const el of canvas.querySelectorAll(`.${PRESENT_STEP_CLASS}`)) {
       el.classList.remove(PRESENT_STEP_CLASS);
     }
-    if (!this.activeState || this.currentCardId === null) return;
-    const el = canvas.querySelector<HTMLElement>(`[${CARD_ID_ATTR}="${this.currentCardId}"]`);
+    if (!this.activeState || this.currentId === null) return;
+    // 卡片与脑图容器各查一次（两类元素的 id 属性名不同；它们是互斥的，谁在就是谁）
+    const el =
+      canvas.querySelector<HTMLElement>(`[${CARD_ID_ATTR}="${this.currentId}"]`) ??
+      canvas.querySelector<HTMLElement>(`[${MIND_CONTAINER_ID_ATTR}="${this.currentId}"]`);
     el?.classList.add(PRESENT_STEP_CLASS);
   }
 
@@ -367,9 +378,16 @@ export class PresentationController {
   }
 
   private flyToCurrent(): void {
-    const card = this.currentCard;
-    if (!card) return;
-    const target = presentTargetViewport(this.host.visualRectOf(card), {
+    const current = this.currentTarget;
+    if (!current) return;
+    // ★ 脑图（`2.2.0` 收尾）：几何问宿主（它拿得到 `MindLayer` 那份"整棵树的外接框"）；
+    //   取不到（那份 `.nestmind` 还没读到）就不飞 —— 停在上一步，比飞去一块空地看着强
+    const rect =
+      current.kind === 'card'
+        ? this.host.visualRectOf(current.card)
+        : (this.host.mindVisualRect?.(current.mind) ?? null);
+    if (!rect) return;
+    const target = presentTargetViewport(rect, {
       width: this.host.viewport.width,
       height: this.host.viewport.height,
     });

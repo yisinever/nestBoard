@@ -26,6 +26,29 @@
 import { cardIconOf } from '../cards/cardIcon';
 import { columnDisplayHeight } from '../model/columns';
 import { IDENTITY_CROP, clampCrop } from '../model/crop';
+// 白板级脑图（`2.2.0` 批 4）：导出这一侧**自己再画一遍**（canvas 读不到 DOM 样式），
+// 但几何与配色**全部复用**脑图那套纯函数 —— 布局（`layoutMind`）、连线路径
+// （`edgePathOf` 等给的 SVG 路径字符串）、配色（`mindPaletteOf` 给的是**十六进制**，
+// 正是 canvas 需要的形状）。所以"导出里的树"与"屏幕上的树"是同一份几何，
+// 只有字号 / 内边距这类观感是这边独立写死的（与 `drawCards` 同一条纪律）。
+import { mindBounds, mindNodeRects, mindPlacement } from '../mind/embed/boardGeometry';
+import { childSideOf, edgePathOf, edgeTrunkPathOf } from '../mind/layout/edges';
+import type { MindLayout } from '../mind/layout/tree';
+import { MIND_DEEP_DEPTH, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
+// 标题的行高与折行**与布局估算共用**：写死一份的话，"盒子按 3 行留了高度、
+// 画出来只有 1 行"就会以"标题悬在盒子上半截"的样子冒出来
+import {
+  MIND_BODY_LINE_HEIGHT,
+  MIND_CHAR_WIDTH_RATIO,
+  MIND_NODE_INNER_GAP,
+  titleLineHeightFor,
+  wrapNodeNote,
+  wrapNodeTitle,
+} from '../mind/layout/measure';
+// 完成态那一支（`N3-g`）：与画布 / SVG 导出共用同一份判断
+import { dimmedByDoneAncestor } from '../mind/model/ops';
+import { firstRefOf, refLabelOf } from '../mind/model/refs';
+import type { MindFile } from '../mind/model/schema';
 import {
   edgePathMidpoint,
   edgePolyline,
@@ -45,9 +68,10 @@ import type {
   Column,
   ImageCrop,
   ImageFit,
+  Mind,
   ThemeColor,
 } from '../model/schema';
-import { isThemeColor } from '../model/schema';
+import { isThemeColor, nodeEndpointKey } from '../model/schema';
 import { THEME_COLOR_VAR, normalizeHex, swatchEntryToText, swatchInkColor } from '../util/color';
 import {
   boundsOf,
@@ -102,6 +126,15 @@ export interface PngExportOptions {
   maxTileSize?: number;
   /** 四周留白（世界坐标 px），默认 {@link DEFAULT_PNG_PADDING} */
   padding?: number;
+  /**
+   * **文件脑图**的模型（`2.2.0` 批 4），键是脑图 id —— **取景**这一层要它。
+   *
+   * ★ 脑图在模型里**没有尺寸**（无边界），能占多大地方只能靠布局现算 ⇒
+   *   取景（这里）与绘制（{@link PngRenderOptions.mindModels}）必须用**同一份**模型，
+   *   否则会出现"导出图把树裁掉一半"或"框留够了、树画在框外"。
+   * ★ 缺席 = 那些树不参与取景（也不会被画出来）。
+   */
+  mindModels?: ReadonlyMap<string, MindFile>;
 }
 
 /**
@@ -113,7 +146,7 @@ export interface PngExportOptions {
  * ★ 结构子类型：`PngExportOptions` / `PdfExportOptions` / `SvgExportOptions`
  *   都能直接传进来，调用方一个字都不用改。
  */
-export type ExportBoundsOptions = Pick<PngExportOptions, 'range' | 'padding'>;
+export type ExportBoundsOptions = Pick<PngExportOptions, 'range' | 'padding' | 'mindModels'>;
 
 /** 一块导出区域（世界坐标，已对齐到整数像素） */
 export interface PngTile extends Rect {
@@ -192,8 +225,16 @@ function padRect(rect: Rect, padding: number): Rect {
  * ★ 卡片按**外接框**算（T7.06）：转 45° 的卡片比它的 `width/height` 高出小半张，
  *   按布局框取边界会把它的四个角裁掉（`boundsOfCard` 在 0° 时为原矩形）。
  */
-export function boardContentBounds(board: BoardFile): Rect | null {
+export function boardContentBounds(
+  board: BoardFile,
+  mindModels?: ReadonlyMap<string, MindFile>,
+): Rect | null {
+  const partOfMinds = mindsOfBoard(board, mindModels);
   const parts: Rect[] = [...board.cards.map(boundsOfCard), ...board.columns.map(rectOfColumn)];
+  // ★ 脑图也要算进来（`2.2.0` 批 4）：它从前是一张卡、现在是一个**没有尺寸**的容器
+  //   —— 不补这一笔，一棵长在边上的树会被裁掉一半；再极端一点（一块只有脑图的板子），
+  //   导出会直接说"没有内容可导"。
+  for (const mind of partOfMinds) parts.push(mind.rect);
 
   // ★ 连线也会伸到卡片之外（T7.11 的智能绕行绕出 `ROUTE_MARGIN`、T7.12 的弧线控制点
   //   最远能偏到 4 倍弦长），不把它们算进来的话，导出图上那条弯会被裁掉一截 ——
@@ -208,6 +249,10 @@ export function boardContentBounds(board: BoardFile): Rect | null {
     }
     // ★ 分栏也是端点（`O21`）：不并进这张表，指向栏的线在导出物里会**整条消失**
     for (const column of board.columns) rects.set(column.id, rectOfColumn(column));
+    // ★ 脑图的**节点**也是端点（`2.2.0` 批 3）：同上 —— 少这一笔，指着节点的线会消失
+    for (const mind of partOfMinds) {
+      for (const [key, rect] of mind.nodes) rects.set(key, rect);
+    }
     const rectOf = (cardId: string): Rect | null => rects.get(cardId) ?? null;
     const angleOf: AngleLookup = (cardId) => angles.get(cardId) ?? 0;
     const obstacles = board.edges.some((edge) => edge.routing === 'smart')
@@ -229,10 +274,36 @@ export function boardContentBounds(board: BoardFile): Rect | null {
   return boundsOf(parts);
 }
 
+/**
+ * 每棵**要画的**脑图在板子上占的地方 + 它每个节点的矩形（`2.2.0` 批 4）。
+ *
+ * ★ 取景（`boardContentBounds`）与绘制（`drawMinds` / `drawEdges`）**共用这一份**：
+ *   各算一次布局的话，导出图上会出现"树的框留够了、节点却画在框外"。
+ */
+function mindsOfBoard(
+  board: BoardFile,
+  mindModels?: ReadonlyMap<string, MindFile>,
+): Array<{ mind: Mind; rect: Rect; nodes: Map<string, Rect> }> {
+  return planMinds(board, mindModels).map((plan) => {
+    const place = { file: plan.file, layout: plan.layout, dx: plan.dx, dy: plan.dy };
+    const nodes = new Map<string, Rect>();
+    // ★ 键与画布上连线的端点表**同形**（`nodeEndpointKey`）：那一侧查表查的是同一个串
+    for (const [nodeId, rect] of mindNodeRects(place)) {
+      nodes.set(nodeEndpointKey(plan.mind.id, nodeId), rect);
+    }
+    return {
+      mind: plan.mind,
+      // 布局算不出外接框（空模型）时退化成"没有面积"：它本来也没什么可框的
+      rect: mindBounds(place) ?? { x: plan.mind.x, y: plan.mind.y, width: 0, height: 0 },
+      nodes,
+    };
+  });
+}
+
 export interface PngBoundsContext {
   /** 当前视口对应的世界矩形（`range: 'viewport'` 用）；不传则该范围退化为整块板 */
   viewportRect?: Rect | null;
-  /** 当前选中的卡片 / 分栏 id（`range: 'selection'` 用） */
+  /** 当前选中的卡片 / 分栏 / **脑图** id（`range: 'selection'` 用） */
   selection?: ReadonlySet<string>;
 }
 
@@ -260,11 +331,17 @@ export function resolveExportBounds(
     const picked = boundsOf([
       ...board.cards.filter((card) => selection.has(card.id)).map(boundsOfCard),
       ...board.columns.filter((column) => selection.has(column.id)).map(rectOfColumn),
+      // ★ 脑图（`2.2.0` 批 5）：它没有尺寸字段，外接框要向布局**现问** ——
+      //   与"取景"（`boardContentBounds`）走的是同一份 `mindsOfBoard`，
+      //   于是"框住哪几棵树就导出哪几棵"与整板导出的取景口径完全一致。
+      ...mindsOfBoard(board, options.mindModels)
+        .filter((item) => selection.has(item.mind.id))
+        .map((item) => item.rect),
     ]);
     if (picked) return padRect(picked, padding);
   }
 
-  const bounds = boardContentBounds(board);
+  const bounds = boardContentBounds(board, options.mindModels);
   return bounds ? padRect(bounds, padding) : null;
 }
 
@@ -523,6 +600,23 @@ export function cardPreview(card: Card): CardPreview {
     // 图上不写字（PNG 里贴的是那张图本身），地点名当标签（同图片卡用说明文字）
     case 'map':
       return { label: card.content.label || card.content.path, lines: [] };
+    // PDF 预览卡（`F8`）：PNG 里贴不了 PDF 的内容 ⇒ 贴上**路径**当标签
+    // （与文件卡同一条：导出件上至少要看得出"这里原先是什么"）
+    case 'pdf':
+      return { label: card.content.path, lines: [] };
+    // `.canvas` 预览卡（`F6`）：同上
+    case 'canvas':
+      return { label: card.content.path, lines: [] };
+    // 脑图卡（`F3a`）：同上（静态导出里画不了可交互的脑图，写路径当标签）
+    case 'mindRef':
+      return { label: card.content.path, lines: [] };
+    // 内嵌脑图卡（`F4`）：没有路径可写 ⇒ 写**中心主题**那一行（那才是这张卡的名字）
+    case 'mind':
+      return {
+        label:
+          card.content.mind.nodes.find((node) => node.id === card.content.mind.rootId)?.text ?? '',
+        lines: [],
+      };
     default:
       return assertNever(card);
   }
@@ -680,6 +774,16 @@ export interface PngRenderOptions {
   palette: PngPalette;
   /** 卡片正文最多画几行，默认 6 */
   maxLines?: number;
+  /**
+   * **文件脑图**的模型（`2.2.0` 批 4），键是脑图 id。
+   *
+   * ★ 内嵌脑图的模型就在 `board.minds[].mind` 里（`drawMinds` 自己会读），
+   *   只有"指向一份 `.nestmind`"的那些才需要从外面喂进来 —— 那份数据住仓储的内存里，
+   *   白板文件本身没有。
+   * ★ 缺席 / 某棵树没给 ⇒ 那一棵树这一次导出**不画**（与缩略图同一条口径：
+   *   宁可少画一棵，也不要为了它在这里同步等一次读盘）。
+   */
+  mindModels?: ReadonlyMap<string, MindFile>;
 }
 
 /** 卡片标题字号（世界 px） */
@@ -720,6 +824,12 @@ export function renderTile(
 
   drawBackground(ctx, board, tile, options);
   drawColumns(ctx, board, options);
+  // 脑图在**连线之下**（`2.2.0` 批 4）：屏幕上那层边是画在卡片 / 节点**背后**的
+  //（`EdgeLayer` 的 z 比 world 低），导出这边保持同一个次序才看着一样。
+  // ★ 底稿只算一次，`drawMinds`（画树）与 `drawEdges`（要节点当端点）共用它 ——
+  //   两处各算一遍布局，节点与线头会各自落在不同的地方
+  const mindPlans = planMinds(board, options.mindModels);
+  drawMinds(ctx, mindPlans, tile, options);
   drawEdges(ctx, board, options);
   drawCards(ctx, board, tile, options);
 
@@ -818,6 +928,341 @@ function drawColumns(
   }
 }
 
+/**
+ * 一棵**要画的脑图**这一次的底稿（`2.2.0` 批 4）。
+ *
+ * ★ 抽出来是因为它被两处用：画树本身（{@link drawMinds}）与画连线时的**端点表**
+ *   （`drawEdges` 里的节点矩形）。两处各算一遍布局的话，"节点"与"线头"会各自
+ *   落在不同的地方 —— 那是导出里最明显的一类错。
+ */
+interface MindDrawPlan {
+  mind: Mind;
+  /** 实际画出来那一份（收起的分支已经摘掉） */
+  file: MindFile;
+  layout: MindLayout;
+  /** 布局坐标 → 世界坐标的平移（容器的 `x/y` 是根节点中心） */
+  dx: number;
+  dy: number;
+}
+
+/** 这一块 tile 要画的脑图（模型还没读到的那些**不在里面**） */
+function planMinds(board: BoardFile, mindModels?: ReadonlyMap<string, MindFile>): MindDrawPlan[] {
+  const plans: MindDrawPlan[] = [];
+  for (const mind of [...(board.minds ?? [])].sort((a, b) => a.z - b.z)) {
+    const model = mind.path.length === 0 ? (mind.mind ?? null) : (mindModels?.get(mind.id) ?? null);
+    // 摆法（锚点 = 根节点中心）与缩略图 / SVG 导出共用同一份（`mind/embed/boardGeometry`）
+    const place = mindPlacement({ x: mind.x, y: mind.y }, model ?? null);
+    if (!place) continue;
+    plans.push({ mind, file: place.file, layout: place.layout, dx: place.dx, dy: place.dy });
+  }
+  return plans;
+}
+
+/**
+ * 脑图节点圆角 / 分支线粗细（世界 px）。
+ *
+ * ★ 圆角与 SVG 导出那一条**同一个数**（`toSvg.ts` 的 `Math.min(8, h/2)`）：
+ *   两种导出画同一棵树却一个圆一个方，只会让人以为其中一份坏了。
+ */
+const MIND_NODE_MAX_RADIUS = 8;
+const MIND_EDGE_WIDTH = 1.5;
+/**
+ * 标题带的**内边距**（世界 px）—— 与样式表 `.nestboard-mind-node-title { padding: 8px 14px }`
+ * 和 SVG 导出的 `PADDING_X` 是同一组数。
+ *
+ * ★ 上下留白从前在这边写的是 6（样式表是 8）⇒ 标题带比画布上矮一截，
+ *   节点看上去"扁"了一圈（用户报的"导出 PNG 和原脑图差很多"里的一处）。
+ */
+const MIND_BAND_PADDING_X = 14;
+/** 内容块（备注）的字号：与 `.nestboard-mind-node-body` 的 `--nestboard-card-font-size` 同档 */
+const MIND_BODY_FONT_SIZE = 14;
+/** 附件那一行的字号（比正文再小一档 —— 它只是"这里挂着个东西"） */
+const MIND_REF_FONT_SIZE = 12;
+/** 图片附件块的圆角（比节点自己的圆角小一点：它是嵌在里面的一块） */
+const MIND_IMAGE_RADIUS = 4;
+const MIND_BAND_PADDING_Y = 8;
+/** 分支线的不透明度：屏幕上它是"托底"的淡线，压过节点就喧宾夺主了 */
+const MIND_EDGE_ALPHA = 0.6;
+
+/**
+ * 画板上的脑图（`2.2.0` 批 4）。
+ *
+ * ── 与屏幕上那套的关系 ───────────────────────────────────────
+ *
+ * **几何全部复用**（布局 `layoutMind`、连线路径 `edgePathOf` 给的 SVG 路径字符串、
+ * 配色 `mindPaletteOf` 给的十六进制），**观感这一层自己再写一遍** ——
+ * canvas 读不到 DOM 样式，与 `drawCards` 是同一条纪律。
+ *
+ * ★ 刻意**不画**的：折叠手柄圆圈、`+N` 角标、图片附件的**缩放把手**、
+ *   备注里 Markdown 的**排版**（导出按纯文本折行）。它们是"界面上的操作入口"
+ *   —— 这一条写在文档里，免得被当成漏画。
+ * ★ 反过来，**节点内容一律照画**（`b75` / `b76` 起）：标题带、备注块（折行与布局估算
+ *   同一份口径）、**图片附件**（预加载到真图就 `contain` 画出来，否则一块底纹）、
+ *   完成态的删除线、非图片附件那一行 `📎 文件名`。它们是"内容"，缺了就与原脑图对不上
+ *   （用户 2026-09-22 报的"只有节点标题，没有节点内容"说的正是这里）。
+ * ★ 四层及以上**不画盒子**（`MIND_DEEP_DEPTH`）：与画布同一条观感口径（`D3`）；
+ *   但它们的**文字与备注照旧画**（画布上只是配色变透明）。
+ */
+function drawMinds(
+  ctx: CanvasRenderingContext2D,
+  plans: readonly MindDrawPlan[],
+  tile: PngTile,
+  options: PngRenderOptions,
+): void {
+  const { palette } = options;
+  for (const plan of plans) {
+    // 整棵树都在这一块 tile 之外 ⇒ 跳过（分页导出时每块只画自己那一块）
+    if (!rectTouchesTile(tile, offsetRect(plan.layout.bounds, plan.dx, plan.dy))) continue;
+
+    ctx.save();
+    ctx.translate(plan.dx, plan.dy);
+    drawMindEdges(ctx, plan, palette);
+    // ★ 传 `options`（不是只传 `palette`）：节点上的**图片附件**要用那份预加载好的位图表
+    //   （`options.images`）—— 与图片卡走的是同一份
+    drawMindNodes(ctx, plan, tile, options);
+    ctx.restore();
+  }
+}
+
+/** 父子连线：**逐字复用**脑图那边算出来的路径字符串（`mind/layout/edges`） */
+function drawMindEdges(
+  ctx: CanvasRenderingContext2D,
+  plan: MindDrawPlan,
+  palette: PngPalette,
+): void {
+  const style = plan.file.view.edge ?? 'curve';
+  ctx.strokeStyle = palette.mutedText;
+  ctx.lineWidth = MIND_EDGE_WIDTH;
+  ctx.globalAlpha = MIND_EDGE_ALPHA;
+  const trunks = new Set<string>();
+  for (const node of plan.file.nodes) {
+    if (node.parentId === null) continue;
+    const parent = plan.layout.boxes.get(node.parentId);
+    const child = plan.layout.boxes.get(node.id);
+    if (!parent || !child) continue;
+    // 延长线（节点边缘 → 分支点）同一侧共用一条，与 `paintEdges` 同一个判据
+    const direction = childSideOf(parent, child);
+    const key = `${parent.id}:${direction}`;
+    if (!trunks.has(key)) {
+      trunks.add(key);
+      tracePath(ctx, edgeTrunkPathOf(parent, direction));
+      ctx.stroke();
+    }
+    tracePath(ctx, edgePathOf(parent, child, style));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/** 节点盒子 + 标题 + 内容块（深层只画文字 + 一条托底的线） */
+function drawMindNodes(
+  ctx: CanvasRenderingContext2D,
+  plan: MindDrawPlan,
+  tile: PngTile,
+  options: PngRenderOptions,
+): void {
+  const { palette } = options;
+  const nodes = new Map(plan.file.nodes.map((node) => [node.id, node]));
+  const doneBranch = dimmedByDoneAncestor(plan.file);
+  for (const [id, box] of plan.layout.boxes) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    if (!rectTouchesTile(tile, offsetRect(box, plan.dx, plan.dy))) continue;
+
+    const depth = box.depth;
+    const size = titleSizeOf(depth);
+    const deep = depth >= MIND_DEEP_DEPTH;
+    const colors = mindPaletteOf(node.style, {
+      depth,
+      // 主题色在 canvas 里没有 `var()` 可用 ⇒ 用画布那一层已经解析好的十六进制
+      resolveTheme: (color) => resolveColor(color, palette),
+    });
+    // 标题带高度 = **行高 + 上下内边距**（与样式表 / SVG 导出同一个公式），
+    // 且不超过盒子本身（矮节点上带子要收着画，不能铺出去）
+    const lineHeight = titleLineHeightFor(size);
+    const bandHeight = Math.min(box.height, lineHeight + MIND_BAND_PADDING_Y * 2);
+    const radius = Math.min(MIND_NODE_MAX_RADIUS, box.height / 2);
+
+    // ── 图片附件块（`2.2.0` 批 4 六）────────────────────────────
+    //
+    // ★ 位置与**画布的 DOM 顺序**一致：图片 → 标题带 → 内容块（`buildNodeElement`
+    //   就是 `appendChild(imageBlock)` 走在前面的）。于是"图片占盒子上面那一段、
+    //   标题带落在它下面"。
+    // ★ 高度取"盒子扣掉标题带"的那一截：估算就是按 `图片宽 × 比例 + 标题带`
+    //   给节点定高的（见 `estimateNodeSize` 的图片分支）。
+    const ref = firstRefOf(node);
+    const imageRef = ref?.kind === 'image' ? ref : null;
+    const imageHeight = imageRef
+      ? Math.max(0, box.height - (lineHeight + MIND_BAND_PADDING_Y * 2))
+      : 0;
+    const bandTop = imageRef ? box.y + imageHeight : box.y;
+
+    // 完成态（`N3-g`）：自己完成 = 整块略淡 + 标题一条删除线；祖先完成 = 整块更淡。
+    // ★ 与画布 / SVG 导出同一组数（0.75 / 0.5），从前 PNG 这边**完全没画**。
+    const done = node.done === true;
+    const opacity = done ? 0.75 : doneBranch.has(node.id) ? 0.5 : 1;
+    if (opacity < 1) ctx.globalAlpha = opacity;
+
+    if (!deep) {
+      ctx.fillStyle = colors.body;
+      roundedRect(ctx, box.x, box.y, box.width, box.height, radius);
+      ctx.fill();
+
+      // 图片块：有真图就画（`contain`，不拉伸），拿不到就留一块底纹 ——
+      // 都不画的话这一块会空着，而画布上那里是有内容的
+      if (imageRef && imageHeight > 1) {
+        const source = options.images?.get(imageRef.path) ?? null;
+        const drawn = source
+          ? drawMindNodeImage(
+              ctx,
+              source,
+              { x: box.x, y: box.y, width: box.width, height: imageHeight },
+              MIND_IMAGE_RADIUS,
+            )
+          : null;
+        if (!drawn) {
+          ctx.fillStyle = palette.pattern;
+          roundedRect(ctx, box.x, box.y, box.width, imageHeight, MIND_IMAGE_RADIUS);
+          ctx.fill();
+        }
+      }
+
+      ctx.fillStyle = colors.title;
+      // ★ 带子**铺满整张卡**（没有内容块的节点）时直接用圆角矩形：只圆上面两个角的话，
+      //   底下会露出**两个直角** —— 看上去像"卡片底下贴了一小块方纸"（SVG 那边修过同一处，
+      //   PNG 这边当时漏了）。差 2px 以内算铺满：节点高度本来就是估出来的。
+      if (bandHeight >= box.height - imageHeight - 2) {
+        roundedRect(ctx, box.x, bandTop, box.width, box.height - imageHeight, radius);
+      } else {
+        topRoundedRect(ctx, box.x, bandTop, box.width, bandHeight, radius);
+      }
+      ctx.fill();
+    }
+
+    // ★ 粗细取 **700**：样式表给的是 `var(--font-bold, 700)`，从前这里写 600 ——
+    //   中心主题在导出图里比画布上细一档（同一批观感 bug 里的一处）。
+    ctx.font = `${titleBoldOf(depth) ? '700 ' : '400 '}${size}px ${palette.fontFamily}`;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = deep ? palette.cardText : colors.titleInk;
+    // ★ 与画布**同一条排版**：左对齐、从标题带左边内边距处起笔、垂直居中于标题带，
+    //   超出"一行 29 个显示单位"就在节点内换行（`wrapNodeTitle` 与布局估算是同一份
+    //   口径 ⇒ 盒子留的行数就是这里画的行数）。
+    // ★ 仍然**不截断**（不画省略号）：节点宽度是估出来的，短标题会落在最小宽度上 ——
+    //   截断成"中…"是导出独有的错误，比"文字略微探出盒子"糟得多。
+    const lines = wrapNodeTitle(node.text);
+    const textLeft = box.x + MIND_BAND_PADDING_X;
+    lines.forEach((line, index) => {
+      if (line.length === 0) return;
+      ctx.textAlign = 'left';
+      ctx.fillText(line, textLeft, bandTop + MIND_BAND_PADDING_Y + (index + 0.5) * lineHeight);
+    });
+
+    // 标题下的**删除线**（完成态）：与 SVG 导出同一条，宽度按估出来的字宽
+    if (done) {
+      const width = node.text.length * size * MIND_CHAR_WIDTH_RATIO;
+      ctx.strokeStyle = deep ? palette.cardText : colors.titleInk;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(textLeft, bandTop + MIND_BAND_PADDING_Y + lineHeight / 2);
+      ctx.lineTo(textLeft + width, bandTop + MIND_BAND_PADDING_Y + lineHeight / 2);
+      ctx.stroke();
+    }
+
+    // ── 内容块（备注）─────────────────────────────────────────
+    //
+    // ★ 从前**一条都不画**：盒子的高度里算了它（估算会为备注留出若干行），画面上却是
+    //   一个空盒子 ⇒ 用户报的"绘制尺寸不是很还原，一些换行没处理"。
+    // ★ 行怎么折、折几行，问的是**与估算同一个** `wrapNodeNote`（同一把尺子算出来的
+    //   行数才装得进盒子里）。
+    // ★ 四层及以上的节点**也画**（画布上只是配色变透明，正文照旧读得到）。
+    // ★ 有图片附件的节点不画备注：估算那一支是按"图片 + 标题带"给的高（见 `measure.ts`），
+    //   再往上摞备注会溢出节点。
+    const note = node.note.trim();
+    if (note.length > 0 && imageRef === null) {
+      const available = Math.max(24, box.width - MIND_BAND_PADDING_X * 2);
+      const units = Math.max(4, Math.floor(available / Math.max(1, size * MIND_CHAR_WIDTH_RATIO)));
+      ctx.font = `400 ${MIND_BODY_FONT_SIZE}px ${palette.fontFamily}`;
+      ctx.fillStyle = deep ? palette.cardText : colors.bodyInk;
+      ctx.textAlign = 'left';
+      wrapNodeNote(note, units).forEach((line, index) => {
+        if (line.length === 0) return;
+        ctx.fillText(
+          line,
+          textLeft,
+          bandTop + bandHeight + MIND_NODE_INNER_GAP + (index + 0.5) * MIND_BODY_LINE_HEIGHT,
+        );
+      });
+    }
+
+    // 附件那一行：图片附件**不给**（它自己就是图上那一块，画布上也不给它回形针），
+    // 其余附件写一行"📎 文件名"贴在节点底部
+    if (ref && imageRef === null) {
+      ctx.font = `400 ${MIND_REF_FONT_SIZE}px ${palette.fontFamily}`;
+      ctx.globalAlpha = Math.min(ctx.globalAlpha, 0.75);
+      ctx.fillStyle = deep ? palette.cardText : colors.bodyInk;
+      ctx.textAlign = 'left';
+      ctx.fillText(
+        `📎 ${refLabelOf(ref.path)}`,
+        textLeft,
+        box.y + box.height - MIND_BAND_PADDING_Y,
+      );
+    }
+
+    if (deep) {
+      // 四层及以上：不画盒子，只留一条托底的线（`D3`）
+      ctx.strokeStyle = palette.pattern;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.moveTo(box.x, box.y + box.height);
+      ctx.lineTo(box.x + box.width, box.y + box.height);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+/**
+ * 把**脑图那边给的 SVG 路径字符串**画进 canvas。
+ *
+ * ★ 为什么不在这边自己算曲线：连线的几何（分支点、四种线型的控制点）很容易
+ *   在"左边那一侧方向反了"这类地方写错，而它已经有一份**被单测钉住**的实现
+ *   （`mind/layout/edges`，给的是 `d` 字符串）。解析这几条命令的比重写一份几何便宜得多，
+ *   而且**永不漂**：屏幕与导出画的是同一串数。
+ * ★ 只认这四个命令（`M/L/C/Q`，绝对坐标）—— 那一份实现只发这四种。
+ */
+function tracePath(ctx: CanvasRenderingContext2D, d: string): void {
+  ctx.beginPath();
+  const tokens = d.match(/[MLCQZmlcqz]|-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) ?? [];
+  let index = 0;
+  const num = (): number => Number(tokens[index++]);
+  while (index < tokens.length) {
+    const command = (tokens[index++] ?? '').toUpperCase();
+    if (command === 'M') ctx.moveTo(num(), num());
+    else if (command === 'L') ctx.lineTo(num(), num());
+    else if (command === 'C') ctx.bezierCurveTo(num(), num(), num(), num(), num(), num());
+    else if (command === 'Q') ctx.quadraticCurveTo(num(), num(), num(), num());
+    else if (command === 'Z') ctx.closePath();
+    else return; // 认不出的命令：宁可少画一条，也不要画出一条乱线
+  }
+}
+
+/** 世界矩形与这一块 tile 相交吗（`null` = 没有内容 ⇒ 算相交，让它自己判） */
+function rectTouchesTile(tile: PngTile, rect: Rect | null): boolean {
+  if (!rect) return true;
+  return !(
+    rect.x > tile.x + tile.width ||
+    rect.x + rect.width < tile.x ||
+    rect.y > tile.y + tile.height ||
+    rect.y + rect.height < tile.y
+  );
+}
+
+function offsetRect(rect: Rect | null, dx: number, dy: number): Rect | null {
+  if (!rect) return null;
+  return { x: rect.x + dx, y: rect.y + dy, width: rect.width, height: rect.height };
+}
+
 function drawEdges(
   ctx: CanvasRenderingContext2D,
   board: BoardFile,
@@ -833,6 +1278,13 @@ function drawEdges(
   }
   // ★ 分栏也是端点（`O21`）：与画布、SVG 导出同一份"谁在表里谁就是端点"的判据
   for (const column of board.columns) rects.set(column.id, rectOfColumn(column));
+  // ★ **脑图的节点也是端点**（`2.2.0` 批 3 / 批 4）：键与画布上完全一样
+  //   （`nodeEndpointKey` = `脑图id/节点id`）—— 少这一笔，指着节点的线在导出图里
+  //   会**整条消失**（数据里有、画布上有、导出里没有，最难自查的一种）。
+  //   与取景同一份底稿（`mindsOfBoard`），所以"框留够了、线头却在框外"不会发生
+  for (const mind of mindsOfBoard(board, options.mindModels)) {
+    for (const [key, rect] of mind.nodes) rects.set(key, rect);
+  }
   const lookup = (cardId: string): Rect | null => rects.get(cardId) ?? null;
   // 锚点跟着卡片的旋转走（T7.06）：不喂角度的话，连到转过的卡片上的线
   // 会插进卡片内部或者浮在它外面 —— 导出图上一眼就能看出来
@@ -1274,6 +1726,37 @@ function imageSize(image: CanvasImageSource): { width: number; height: number } 
   const height = (image as { height?: number }).height ?? 0;
   if (width <= 0 || height <= 0) return null;
   return { width, height };
+}
+
+/**
+ * 画一块**节点上的图片附件**（`2.2.0` 批 4 六）。
+ *
+ * ★ `contain`（等比缩放、居中、不拉伸）：与画布上 `.nestboard-mind-image` 的
+ *   `object-fit: contain` 同一条 —— 拉变形是"导出与原图不是一回事"里最刺眼的一种。
+ * ★ 越界的部分裁掉（`clip`）：估算给这块留的高度是按"图片宽 × 0.75"这个**兜底比例**
+ *   定的（真实比例要等图加载完才知道），比例不合时图的另一边会探出去。
+ */
+function drawMindNodeImage(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  rect: Rect,
+  radius: number,
+): Rect | null {
+  const size = imageSize(image);
+  if (!size || rect.width <= 1 || rect.height <= 1) return null;
+
+  const scale = Math.min(rect.width / size.width, rect.height / size.height);
+  const width = size.width * scale;
+  const height = size.height * scale;
+  const x = rect.x + (rect.width - width) / 2;
+  const y = rect.y + (rect.height - height) / 2;
+
+  ctx.save();
+  roundedRect(ctx, rect.x, rect.y, rect.width, rect.height, radius);
+  ctx.clip();
+  ctx.drawImage(image, x, y, width, height);
+  ctx.restore();
+  return { x, y, width, height };
 }
 
 /** 主题色 / 自定义 HEX → 实际色值（非法值回落到边框色，绝不产出坏 CSS） */

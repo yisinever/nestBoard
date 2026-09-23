@@ -27,6 +27,10 @@
  *
  * ★ 平移缩放**只改世界容器的 transform**；节点写世界坐标、一直不动（`02 §8.2` 的纪律）。
  * ★ 尺寸**量出来**而不是写死：布局先按估算摆一遍，量到真尺寸之后再摆一遍。
+ *   ★ 量的是**内容真宽**（`measureNodeSizes` 会把"同层等宽"那条下限先摘掉再量），
+ *     而那一遍排布走 `layoutMindEqualLevels` + `intrinsicSizeOf`：下限必须由
+ *     **内容**算出来 —— 拿"已经被自己撑开的宽度"算是自证，下限会在第二遍里消失
+ *     （用户 2026-09-22 报的"超过第二级同层就不齐"就是这一条）。
  */
 
 // `TFile` 是**值**导入（`openRef` 里要 `instanceof TFile` 判"引用还在不在"）
@@ -81,7 +85,6 @@ import type {
   MindStructure,
 } from '../model/schema';
 import { normalizeLinkBend } from '../model/schema';
-import { titleSizeOf } from '../model/palette';
 import { restoreMindContent, serializeMindContent } from '../model/history';
 import {
   addChild,
@@ -90,10 +93,9 @@ import {
   depthOf,
   enterAtEnd,
   hasChildren,
-  horizontalTargetId,
+  neighborByArrow,
   moveNode,
   moveNodes,
-  nextVisibleId,
   nodeById,
   promote,
   removeNodes,
@@ -112,16 +114,20 @@ import {
   visibleIds,
 } from '../model/ops';
 import {
+  clipboardLabelOf,
   copyForest,
   duplicateNodes,
   getMindClipboard,
-  mindClipboardHtml,
-  mindClipboardText,
+  // ★ 标题编辑器那一处只认 `text/html` 里的标记（**不**退回内存剪贴板）：那样会把
+  //   "普通文字粘进标题"也抢走 —— 与 `⌘V` 那条路刻意不同，见那里的注释
   parseMindClipboardHtml,
+  parseOutlineText,
   pasteForest,
   setMindClipboard,
   type MindClipboard,
+  type OutlineItem,
 } from '../model/clipboard';
+import { nodeClipboardOf, readMindClipboard, writeMindClipboard } from './systemClipboard';
 import {
   MIND_IMAGE_DEFAULT_WIDTH,
   MIND_IMAGE_MAX_WIDTH,
@@ -131,10 +137,10 @@ import {
   refLabelOf,
   sameRef,
 } from '../model/refs';
-import { MIND_TITLE_FONT_SIZE, MIND_TITLE_MAX_WIDTH, estimateNodeSize } from '../layout/measure';
+import { estimateNodeSizeByDepth } from '../layout/measure';
 import {
   directionForStructure,
-  layoutMind,
+  layoutMindEqualLevels,
   type MindLayout,
   type MindLayoutOptions,
   type NodeBox,
@@ -152,6 +158,7 @@ import {
   buildLinkPreviewLayer,
   buildNodeElement,
   buildTitleEditor,
+  measureNodeSizes,
   paintEdges,
   paintLinkPreview,
   paintLinks,
@@ -574,6 +581,13 @@ export class MindView extends FileView {
    *   用裸数字会出现"换了一份图，滚动条停在上一次的深度"。
    */
   private readonly outlineScroll = new Map<string, number>();
+  /**
+   * 大纲里**正文展开着**的那几行（`O2`，用户 2026-09-21）。
+   *
+   * ★ 与"滚到哪"同一级：**纯视图状态** —— 不进模型、不进撤销栈、不落盘
+   *   （"这一刻我想把哪几段正文看全"属于看的人，不属于这份脑图）。
+   */
+  private readonly expandedNotes = new Set<string>();
   /** 右上角那个「大纲 / 树」切换按钮（挂在视图容器上，见 `onOpen` 里的说明） */
   private outlineToggleEl: HTMLElement | null = null;
   /**
@@ -1030,11 +1044,12 @@ export class MindView extends FileView {
     if (!mind) return;
     const payload = copyForest(mind, this.selectedIds);
     if (!payload) return;
-    setMindClipboard(payload);
-    // ★★ 同时写一份**系统剪贴板**（用户 2026-09-17）：`text/plain` 给"人读的文字"、
+    // ★★ 写内存 + 写一份**系统剪贴板**（用户 2026-09-17）：`text/plain` 给"人读的文字"、
     //   `text/html` 里带我们自己的载荷 ⇒ 粘贴时按**格式**认亲（幕布 / 飞书就是这么做的）。
     //   ★ 写失败（没焦点 / 系统拒绝）不影响用：内存剪贴板照旧有效。
-    void this.writeSystemClipboard(payload);
+    //   ★ 这一对动作现在**只有一处实现**（`mind/view/systemClipboard`）—— 白板那边
+    //     复制节点也走它（`2.2.0` 收尾）。
+    void writeMindClipboard(payload);
     if (payload.roots.length === 1) {
       new Notice(t('notice.mindCopied', { text: clipboardLabelOf(payload) }));
       return;
@@ -1056,19 +1071,80 @@ export class MindView extends FileView {
    *
    * ★ 粘的位置是"子级"而不是"兄弟级"：脑图里"粘到某一支下面"是最常见的意思，
    *   而粘成兄弟需要先想清楚"和谁同级"，反而绕。
+   * ★★ **先问系统剪贴板，再退回进程内那一份**（用户 2026-09-21 报的 bug：复制过脑图节点之后，
+   *   再从别处复制纯文本，粘出来的**还是那些节点** —— 因为内存剪贴板**永不失效**，而它从前排在前面）。
+   *   现在的判据是"系统剪贴板里到底是什么"：
+   *   ① `text/html` 带自家标记 ⇒ 当**节点**粘（`parseMindClipboardHtml` 认亲）；
+   *   ② 有纯文本 ⇒ 当**文字**粘（认得出 Markdown 列表就建层级，见 `parseOutlineText`）；
+   *   ③ 读不到 / 里面是空的（没权限、剪贴板被别的程序占着）⇒ **才**退回内存剪贴板 ——
+   *      跨窗口粘贴（两块脑图分屏）仍靠它兜底。
    */
-  pasteClipboard(): void {
+  async pasteClipboard(): Promise<void> {
     const mind = this.mind;
     if (!mind) return;
+    const parentId = this.selectedId ?? mind.rootId;
+
+    const carried = await readMindClipboard();
+    if (carried !== null) {
+      // ★ 认亲只有一处实现（`nodeClipboardOf`）：带标记的 `text/html` ⇒ 就是节点载荷；
+      //   只拿到纯文本时再判"这段字是不是我们自己写出去的那一段"——不是就说明用户已经
+      //   复制了别的东西 ⇒ 按**文字**粘（那是另一条路）
+      const payload = nodeClipboardOf(carried.html, carried.text);
+      if (payload) {
+        this.pastePayload(payload, parentId);
+        return;
+      }
+      if (carried.text.trim().length > 0) {
+        this.pasteOutlineText(carried.text, parentId);
+        return;
+      }
+    }
+
     const payload = getMindClipboard();
-    if (!payload) {
-      // ★ 节点剪贴板是空的 ⇒ 试试**系统剪贴板里的文字**（"通用 ⌘V"：
-      //   从别处复制一段字，选中一个节点按 `⌘V` ⇒ 每行变成一个子节点）。
-      //   两条路都不成时，`pasteTextClipboard` 里那句提示会把话说清楚。
-      void this.pasteTextClipboard();
+    if (payload) {
+      this.pastePayload(payload, parentId);
       return;
     }
-    this.pastePayload(payload, this.selectedId ?? mind.rootId);
+    new Notice(t('notice.mindPasteEmpty'));
+  }
+
+  /**
+   * 把一段**外部文字**贴成节点（`⌘V` 的"通用"那一档）。
+   *
+   * ★ 从前一律"一行一个节点"；用户 2026-09-21 要求**认得出 Markdown 列表就建层级**
+   *   （`- ` + 缩进 ⇒ 父子关系）。解析规则全在 `parseOutlineText` 里（纯函数、可单测）。
+   * ★ 落点与"粘一支子树"同一套（当前选中节点下面），用户不必学第二套。
+   * ★ 解析不出东西时给一句明确提示，不能"按了没反应"。
+   */
+  private pasteOutlineText(text: string, parentId: string): void {
+    const items = parseOutlineText(text);
+    if (items.length === 0) {
+      new Notice(t('notice.mindPasteEmpty'));
+      return;
+    }
+    const created: string[] = [];
+    const applied = this.edit(t('history.mindPaste'), (current) => {
+      created.length = 0;
+      for (const item of items) {
+        const id = this.insertOutlineItem(current, parentId, item);
+        if (id) created.push(id);
+      }
+      return created.length > 0 ? created : null;
+    });
+    if (!applied || created.length === 0) return;
+    // 粘出来的**一起选中**（与"粘一支子树"同一手感：接着就能拖走 / 再复制）
+    this.selectedIds = new Set(created);
+    this.selectedId = created[0] ?? null;
+    this.syncSelection();
+  }
+
+  /** 递归地把一条（可能带子级的）外部文字插进模型，返回新节点 id */
+  private insertOutlineItem(mind: MindFile, parentId: string, item: OutlineItem): string | null {
+    const id = addChild(mind, parentId);
+    if (!id) return null;
+    setText(mind, id, item.text);
+    for (const child of item.children) this.insertOutlineItem(mind, id, child);
+    return id;
   }
 
   /**
@@ -1088,27 +1164,6 @@ export class MindView extends FileView {
     this.selectedIds = new Set(created);
     this.selectedId = created[0] ?? null;
     this.syncSelection();
-  }
-
-  /**
-   * 复制时**同时**写系统剪贴板（`text/plain` + `text/html`）。
-   *
-   * ★ `text/plain` = 缩进的可读文字（粘到笔记 / 别处得到的是"像样的文字"）；
-   *   `text/html` = 真正的嵌套列表 + 我们自己的载荷（粘贴时按它认亲）。
-   * ★ 失败的两种常见情形都不致命：没有用户手势 / 系统剪贴板被别的程序占着
-   *   —— 内存剪贴板仍然是完整的，`⌘V` 照旧能用。
-   */
-  private async writeSystemClipboard(payload: MindClipboard): Promise<void> {
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': new Blob([mindClipboardText(payload)], { type: 'text/plain' }),
-          'text/html': new Blob([mindClipboardHtml(payload)], { type: 'text/html' }),
-        }),
-      ]);
-    } catch {
-      // 写不进去就算了：内存那一份才是 `⌘V` 的主路径
-    }
   }
 
   /**
@@ -1583,45 +1638,20 @@ export class MindView extends FileView {
   /**
    * 方向键：箭头**跟着轴走**（`08 §1.2`）。
    *
-   * * 横向布局（向右 / 向左 / 八爪鱼）：**上下**走可见顺序（兄弟），**左右**往父 / 孩子走；
-   * * **纵向布局**（组织结构图）：两级关系长在 **y** 上、兄弟长在 **x** 上 ⇒ **上下与左右互换** ——
-   *   不换的话按"下"会跑到兄弟那儿，按"右"什么都不发生，用户只会觉得方向键坏了。
+   * ★ 落点的判据全在 `neighborByArrow` 里（纯函数、与白板那一侧共用）—— 这里只负责
+   *   "把布局里的 `side` 递进去"和"选中它"。从前这套判断写在这里，白板那边要用时
+   *   就得抄一份，而"同一个方向键在两个宿主上意思不一样"只在其中一边复现（`2.2.0` 收尾）。
    */
   private moveSelection(direction: 'up' | 'down' | 'left' | 'right'): void {
     const mind = this.mind;
     const id = this.selectedId;
     if (!mind || !id) return;
 
-    const vertical = this.isVerticalLayout();
-    const siblingStep: 1 | -1 | null = vertical
-      ? direction === 'right'
-        ? 1
-        : direction === 'left'
-          ? -1
-          : null
-      : direction === 'down'
-        ? 1
-        : direction === 'up'
-          ? -1
-          : null;
-
-    if (siblingStep !== null) {
-      const next = nextVisibleId(mind, id, siblingStep);
-      if (next) this.selectNode(next);
-      return;
-    }
-
-    // `+1` = 朝孩子那一侧，`-1` = 朝父节点那一侧（`side` 告诉它孩子长在哪边）
-    const side = this.layout?.boxes.get(id)?.side ?? 0;
-    const along: 1 | -1 = vertical
-      ? direction === 'down'
-        ? 1
-        : -1
-      : direction === 'right'
-        ? 1
-        : -1;
-    const target = horizontalTargetId(mind, id, along, side);
-    if (target) this.selectNode(target);
+    const next = neighborByArrow(mind, id, direction, {
+      vertical: this.isVerticalLayout(),
+      side: this.layout?.boxes.get(id)?.side ?? 0,
+    });
+    if (next) this.selectNode(next);
   }
 
   /** 现在这份布局是纵向的吗（方向键与手柄方向都要问这一句） */
@@ -2269,7 +2299,7 @@ export class MindView extends FileView {
     const path = this.file?.path;
     if (!mind || !path) return;
 
-    const layout = this.layout ?? layoutMind(mind, this.layoutOptions());
+    const layout = this.layout ?? this.layoutOf(mind);
     const { base } = splitName(path);
     const folder = path.includes('/') ? `${path.slice(0, path.lastIndexOf('/'))}/` : '';
 
@@ -2496,7 +2526,7 @@ export class MindView extends FileView {
         .setTitle(t('menu.mindPaste'))
         .setIcon('clipboard-paste')
         .setDisabled(!writable || clipboard === null)
-        .onClick(() => this.pasteClipboard()),
+        .onClick(() => void this.pasteClipboard()),
     );
 
     menu.addSeparator();
@@ -2603,7 +2633,10 @@ export class MindView extends FileView {
    * ★ 门槛必须硬，否则会抢别人的键：
    *   ① 只有这几个组合键；② 正在改标题 / 改内容 / 焦点在输入框里时**一律放行**
    *   （那些键属于输入框 —— 包括它自己的撤销）；
-   *   ③ **本视图必须是当前活动的那个 leaf**（分屏另一半在看别的文档时不许抢）。
+   *   ③ **本视图必须是当前活动的那个 leaf**（分屏另一半在看别的文档时不许抢）；
+   *   ④ **焦点不许落在"别人的输入框"里**（用户 2026-09-21 报的 bug：打开脑图后去编辑别的文档，
+   *      脑图焦点已失去，`⌘Z` 仍被它吃掉）。④ 比 ③ 更细：③ 只说明"活动视图是脑图"，
+   *      而"活动视图是脑图"并不等于"用户正在脑图里操作" —— 见 `ownsKeyboardFocus`。
    */
   private readonly onWindowKeyDown = (event: KeyboardEvent): void => {
     if (!event.metaKey && !event.ctrlKey) return;
@@ -2620,6 +2653,7 @@ export class MindView extends FileView {
       (event.key === ']' || event.key === '[') &&
       this.mind !== null &&
       this.app.workspace.getActiveViewOfType(View) === this &&
+      this.ownsKeyboardFocus() &&
       !this.isEditableTarget(event.target)
     ) {
       event.preventDefault();
@@ -2642,6 +2676,10 @@ export class MindView extends FileView {
     if (!this.mind) return;
     if (this.isEditableTarget(event.target)) return;
     if (this.app.workspace.getActiveViewOfType(View) !== this) return;
+    // ★ 焦点在**别人的可编辑元素**里时一律放行（见 `ownsKeyboardFocus`）——
+    //   用户 2026-09-21 报的"打开脑图后去编辑别的文档，脑图焦点已失去，`⌘Z` 仍被劫持"
+    //   就出在这一处：从前只判"活动视图是不是脑图"，而那一条在分屏 / 切标签时并不等于"焦点在脑图"
+    if (!this.ownsKeyboardFocus()) return;
 
     // ★★ 选中的是**文字**（大纲里用鼠标划过一段）⇒ 复制 / 剪切**让给浏览器**：
     //   用户要的是"把这段字复制走"，而不是"把这一行当节点复制走"
@@ -2654,7 +2692,7 @@ export class MindView extends FileView {
     event.stopPropagation();
     if (key === 'c') this.copySelection();
     else if (key === 'x') this.cutSelection();
-    else if (key === 'v') this.pasteClipboard();
+    else if (key === 'v') void this.pasteClipboard();
     // `⌘A` 也归这里：它同样与 Obsidian 的"全选"压在同一组键上（P3-c）
     else if (key === 'a') this.selectAllNodes();
     // `⌘Z` / `⌘⇧Z`：撤销 / 重做
@@ -2690,6 +2728,28 @@ export class MindView extends FileView {
   }
 
   /**
+   * 现在这一下按键该不该归脑图管。
+   *
+   * ★ 与 `isEditableTarget(event.target)` 分工不同：那个看"**事件目标**是不是输入框"，
+   *   这里看"**焦点现在在谁的地盘**" —— 只有后者能挡住用户报的那个场景。
+   * ★ 判据（刻意简单，别把"打开视图就能按"那条老约定弄坏）：
+   *   ① 焦点落在本视图容器内 ⇒ 是我们的；
+   *   ② 焦点落在**别人的可编辑元素**里（`md` 编辑器的 `contenteditable`、搜索框、属性面板的
+   *      输入框）⇒ 一律放行给 Obsidian；
+   *   ③ 其余情况（刚点过本视图的标签头、点过画布空白后 `activeElement` 是 `body`、
+   *      或焦点在侧栏的按钮上）⇒ **仍归我们** —— 这与改动前一致，
+   *      否则"打开脑图直接按 `⌘V`"会重新变成没反应（那是 `N3-i` 特意修过的事）。
+   */
+  private ownsKeyboardFocus(): boolean {
+    const active = this.containerEl.ownerDocument.activeElement;
+    if (active === null) return true;
+    if (this.containerEl.contains(active)) return true;
+    if (active instanceof HTMLElement && active.isContentEditable) return false;
+    const tag = active.tagName;
+    return tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT';
+  }
+
+  /**
    * 现在有没有**选中的文字**、而且选区落在本视图里（`⌘C` / `⌘X` 让路的判据）。
    *
    * ★ 大纲里的行是**普通文字**（不是输入框）：用户用鼠标划过一段字之后按 `⌘C`，
@@ -2703,52 +2763,6 @@ export class MindView extends FileView {
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
     const node = selection.anchorNode;
     return node !== null && this.contentEl.contains(node);
-  }
-
-  /**
-   * 把**系统剪贴板里的文字**贴成节点（`⌘V` 的"通用"那一档）。
-   *
-   * ★ 一行 = 一个节点，贴在**当前选中节点**下面（没选中就贴到中心主题下）——
-   *   与"粘一支子树"同一套落点规则，用户不必学第二套。
-   * ★ 空行丢掉（不然满屏空节点）；整段只有一行就只建一个节点。
-   * ★ 读剪贴板是**异步**的，且可能没权限 / 剪贴板里不是文字 ⇒ 读不到就给一句明确提示，
-   *   不能"按了没反应"。
-   */
-  private async pasteTextClipboard(): Promise<void> {
-    const mind = this.mind;
-    if (!mind) return;
-
-    let text = '';
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      text = '';
-    }
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    if (lines.length === 0) {
-      new Notice(t('notice.mindPasteEmpty'));
-      return;
-    }
-
-    const parentId = this.selectedId ?? mind.rootId;
-    const created = this.edit(t('history.mindPaste'), (current) => {
-      const ids: string[] = [];
-      for (const line of lines) {
-        const id = addChild(current, parentId);
-        if (!id) break;
-        setText(current, id, line);
-        ids.push(id);
-      }
-      return ids;
-    });
-    if (!created || created.length === 0) return;
-    // 粘出来的**一起选中**（与"粘一支子树"同一手感：接着就能拖走 / 再复制）
-    this.selectedIds = new Set(created);
-    this.selectedId = created[0] ?? null;
-    this.syncSelection();
   }
 
   /** 同上：`Element` 而不是 `HTMLElement` —— 点在回形针的图标上时目标就是个 SVG 元素 */
@@ -3120,7 +3134,14 @@ export class MindView extends FileView {
    */
   private outlineRows(): OutlineRow[] {
     const mind = this.mind;
-    return mind ? outlineRowsOf(mind, this.focusId ?? undefined) : [];
+    if (!mind) return [];
+    const rows = outlineRowsOf(mind, this.focusId ?? undefined);
+    // ★ 正文的展开态由**视图**贴上去（`O2`）：`outlineRowsOf` 是纯函数，
+    //   不该认识"这一刻谁把哪一段展开了"（那是视图状态，见 `expandedNotes`）
+    if (this.expandedNotes.size === 0) return rows;
+    return rows.map((row) =>
+      this.expandedNotes.has(row.id) ? { ...row, noteExpanded: true } : row,
+    );
   }
 
   /**
@@ -3394,6 +3415,12 @@ export class MindView extends FileView {
       {
         // 折叠写的是**模型**（`node.collapsed`）⇒ 重开还在，且与导图里那个手柄是同一件事
         onToggle: (id) => this.toggleCollapseOf(id),
+        // 正文的展开 / 收起（`O2`）：**纯视图状态** ⇒ 只重画列表，不碰模型、不进撤销栈
+        onToggleNote: (id) => {
+          if (this.expandedNotes.has(id)) this.expandedNotes.delete(id);
+          else this.expandedNotes.add(id);
+          this.renderOutline();
+        },
         // ★ 点这一行的**文字** = **直接进编辑**（用户 2026-09-17 的第④条：
         //   "任意点击位置直接出现光标，类似在文本框里可以直接编辑这一行文字"）——
         //   不必先选中再按 `F2`，更不必双击
@@ -3891,6 +3918,9 @@ export class MindView extends FileView {
       case 'navigate':
         this.moveOutlineSelection(action.delta, action.extend);
         return true;
+      case 'jump':
+        this.jumpOutlineSelection(action.to);
+        return true;
       case 'structure':
         if (action.to === 'sibling') this.endEnterOnSelection();
         else if (action.to === 'child') this.addChildToSelection();
@@ -3983,6 +4013,42 @@ export class MindView extends FileView {
   }
 
   /**
+   * `←` / `→`：在**父 / 子**之间跳（`O3`，用户 2026-09-21："左右：在父子节点间切换"）。
+   *
+   * ★ 父 = 往上找**第一个层级更浅的**那一行：大纲里的父子关系就是靠缩进表达的，
+   *   紧邻的上一行与更外层的祖先都满足"更浅"，而在用户眼里两种都是"往上一层"。
+   * ★ 子 = 紧跟着的下一行**且层级更深**：可见行序天然是前序遍历，所以"下一个且更深"
+   *   就是第一个孩子。折叠起来的孩子根本不在行列表里 ⇒ 收起的那一支自动跳不进去。
+   * ★ 跳不动时（已经在最外层 / 是叶子）**什么都不做** —— 原地不动比"跳到别处"好得多。
+   */
+  private jumpOutlineSelection(to: 'parent' | 'child'): void {
+    const rows = this.outlineRows();
+    const current = this.selectedId;
+    if (current === null || rows.length === 0) return;
+    const index = rows.findIndex((row) => row.id === current);
+    if (index < 0) return;
+    const depth = rows[index]?.depth ?? 0;
+
+    let target: OutlineRow | undefined;
+    if (to === 'child') {
+      const next = rows[index + 1];
+      if (next && next.depth > depth) target = next;
+    } else {
+      for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        const row = rows[cursor];
+        if (row && row.depth < depth) {
+          target = row;
+          break;
+        }
+      }
+    }
+    if (!target) return;
+    // 与"上下走一行"同一套收尾：选中 + 把光标留在面板上（接着还能按方向键）
+    this.selectNode(target.id);
+    this.outlinePanel?.element.focus();
+  }
+
+  /**
    * 上下走一行（顺序 = **大纲里看得见的那些行**）。
    *
    * ★ 用 `outlineRowsOf` 而不是画布那份 `visibleIds`：后者**含悬浮节点**（它们在大纲里
@@ -3994,6 +4060,8 @@ export class MindView extends FileView {
     if (!mind) return;
     const rows = this.outlineRows();
     if (rows.length === 0) return;
+
+    // ── 下面几行属于 `O3`（`←`/`→` 跳父 / 子）用到的同一份行序 ──
 
     const current = this.selectedId;
     const index = current === null ? -1 : rows.findIndex((row) => row.id === current);
@@ -5463,9 +5531,22 @@ export class MindView extends FileView {
     //   进大纲之前那次排的结果还留着，切回来 `render()` 会重排一遍
     if (this.outlineMode) return;
     this.measureMounted();
-    const layout = layoutMind(mind, this.layoutOptions());
+    const layout = this.layoutOf(mind);
     this.paint(layout);
     this.layout = layout;
+  }
+
+  /**
+   * 排一次树 —— **唯一**的入口（渲染 / 重排 / 导出取景共用）。
+   *
+   * ★ 走的是 `layoutMindEqualLevels`（两遍）：同层等宽那一条**要落进几何** ——
+   *   节点元素靠 `min-width` 撑开，而连线、外接框、缩略图读的都是 `box.width`；
+   *   几何不跟着撑的话，连线会从被撑开的节点**里面**出来（差一个下限那么多）。
+   * ★ `layoutOptions()` 里给的 `intrinsicSizeOf`（内容真宽）是这件事的另一半：
+   *   少了它，第二遍会把上一轮自己撑开的宽度当成内容宽，下限当场消失（见那个选项的说明）。
+   */
+  private layoutOf(mind: MindFile): MindLayout {
+    return layoutMindEqualLevels(mind, this.layoutOptions());
   }
 
   /**
@@ -5477,9 +5558,13 @@ export class MindView extends FileView {
   private layoutOptions(): MindLayoutOptions {
     return {
       sizeOf: (node) => this.sizeOf(node),
+      // ★ 同层等宽的"这一层谁最宽"要用**内容真宽**算（`measureNodeSizes` 量出来的那一份）：
+      //   `sizeOf` 里可能含着上一轮自己撑开的下限，拿它算等于拿答案当条件 ——
+      //   下限会在第二遍里当场消失（用户 2026-09-22 报的"超过第二级就不齐了"）。
+      intrinsicSizeOf: (node) => this.sizeOf(node),
       direction: directionForStructure(this.structure),
       // 聚焦（`D1`）：树视图里"进入当前主题"= 把那一支当根重排（与大纲看到的是同一支）。
-      // ★ 三处 `layoutMind` 调用共用这一份口径（渲染 / 重排 / 初次挂载），
+      // ★ 四处排布调用共用这一份口径（渲染 / 重排 / 导出取景 / 初次挂载），
       //   只给其中一处传的话，会出现"刚进来是全树、动一下才变成聚焦那一支"。
       focusId: this.focusId ?? undefined,
     };
@@ -5562,7 +5647,7 @@ export class MindView extends FileView {
     // 整支总数：一次遍历算全表（手柄每次重画都要读，见字段上的说明）
     this.subtreeSizes = subtreeSizes(mind);
 
-    const first = layoutMind(mind, this.layoutOptions());
+    const first = this.layoutOf(mind);
     this.paint(first);
     this.layout = first;
 
@@ -5572,7 +5657,7 @@ export class MindView extends FileView {
       this.minimap?.syncContent();
       return;
     }
-    const refined = layoutMind(mind, this.layoutOptions());
+    const refined = this.layoutOf(mind);
     this.paint(refined);
     this.layout = refined;
     // 缩略图（`P2-c`）：内容与**尺寸**都在这一版里定了，地图到这儿再同步。
@@ -5592,12 +5677,10 @@ export class MindView extends FileView {
     const measured = this.measured.get(node.id);
     if (measured) return measured;
 
-    const size = titleSizeOf(this.depthOfNode(node));
-    return estimateNodeSize(node, {
-      fontSize: size,
-      titleLineHeight: Math.round(size * 1.35),
-      titleMaxWidth: Math.round(MIND_TITLE_MAX_WIDTH * (size / MIND_TITLE_FONT_SIZE)),
-    });
+    // ★ 估算这一档**只有一处实现**（`estimateNodeSizeByDepth`）：缩略图 / 导出 / 端点几何
+    //   走的也是它 —— 从前这里自己拼一套 `fontSize` / `titleLineHeight` / `titleMaxWidth`，
+    //   而导出那份用的是默认字号（14），同一棵树在两个地方被估成了两种大小
+    return estimateNodeSizeByDepth(node, this.depthOfNode(node));
   }
 
   /**
@@ -5973,10 +6056,15 @@ export class MindView extends FileView {
   }
 
   private measureMounted(): boolean {
+    // ★ 尺寸走共用的那一份量测（`measureNodeSizes`）：它读的是**内容真宽** ——
+    //   量宽度之前会先把同层下限摘掉。不摘的话量到的是**上一轮自己撑开**的宽度，
+    //   下面 `layoutOf` 算出来的"这一层最宽"永远是那个下限，下限当场消失、
+    //   节点又参差不齐（`sizeOf` / `intrinsicSizeOf` 也都在注释里引用了这一条）。
+    const sizes = measureNodeSizes(this.mounted);
     let changed = false;
-    for (const [id, el] of this.mounted) {
-      const size = { width: el.offsetWidth, height: el.offsetHeight };
-      if (size.width <= 0 || size.height <= 0) continue;
+    for (const [id, size] of sizes) {
+      // 量不到尺寸（还没上树 / 后台标签里 `offsetWidth` 是 0）就这一轮不记它
+      if (!(size.width > 0) || !(size.height > 0)) continue;
       const previous = this.measured.get(id);
       this.measured.set(id, size);
       if (!previous || previous.width !== size.width || previous.height !== size.height) {
@@ -6101,13 +6189,6 @@ const MIND_PNG_SCALE = 2;
 /** 夹到区间里（拉角与图片宽度的上下限共用） */
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-/** 剪贴板里那一支的名字（`Notice` 里那句"复制了什么"；空标题给一句占位） */
-function clipboardLabelOf(payload: MindClipboard): string {
-  const root = payload.nodes.find((node) => node.id === payload.roots[0]);
-  const text = root?.text.trim() ?? '';
-  return text.length > 0 ? text : t('mind.nodeTitle.empty');
 }
 
 /** 主题色编号 → CSS 变量名的后缀（Obsidian 的命名：`--color-red` / `--color-purple`） */

@@ -11,6 +11,17 @@ import { describe, expect, it } from 'vitest';
 import { RECENT_BOARDS_LIMIT } from '../../constants';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../../settings/settings';
 
+describe('normalizeSettings · 外观档（`F2`）', () => {
+  it('★ 缺席 / 手改坏的值一律留在**原版**（升级后观感一个字都不变）', () => {
+    expect(normalizeSettings({}).cardStyle).toBe('classic');
+    expect(normalizeSettings({ cardStyle: 'neumorph' }).cardStyle).toBe('neumorph');
+    expect(normalizeSettings({ cardStyle: '拟物' }).cardStyle).toBe('classic');
+    expect(normalizeSettings({ cardStyle: true }).cardStyle).toBe('classic');
+    // 默认值本身也是原版（这是 `§7` 的回归基线）
+    expect(DEFAULT_SETTINGS.cardStyle).toBe('classic');
+  });
+});
+
 describe('normalizeSettings', () => {
   it('从没存过设置时给出一份默认值', () => {
     expect(normalizeSettings(null)).toEqual(DEFAULT_SETTINGS);

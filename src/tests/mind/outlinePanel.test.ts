@@ -18,8 +18,13 @@ import { describe, expect, it } from 'vitest';
 import { createMindFile, createMindNode } from '../../mind/model/factories';
 import type { MindFile } from '../../mind/model/schema';
 import { createFakeDocument } from '../helpers/fakeDom';
-import type { OutlineHandlers } from '../../mind/view/outline';
-import { buildOutlinePanel, outlineRowsOf } from '../../mind/view/outline';
+import type { OutlineHandlers, OutlineRow } from '../../mind/view/outline';
+import {
+  OUTLINE_NOTE_FOLD_LINES,
+  buildOutlinePanel,
+  noteFoldNeeded,
+  outlineRowsOf,
+} from '../../mind/view/outline';
 
 /** 假节点的最小视图（只声明这一组用例用到的字段） */
 interface FakeEl {
@@ -65,7 +70,114 @@ const handlers: OutlineHandlers = {
   onEdit: () => undefined,
   onMenu: () => undefined,
   onCrumb: () => undefined,
+  // ★ 正文折展（`O2`）：接上它，长正文那枚「展开 / 收起」才会出现
+  //   （"不接就不建"，见下面那条用例）
+  onToggleNote: () => undefined,
 };
+
+// ── 正文的展示与折叠（`O2`，用户 2026-09-21）────────────────────
+
+/** 造两行（中心 / 甲），把正文挂到"甲"那一行上 */
+function rowsWithNote(note: string, noteExpanded?: boolean): OutlineRow[] {
+  const file = mindOf([
+    ['中心', null],
+    ['甲', '中心'],
+  ]);
+  const jia = file.nodes.find((node) => node.id === 'n_甲');
+  if (jia) jia.note = note;
+
+  const rows = outlineRowsOf(file);
+  const target = rows.find((row) => row.id === 'n_甲');
+  if (target && noteExpanded !== undefined) target.noteExpanded = noteExpanded;
+  return rows;
+}
+
+/** 渲染一组行，返回"甲"那一行（★ 根**不在行里** —— 它是顶部那行标题，所以是 `rows[0]`） */
+function renderNoteRow(
+  note: string,
+  noteExpanded?: boolean,
+  hs: OutlineHandlers = handlers,
+): FakeEl {
+  const panel = buildOutlinePanel(createFakeDocument() as unknown as Document);
+  panel.render(rowsWithNote(note, noteExpanded), new Set(), hs, '中心');
+  const list = findByClass(panel.element, 'nestboard-mind-outline-list');
+  if (!list) throw new Error('夹具坏了：没有列表');
+  const rows = list.children.map(asEl);
+  const first = rows[0];
+  if (!first) throw new Error('夹具坏了：一行都没有');
+  return first;
+}
+
+describe('noteFoldNeeded（正文要不要给折展把手）', () => {
+  it('短正文不给（多一个没用的按钮不如不给）', () => {
+    expect(noteFoldNeeded('一句话')).toBe(false);
+  });
+
+  it('★ 超过 6 行的多行正文要给；正好 6 行还不给', () => {
+    const lines = (count: number): string =>
+      Array.from({ length: count }, (_, index) => `第 ${index + 1} 行`).join('\n');
+    expect(noteFoldNeeded(lines(OUTLINE_NOTE_FOLD_LINES))).toBe(false);
+    expect(noteFoldNeeded(lines(OUTLINE_NOTE_FOLD_LINES + 1))).toBe(true);
+  });
+
+  it('★ 单行长文本按**显示宽度**估（中文按 2 算）', () => {
+    expect(noteFoldNeeded('A'.repeat(200))).toBe(true);
+    expect(noteFoldNeeded('汉'.repeat(120))).toBe(true);
+    expect(noteFoldNeeded('汉'.repeat(20))).toBe(false);
+  });
+});
+
+describe('大纲正文的渲染（`O2`）', () => {
+  it('正文**全文**放进去了（不再是一行 + 省略号）', () => {
+    const long = '第一段\n第二段\n第三段';
+    const note = findByClass(renderNoteRow(long), 'nestboard-mind-outline-note');
+    expect(note?.textContent).toBe(long);
+  });
+
+  it('短正文：默认收起态，但**不给把手**（它根本没被折）', () => {
+    const row = renderNoteRow('一句话');
+    const note = findByClass(row, 'nestboard-mind-outline-note');
+    expect(note?.className.split(/\s+/)).not.toContain('is-expanded');
+    expect(findByClass(row, 'nestboard-mind-outline-note-more')).toBeNull();
+  });
+
+  it('超长正文：给把手，收起态 `aria-expanded=false`', () => {
+    const long = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行`).join('\n');
+    const row = renderNoteRow(long);
+    const more = findByClass(row, 'nestboard-mind-outline-note-more');
+
+    expect(more).not.toBeNull();
+    expect(more?.attributes.get('role')).toBe('button');
+    expect(more?.attributes.get('aria-expanded')).toBe('false');
+    // 与行首两件同一条纪律：别当 `<button>`（主题的 button 规则会糊上一层底）
+    expect(more?.tagName).toBe('SPAN');
+  });
+
+  it('★ 展开态：正文上有 `is-expanded`、把手 `aria-expanded=true`', () => {
+    const long = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行`).join('\n');
+    const row = renderNoteRow(long, true);
+
+    expect(findByClass(row, 'nestboard-mind-outline-note')?.className.split(/\s+/)).toContain(
+      'is-expanded',
+    );
+    expect(
+      findByClass(row, 'nestboard-mind-outline-note-more')?.attributes.get('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('视图不接 `onToggleNote` 时**整枚把手不建**（不点没有回音的按钮）', () => {
+    const long = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 行`).join('\n');
+    const row = renderNoteRow(long, false, {
+      onToggle: () => undefined,
+      onPick: () => undefined,
+      onEdit: () => undefined,
+      onMenu: () => undefined,
+      onCrumb: () => undefined,
+    });
+
+    expect(findByClass(row, 'nestboard-mind-outline-note-more')).toBeNull();
+  });
+});
 
 /** 渲染一份两层的图，返回"甲"那一行（有子节点）与"甲1"那一行（叶子） */
 function renderTwoLevels(collapsed = false): { parentRow: FakeEl; leafRow: FakeEl } {

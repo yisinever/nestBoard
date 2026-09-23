@@ -297,3 +297,37 @@ describe('renderIndexNote · 两条契约', () => {
     expect(zh).toContain('这块白板有');
   });
 });
+
+describe('renderIndexNote × 卡内标签（F1 ①）', () => {
+  function render(overrides: Partial<Parameters<typeof renderIndexNote>[0]> = {}): string {
+    return renderIndexNote({
+      boardPath: 'Boards/A.nboard',
+      title: 'A',
+      tags: [],
+      cardCount: null,
+      updatedAt: '',
+      links: [],
+      boardUri: '',
+      ...overrides,
+    });
+  }
+
+  it('★ 卡内标签并进同一份 `tags:`（白板标签在前、卡内在后，同名只写一次）', () => {
+    const text = render({ tags: ['白板级', '共用'], cardTags: ['纪要', '共用'] });
+    expect(text).toContain('  - "白板级"');
+    expect(text).toContain('  - "共用"');
+    expect(text).toContain('  - "纪要"');
+    expect(text.match(/- "共用"/g)?.length).toBe(1);
+    // 顺序：白板级 → 共用 → 纪要（稳定，桥靠它判"没变就不写盘"）
+    expect(text.indexOf('"白板级"')).toBeLessThan(text.indexOf('"共用"'));
+    expect(text.indexOf('"共用"')).toBeLessThan(text.indexOf('"纪要"'));
+  });
+
+  it('不带 `#` 前缀的卡内标签（`LinkIndex` 给的就是这种）照旧写成同一条标签', () => {
+    expect(render({ cardTags: ['#纪要'] })).toContain('  - "纪要"');
+  });
+
+  it('省掉 `cardTags` = 与 `F1` 之前一字不差（老宿主 / 测试不受影响）', () => {
+    expect(render({ tags: ['甲'] })).toBe(render({ tags: ['甲'], cardTags: [] }));
+  });
+});

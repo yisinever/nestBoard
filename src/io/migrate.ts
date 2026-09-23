@@ -24,8 +24,27 @@ export interface MigrationStep {
   migrate(input: Record<string, unknown>): Record<string, unknown>;
 }
 
-/** 当前迁移链：v1 为基线，故为空。破坏性 schema 变更时在此追加 `{ to: 2, … }` */
-export const MIGRATIONS: readonly MigrationStep[] = [];
+/**
+ * 当前迁移链。
+ *
+ * * `v1` 为基线；
+ * * **`v2` = 白板里可以出现 `minds[]`**（脑图升格为白板对象，`2.2.0`）——
+ *   这一步是**恒等**的：`minds` 是可选键，而老的两种脑图卡（`mind` / `mindRef`）
+ *   由**读入口**就地转成容器（`model/validate.ts`）。也就是说 v1 的文本不需要被改写，
+ *   只是"读出来之后的样子"变了。
+ *   ★ 但这一步**必须有**：迁移链是"逐版本一跳"的（下面那个 `while`），少了 `{to: 2}`
+ *     所有 v1 文件都会掉进 `no-migration-path` —— 那等于"升级一次，旧板全打不开"。
+ *   ★ 它同时让 `future-version` 这道闸门对 v2 生效：老插件（只认识 1）见到 v2 文件会
+ *     进只读保护态（`main.ts` 有专门的提示文案）—— 那正是我们要的"明确拒绝"，
+ *     而不是"能打开、保存时把脑图静默丢掉"（见 `12 §4.6`）。
+ */
+export const MIGRATIONS: readonly MigrationStep[] = [
+  {
+    to: 2,
+    description: '白板可以内建脑图（`minds[]`，可选键）：老的两类脑图卡读入时转为容器',
+    migrate: (input) => input,
+  },
+];
 
 export type MigrateFailureReason = 'not-an-object' | 'future-version' | 'no-migration-path';
 

@@ -11,6 +11,11 @@
 // ★ 只 import **类型**：`util/geometry` 是纯几何工具（不碰 DOM、不碰 obsidian），
 //   而且 `import type` 会被编译器完全擦除 —— 本文件"运行期零依赖"的性质不变
 import type { Point } from '../util/geometry';
+// ★ 内嵌脑图卡（`F4`）的内容就是**整份** `MindFile`（形状与 `.nestmind` 逐字相同）。
+//   这里与 `mind/model/schema` 之间是**类型级**的互相引用（那边也引了本文件的颜色类型）——
+//   两边都是 `import type`，编译后被抹掉，**运行期不存在环**。用一个"结构相似的别名"
+//   去绕开它，只会多出一份要跟着脑图 schema 同步的形状。
+import type { MindFile } from '../mind/model/schema';
 
 // ─────────────────────────────────────────────────────────────
 // 卡片类型
@@ -41,6 +46,16 @@ export const CARD_TYPES = [
   'map',
   'syncNote',
   'comment',
+  // PDF 预览卡（`F8`，用户 2026-09-21："支持 pdf 文件类型的预览"）
+  'pdf',
+  // `.canvas` 预览卡（`F6`，用户 2026-09-21："支持.canvas 类型文件预览"）
+  'canvas',
+  // 脑图卡（`F3a`，用户 2026-09-21："把我们的 nestmind 拖进 nboard 白板……在 nboard 依然
+  // 可以对 nest 脑图进行操作"）—— 卡面就是那份 `.nestmind` 本身（可点、可改、可折叠）
+  'mindRef',
+  // 内嵌脑图卡（`F4`，用户 2026-09-21："直接在白板内部建立的脑图……只是不指向具体某个文件"）
+  // —— 与 `mindRef` 同一套可编辑组件，只是**数据存在这张卡自己的 content 里**
+  'mind',
 ] as const;
 
 export type CardType = (typeof CARD_TYPES)[number];
@@ -134,6 +149,27 @@ export interface ImageContent {
 export interface FileContent {
   path: string;
   showSize: boolean;
+}
+
+/**
+ * 脑图卡（`F3a`）的内容：**就是文件卡那一个路径**（指向一份 `.nestmind`）。
+ *
+ * ★ 别名而不是复制一份接口：`pdf` / `canvas` 两张预览卡也是这么做的（见 `CardContentMap`
+ *   里那两条注释）—— 多立一个名字，读写两边就多一处要同步的映射。
+ * ★ `showSize` 在这张卡上不画（卡面全给那张脑图）。
+ */
+export type MindRefContent = FileContent;
+
+/**
+ * 内嵌脑图卡（`F4`）的内容：**整份脑图模型**（不指向任何文件）。
+ *
+ * ★ 为什么包一层 `mind` 而不是把 `MindFile` 的键平铺进 `content`：平铺之后
+ *   "这张卡的内容"与"一份脑图"就再也分不开了（将来想给这张卡加一个自己的键 ——
+ *   比如"卡内只显示前几层"——就会被误当成脑图模型的字段写进校验与导出）。
+ *   包一层只多两个字符，边界却是清楚的。
+ */
+export interface MindContent {
+  mind: MindFile;
 }
 
 /** 5) link —— 链接卡（渲染不联网；抓取只在用户点「获取预览」之后，03 §7.5 合规第 5 条） */
@@ -499,6 +535,34 @@ export interface CardContentMap {
   map: MapContent;
   syncNote: SyncNoteContent;
   comment: CommentContent;
+  /**
+   * PDF 预览卡（`F8`）：内容与文件卡**同一个形状**（一个路径）—— 与 `video` / `audio`
+   * 同一条理由：它也就是"指向库内一份文件"这件事，多立一个名字只会多一处要同步的映射。
+   * `showSize` 不画（卡面全给那页纸），字段留着是为了形状共用。
+   */
+  pdf: FileContent;
+  /**
+   * `.canvas` 预览卡（`F6`）：与 PDF 卡同一个形状（一个路径）——
+   * 同样是"指向库内一份文件"，卡面拿来看那份文件长什么样。
+   */
+  canvas: FileContent;
+  /**
+   * 脑图卡（`F3a`）：还是"指向库内一份文件"（那份 `.nestmind`），所以内容与文件卡共用同一个
+   * 形状 —— 与 `pdf` / `canvas` 同一条理由。`showSize` 不画（卡面全给那张脑图），字段留着
+   * 是为了形状共用，不另立一个"只少不多"的接口。
+   */
+  mindRef: FileContent;
+  /**
+   * 内嵌脑图卡（`F4`）：**脑图模型就长在这张卡里**（不指向任何文件）。
+   *
+   * ★ 存的是**整份 `MindFile`**（`spec` / `version` / `revision` / `meta` / `view` / `rootId` /
+   *   `nodes`）而不是"只留 nodes 的瘦身版"：与 `.nestmind` 的形状**逐字相同**，于是
+   *   ① 渲染、校验、导出（`.nestmind` / Markdown / 大纲）全部现成可复用；
+   *   ② 右键「导出为 `.nestmind`」就是一次序列化，不丢任何字段；
+   *   ③ 卡片的复制粘贴天然带上整份脑图（`{ ...card, id }` 那种复制不会漏）。
+   *   多出来的那几个键在文件里只占几十字节，换来的是"两个脑图卡共用同一套代码"。
+   */
+  mind: MindContent;
 }
 
 export type CardContent = CardContentMap[CardType];
@@ -571,6 +635,16 @@ export interface CardBase<T extends CardType, C> {
    * ★ 它属于**显示状态**、跟着文件走（重开白板仍保持收起），与 `showTitle` 同类。
    */
   collapsed?: boolean;
+  /**
+   * **树折叠**（`F7`）：把这张卡的**子级**收成「+N」（不是完全隐藏）。
+   *
+   * ★ 与 {@link Column.collapsed} / 编组的 `collapsed` 一样是"缺席 = 展开"的可选键；
+   * ★ **不复用卡片自己的 `collapsed`**（定稿原文）：「收起自己」（标题行那个三角，
+   *   卡片变矮）与「折叠子级」（子级藏起来、卡上出现 +N）是两件事，
+   *   两个状态要能同时存在、互相独立 —— 挤进同一个字段的话，
+   *   "收起自己顺带折叠子级"这种没人要的联动就写不开了。
+   */
+  treeCollapsed?: boolean;
   /**
    * 卡片是否**画边框与底色**（图片卡右键菜单里那一项，用户 2026-09-17）。
    *
@@ -655,16 +729,76 @@ export type EdgeSide = 'top' | 'right' | 'bottom' | 'left' | null;
  *   "把端点拖离卡片、又拖回来"时可以直接复用，不必重新算一次落点。
  */
 export interface EdgeEndpoint {
-  /** 绑定的端点 id：卡片 id 或分栏 id（`O21`）；空串 = 自由端（见上） */
+  /** 绑定的端点 id：卡片 id、分栏 id（`O21`）或**脑图 id**（`2.2.0`）；空串 = 自由端（见上） */
   cardId: string;
   side: EdgeSide;
   /** 自由端的世界坐标。`cardId` 非空时无意义 */
   point?: Point;
+  /**
+   * **脑图里的某一个节点**（`2.2.0` 批 3）—— 缺席 = 整张卡片 / 分栏 / 整棵脑图。
+   *
+   * ★ 为什么是"`cardId` 定位哪棵脑图 + `nodeId` 定位里面的哪个节点"两个字段，
+   *   而不是把节点 id 塞进 `cardId`：`cardId` 已经是"白板级对象"的位置
+   *   （卡片 / 分栏 / 脑图，三者共用），节点**属于**其中一个对象 ——
+   *   两个字段各说各的一层，任何一层都能单独取用（`removeMinds` 按 `cardId` 扫一遍
+   *   就把整棵树的线清干净，不必知道节点 id 长什么样）。
+   * ★ 端点的**身份键**（几何表用它查矩形）由 {@link endpointAnchorKey} 给，
+   *   那边把两层拼成一个字符串 —— 表只有一层，不必为节点再造一张。
+   * ★ 存量文件里没有这个键 ⇒ 读出来就是"整张卡片"，逐字节不变（与 `rotation` /
+   *   `alpha` 同一条纪律）。
+   * ★ **读盘时不校验它**（`validate`）：节点清单在另一份模型里，而 `.nboard`
+   *   打开的那一刻那份 `.nestmind` 可能还没读到 —— 那一刻判"悬空"会把好数据删掉。
+   *   取不到节点的矩形就**不画那条线**（`edgeEndpoints` 返回 `null`），
+   *   节点回来的时候线自己就回来了。
+   */
+  nodeId?: string;
 }
 
 /** 端点是不是自由端（不绑任何卡片/分栏） */
 export function isFreeEndpoint(endpoint: EdgeEndpoint): boolean {
   return endpoint.cardId.length === 0;
+}
+
+/**
+ * 节点端点的**身份键**分隔符。
+ *
+ * ★ 可以放心用 `/` 拼：卡片 / 分栏 / 脑图 / 节点的 id 都由 `util/id` 生成
+ *   （`c_…` / `col_…` / `nm_…` / `n_…`，Base32 字母表里没有 `/`）。
+ * ★ 这个键**只活在内存里**（几何表 / 手势会话），不落盘 —— 文件里永远是
+ *   两个字段（`cardId` + `nodeId`），老插件读不懂时最多"看不见那条线"，
+ *   不会因为多了个拼接串而写坏。
+ */
+const NODE_KEY_SEPARATOR = '/';
+
+/** 由"哪棵脑图 + 哪个节点"拼出端点身份键（几何表按它查矩形） */
+export function nodeEndpointKey(mindId: string, nodeId: string): string {
+  return `${mindId}${NODE_KEY_SEPARATOR}${nodeId}`;
+}
+
+/** 把端点身份键拆回两层；`nodeId` 为 `null` = 这不是一个节点端点 */
+export function splitEndpointKey(key: string): { cardId: string; nodeId: string | null } {
+  const index = key.indexOf(NODE_KEY_SEPARATOR);
+  if (index < 0) return { cardId: key, nodeId: null };
+  return { cardId: key.slice(0, index), nodeId: key.slice(index + 1) };
+}
+
+/**
+ * 一个端点在**几何表**里的键（{@link RectLookup} 用它查矩形）。
+ *
+ * ★ 卡片 / 分栏 / 整棵脑图 ⇒ 就是 `cardId`（与从前一字不差，`O21` 的那些表不用改）；
+ *   节点端点 ⇒ `脑图id/节点id`。
+ * ★ 一处定义、两处使用（绘制侧的 `createRectLookup` 与命中侧的 `cardRectLookup`
+ *   都往表里塞同一个键）：分头拼的话，"线画在节点上、点下去选不中"会以两种
+ *   不同的形式冒出来。
+ */
+export function endpointAnchorKey(endpoint: EdgeEndpoint): string {
+  return endpoint.nodeId ? nodeEndpointKey(endpoint.cardId, endpoint.nodeId) : endpoint.cardId;
+}
+
+/** 端点身份键 → 端点（`side` 由调用方给：起点用按下的那一面，终点一律自动选边） */
+export function endpointOfKey(key: string, side: EdgeSide): EdgeEndpoint {
+  const { cardId, nodeId } = splitEndpointKey(key);
+  return nodeId === null ? { cardId, side } : { cardId, nodeId, side };
 }
 
 export type EdgeEnd = 'none' | 'arrow';
@@ -719,6 +853,20 @@ export interface Edge {
    *   `curve` 档下它**覆盖自动的那条弧**（拖过中点就听手工的）。
    */
   curve?: EdgeCurve | null;
+  /**
+   * **树连线**（`F7`，设计定稿 `11 §3` D1 / D6）。缺席 = 普通连线 —— 两套并存、
+   * 互不"升级"（定稿原文），所以这是一个可选标记而不是一条新记录类型。
+   *
+   * ★ 与 `curve` 同一条纪律：存量文件里没有这个键，读一遍写回去逐字节不变，
+   *   不需要动 `BOARD_VERSION`。
+   * ★ 树连线的几何与普通线**不同源**：两端锚在**卡片中心**（不是四边），
+   *   中段被卡片自己盖住 ⇒ "不与卡片重叠的部分才显示"由层级关系白捡
+   *   （连线层在卡片层背后，`02 §2` 层级③），几何侧只负责"从中心到中心"。
+   *   锚点解析见 `edges.edgeEndpoints` 里 `kind === 'tree'` 那一支。
+   * ★ 方向：`from` = **父级**，`to` = **子级**（发起方成为父级，D6）。
+   *   箭头（`toEnd`）因此指向下级，与"从父到子"的读法一致。
+   */
+  kind?: 'tree';
 }
 
 /** 编组只存成员列表，包围盒由成员位置实时计算（避免两者不同步，03 §2.9） */
@@ -806,6 +954,51 @@ export interface BoardFile {
   cards: Card[];
   edges: Edge[];
   groups: Group[];
+  /**
+   * 脑图（`2.2.0`）：**一棵画在白板上的树**，与卡片 / 分栏 / 编组平级的白板对象。
+   *
+   * ★ 为什么它必须是白板对象而不是"某种卡片"（`12-2.2.0...重构方案`）：
+   *   脑图的节点位置是**算出来的**（`layout/tree.ts`），而卡片的 `x/y/width/height` 是
+   *   **用户数据** —— 把节点做成卡片，就得每次结构变化都把 N 个坐标写回模型（历史噪声、
+   *   体积、多设备冲突）。所以这里只存**一个锚点**（根节点中心）与模型，其余全算。
+   * ★ **可选键**（缺席 = 这块板没有脑图）：与 `rotation` / `alpha` / `curve` 同一条纪律 ——
+   *   没有脑图的板子读一遍写回去必须**逐字节不变**（也因此老版本插件读它、写它都不丢东西）。
+   */
+  minds?: Mind[];
+}
+
+/**
+ * 一块白板上的**一棵脑图**（`2.2.0`）。
+ *
+ * | 字段 | 说什么 |
+ * | --- | --- |
+ * | `x` / `y` | **根节点中心**的世界坐标。其它节点的位置由 `layout/` 算，**不落盘** |
+ * | `z` | 与卡片 / 分栏共用的层序（它和卡片混排，不再是"整棵一个层级"） |
+ * | `path` | 非空 = 这份脑图存在那个 `.nestmind` 里；空 = **内嵌**（模型在 `mind` 里） |
+ * | `mind` | 内嵌模型。`path` 非空时不需要它（模型在文件里） |
+ *
+ * ★ **没有 `width` / `height`**：这是"无边界"在数据上的落实 —— 它没有边界，
+ *   所以没有任何尺寸可以缩、可以撑、可以算错（`F4` 那两轮"节点越加越小 / 卡片跟着长"
+ *   都是在跟一个不必要的尺寸字段较劲）。
+ * ★ 只增不减那套自动尺寸（`requestCardSize`）与它无关：容器不进那张队列。
+ */
+export interface Mind {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  path: string;
+  mind?: MindFile;
+  /**
+   * 演示步骤号（`2.2.0` 收尾 · 演示对接）：与卡片同一个口径 ——
+   * 设过就按号升序讲，"一张都没编过"时按阅读顺序讲全部。
+   *
+   * ★ 可选键、**缺省 = 不在演示路径里**（存量文件里没有它，读一遍写回去逐字节不变，
+   *   与 `Mind.path` 后面那些可选字段同一条纪律）。
+   */
+  presentStep?: number | null;
+  /** 只读（缺席 = 可编辑）。与卡片的 `locked` 同一套语义：一个编辑手势都不接 */
+  locked?: boolean;
 }
 
 /**

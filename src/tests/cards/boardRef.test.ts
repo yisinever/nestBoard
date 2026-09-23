@@ -30,6 +30,7 @@ import {
   boardRefState,
   boardTitleOf,
   cardCountLabel,
+  summaryCountLabel,
 } from '../../cards/boardRef';
 import { NOTE_DEFAULT_SIZE } from '../../cards/note';
 import type { CardActionContext, CardRenderContext } from '../../cards/registry';
@@ -82,6 +83,29 @@ describe('cardCountLabel', () => {
   it('把数量插进 i18n 文案（`0` 也要说出来，否则概览区一片空白像没加载）', () => {
     expect(cardCountLabel(0)).toBe(t('card.boardRef.cards', { count: 0 }));
     expect(cardCountLabel(7)).toBe(t('card.boardRef.cards', { count: 7 }));
+  });
+});
+
+/**
+ * 概要那一行数字（`2.2.0` 收尾）。
+ *
+ * ★ 这一条同时钉住"一块只有树的板子不是空板"：`paintSummary` 判空用的是
+ *   `cards === 0 && minds === 0`，而**数字那句**由这里出。
+ */
+describe('summaryCountLabel', () => {
+  it('没有脑图 ⇒ 与从前一字不差（绝大多数板子走这一条）', () => {
+    expect(summaryCountLabel({ cards: 3, columns: 1, minds: 0 })).toBe(
+      t('card.boardRef.cards', { count: 3 }),
+    );
+  });
+
+  it('★ 有脑图 ⇒ 多一段"K 棵脑图"（卡片为 0 也照样说出来）', () => {
+    expect(summaryCountLabel({ cards: 3, columns: 1, minds: 2 })).toBe(
+      t('card.boardRef.cardsAndMinds', { cards: 3, minds: 2 }),
+    );
+    expect(summaryCountLabel({ cards: 0, columns: 0, minds: 1 })).toBe(
+      t('card.boardRef.cardsAndMinds', { cards: 0, minds: 1 }),
+    );
   });
 });
 

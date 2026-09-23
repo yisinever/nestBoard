@@ -17,8 +17,10 @@
  *
  * `instantiateTemplate()` 把模板变成一块**新板**，只改"属于上一块板"的东西：
  *
- * * **所有 id 重新生成**（板 / 卡 / 栏 / 连线 / 编组），并同步重写引用它们的字段
- *   （`card.columnId`、`edge.from/to.cardId`、`group.cardIds`）。
+ * * **所有 id 重新生成**（板 / 卡 / 栏 / **脑图** / 连线 / 编组），并同步重写引用它们的字段
+ *   （`card.columnId`、`edge.from/to.cardId`、`group.cardIds`）。★ 端点的重映射要认
+ *   **三种**对象（卡 / 栏 / 脑图，见 `EdgeEndpoint.cardId` 的说明）—— 只认卡片的话，
+ *   指向栏或树的连线会被当成"指向不存在的卡片"**静默丢掉**（`2.2.0` 收尾修）。
  *   不重写引用就等于把整块板的连线与归属一起打断 —— 这是本文件最容易错的一处，
  *   所以引用重写集中在 `instantiateTemplate` 里做，别处不许再抄一遍。
  * * **落回原点**（`view` 回到 `{0,0,1}`）：模板作者的视口对使用者没有意义，
@@ -29,8 +31,9 @@
  *
  * 三者**刻意保留**：`view.background`（模板的样子是模板的一部分）、
  * `settings` 的其余字段（网格吸附之类是模板作者调好的）、
- * `card.presentStep`（模板自带的演示路径就是新板的脚本 —— 这一点与 `transfer.ts`
- * 的"粘贴时清掉步骤号"**不同**，那边是往**已有**脚本里塞外来的卡，这里是一块全新的板）。
+ * `presentStep`（**卡与脑图都是**：模板自带的演示路径就是新板的脚本 —— 这一点与
+ * `transfer.ts` 的"粘贴时清掉步骤号"**不同**，那边是往**已有**脚本里塞外来的卡，
+ * 这里是一块全新的板）。
  *
  * ★ 纯逻辑：不 import `obsidian`、不碰 DOM，可在 node 下单测。
  */
@@ -44,10 +47,12 @@ import {
   createCard,
   createColumn,
   createEdge,
+  createMind,
   type CardOverrides,
 } from './factories';
 import { cloneJson } from './ops';
-import type { BoardFile, Card, Column, Edge, Group } from './schema';
+import { createMindFile } from '../mind/model/factories';
+import type { BoardFile, Card, Column, Edge, Group, Mind } from './schema';
 
 // ─────────────────────────────────────────────────────────────
 // 类型
@@ -63,11 +68,18 @@ export const TEMPLATE_CATEGORIES: readonly TemplateCategory[] = [
   'writing',
 ];
 
-/** 列表里那行"N 张卡片 · M 个分栏"用的数字 */
+/** 列表里那行"N 张卡片 · M 个分栏 · K 棵脑图"用的数字 */
 export interface TemplateSummary {
   cards: number;
   columns: number;
   edges: number;
+  /**
+   * 脑图（白板级，`2.2.0` 收尾 · 模板对接）。
+   *
+   * ★ 单独一格而不是并进 `cards`：两者在模板里是**不同**的东西（树是一棵树、
+   *   卡片是一张纸），列表那行要按份数说清"这份模板里有什么"。
+   */
+  minds: number;
 }
 
 export interface BuiltinTemplate {
@@ -136,18 +148,23 @@ function swatchCard(
 }
 
 /**
- * 给一块模板的 z 排个序：分栏按顺序在下（`1..n`），卡片一律排在最后（`10` 起）。
+ * 给一块模板的 z 排个序：分栏按顺序在下（`1..n`），卡片与脑图排在其上（`10` 起）。
  *
  * ★ 成员卡片的 z 必须**高于**它所在的分栏，否则卡会被分栏的底板盖住
  *   （`columns.ts` 开头那三条约定里的第 2 条）。这里统一排一次，
  *   比在每个 `createCard` 上手写 `z` 靠谱 —— 手写迟早会漏一张。
+ * ★ 脑图（`2.2.0` 收尾）与卡片**同层**、排在卡片之后：树也是一块"内容"，
+ *   同样必须在分栏底板之上。
  */
-function assignZ(columns: Column[], cards: Card[]): void {
+function assignZ(columns: Column[], cards: Card[], minds: Mind[] = []): void {
   columns.forEach((column, index) => {
     column.z = index + 1;
   });
   cards.forEach((card, index) => {
     card.z = 10 + index;
+  });
+  minds.forEach((mind, index) => {
+    mind.z = 10 + cards.length + index;
   });
 }
 
@@ -225,15 +242,31 @@ function buildResearch(): BoardFile {
     color: '5',
   });
 
+  // ★ 一棵"研究问题树"（`2.2.0` 收尾 · 模板对接）：放在三栏**下方**。
+  //   为什么内置模板里要真的有树：模板能带脑图这件事，用户不自己存一份模板
+  //   就**看不见** —— 用「研究」新建一块板就有一棵树等着写，能力才算是"接上了"。
+  const questionTree = createMind({
+    x: 0,
+    y: COLUMN_H + 48,
+    // ★ 根节点的文字要**显式给**（`rootText`）：`createMindFile` 的默认值是通用的
+    //   「中心主题」，而模板里这棵树该叫「研究问题」（`2.2.0` 收尾那一批改的默认值）
+    mind: createMindFile({
+      branches: 3,
+      title: t('template.research.mind.root'),
+      rootText: t('template.research.mind.root'),
+    }),
+  });
+
   const columns = [colQuestion, colSources, colInsight];
   const cards = [howto, question, hypothesis, reference, sources, insight, conclusion];
-  assignZ(columns, cards);
+  assignZ(columns, cards, [questionTree]);
 
   return createBoardFile({
     meta: { title: t('template.research.name') },
     view: { background: 'dots' },
     columns,
     cards,
+    minds: [questionTree],
     // 一条连线说清"结论要回答的是最上面那个问题" —— 模板里只放**有语义**的连线，
     // 不是拿来演示连线功能的
     edges: [createEdge({ cardId: question.id, side: null }, { cardId: conclusion.id, side: null })],
@@ -495,11 +528,12 @@ export interface TemplateInstanceOptions {
 /** 把模板里的一个端点搬到新板的卡片上；指向不存在的卡片时返回 `null`（整条连线丢掉） */
 function remapEndpoint(
   endpoint: Edge['from'],
-  cardIds: ReadonlyMap<string, string>,
+  objectIds: ReadonlyMap<string, string>,
 ): Edge['from'] | null {
-  // 自由端（`cardId` 为空）原样带走：它不指向任何卡片，也就无所谓存在不存在
+  // 自由端（`cardId` 为空）原样带走：它不指向任何对象，也就无所谓存在不存在
   if (endpoint.cardId.length === 0) return cloneJson(endpoint);
-  const mapped = cardIds.get(endpoint.cardId);
+  // 表里查不到 = 指向一个**这次没有一起搬走**的对象（认不出的旧 id）⇒ 这条线丢掉
+  const mapped = objectIds.get(endpoint.cardId);
   if (mapped === undefined) return null;
   return { ...cloneJson(endpoint), cardId: mapped };
 }
@@ -534,10 +568,26 @@ export function instantiateTemplate(
     return { ...cloneJson(card), id, columnId };
   });
 
+  // 脑图（`2.2.0` 收尾 · 模板对接）：容器 id 与板/卡/栏一样要换新。
+  // ★ 里面的 `mind`（`MindFile`）**不洗**：它的节点 id 只在那一份脑图里唯一，
+  //   随容器一起搬走即可（与"卡片的内容不洗"同一条）。
+  const mindIds = new Map<string, string>();
+  const minds: Mind[] = (source.minds ?? []).map((mind) => {
+    const id = createId(ID_PREFIX.mind);
+    mindIds.set(mind.id, id);
+    return { ...cloneJson(mind), id };
+  });
+
+  // ★ 端点重映射必须吃**合并后的对象表**：连线可以连到卡片、分栏（`O21`）或脑图
+  //   （`2.2.0`，还可能是树里的某个节点 —— `nodeId` 不动，它是脑图**内部**的键）。
+  //   只用卡片表的话，指向分栏 / 脑图的连线会被 `remapEndpoint` 判成"指向不存在的卡片"
+  //   而**静默丢掉** —— 模板一旦带这类连线，用户用出来的板就少了几条线。
+  const objectIds = new Map<string, string>([...columnIds, ...cardIds, ...mindIds]);
+
   const edges = source.edges
     .map((edge) => {
-      const from = remapEndpoint(edge.from, cardIds);
-      const to = remapEndpoint(edge.to, cardIds);
+      const from = remapEndpoint(edge.from, objectIds);
+      const to = remapEndpoint(edge.to, objectIds);
       if (!from || !to) return null;
       return { ...cloneJson(edge), id: createId(ID_PREFIX.edge), from, to };
     })
@@ -574,6 +624,8 @@ export function instantiateTemplate(
     settings: { ...source.settings, readOnly: false },
     columns,
     cards,
+    // 一棵树都没有时**不写这个键**（缺席 = 没有脑图，与 `validate` / `createBoardFile` 同一纪律）
+    ...(minds.length > 0 ? { minds } : {}),
     edges,
     groups,
   });
@@ -589,6 +641,7 @@ export function describeTemplate(board: BoardFile): TemplateSummary {
     cards: board.cards.length,
     columns: board.columns.length,
     edges: board.edges.length,
+    minds: (board.minds ?? []).length,
   };
 }
 

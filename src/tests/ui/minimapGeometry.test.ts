@@ -15,8 +15,16 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createBoardFile, createCard, createColumn, createEdge } from '../../model/factories';
-import type { BoardFile } from '../../model/schema';
+import {
+  createBoardFile,
+  createCard,
+  createColumn,
+  createEdge,
+  createMind,
+} from '../../model/factories';
+import type { BoardFile, Mind } from '../../model/schema';
+import { createMindFile, createMindNode } from '../../mind/model/factories';
+import type { MindFile } from '../../mind/model/schema';
 import {
   MINIMAP_MIN_DOT,
   MINIMAP_PADDING,
@@ -66,6 +74,69 @@ describe('minimapShapes', () => {
     const b = board([cardAt(0, 0)], []);
     b.edges = [createEdge({ cardId: 'a', side: null }, { cardId: 'b', side: null })];
     expect(minimapShapes(b)).toHaveLength(1);
+  });
+});
+
+/**
+ * 脑图进地图（`2.2.0` 批 4）。
+ *
+ * 从前"一张脑图 = 一张卡"，它自然在地图上占一格；升格成容器之后它不在 `cards` 里 ——
+ * 不补这一笔，那棵树会**凭空消失**，用户看到的是"这块板的缩略图比实际小一圈"。
+ */
+describe('minimapShapes · 白板级脑图', () => {
+  /** 一棵"根 + 2 个分支"的内嵌脑图，落脚点在 `(x, y)`（根节点中心） */
+  function mindBoard(x: number, y: number) {
+    const file = createMindFile({ rootText: '中心' });
+    file.nodes.push(createMindNode({ parentId: file.rootId, text: '甲', order: 0 }));
+    file.nodes.push(createMindNode({ parentId: file.rootId, text: '乙', order: 1 }));
+    const b = createBoardFile();
+    b.minds = [createMind({ x, y, path: '', mind: file })];
+    return { board: b, file };
+  }
+
+  const inlineModels = (mind: Mind): MindFile | null => mind.mind ?? null;
+
+  it('★ 不给模型就一个节点都不画（老调用方行为不变）', () => {
+    const { board: b } = mindBoard(0, 0);
+    expect(minimapShapes(b)).toEqual([]);
+    expect(minimapShapes(b, { mindModelOf: () => null })).toEqual([]);
+  });
+
+  it('★★ 给了模型 ⇒ 节点进地图，而且**根节点落在容器的 `x/y` 上**', () => {
+    const { board: b, file } = mindBoard(1000, 500);
+
+    const shapes = minimapShapes(b, { mindModelOf: inlineModels });
+    expect(shapes).toHaveLength(3);
+    // 树上的节点（不是悬浮节点）：都算 `node` 那一档
+    expect(shapes.every((shape) => shape.kind === 'node')).toBe(true);
+
+    // 容器的 `x/y` 是**根节点中心** —— 地图上的根节点方块必须把它围住
+    const rootShape = shapes.find(
+      (shape) =>
+        shape.rect.x <= 1000 &&
+        1000 <= shape.rect.x + shape.rect.width &&
+        shape.rect.y <= 500 &&
+        500 <= shape.rect.y + shape.rect.height,
+    );
+    expect(rootShape).toBeDefined();
+    // 外接框要真的把那棵树包进来（比一个节点大）
+    const bounds = contentBounds(shapes)!;
+    expect(bounds.width).toBeGreaterThan(rootShape!.rect.width);
+    expect(file.nodes).toHaveLength(3);
+  });
+
+  it('★ 分栏在前、脑图居中、卡片最后（压盖关系与世界一致）', () => {
+    const { board: b } = mindBoard(0, 0);
+    b.columns = [createColumn({ x: -500, y: -500 })];
+    b.cards = [createCard('note', { x: 500, y: 500 })];
+
+    expect(minimapShapes(b, { mindModelOf: inlineModels }).map((shape) => shape.kind)).toEqual([
+      'column',
+      'node',
+      'node',
+      'node',
+      'card',
+    ]);
   });
 });
 

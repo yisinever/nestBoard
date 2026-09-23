@@ -25,6 +25,7 @@
  */
 
 import { ID_PREFIX } from '../../constants';
+import { t } from '../../util/i18n';
 import { createId } from '../../util/id';
 import type { MindFile, MindNode } from './schema';
 import { childrenOf, nodeById, renumberSiblings, selectionRoots } from './ops';
@@ -138,6 +139,99 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // ─────────────────────────────────────────────────────────────
+// 从**外部**粘进来的文字（`N3-j`：一行一节点 → 认得出层级）
+// ─────────────────────────────────────────────────────────────
+
+/** `parseOutlineText` 的产物：一行字 + 它下面的那些行 */
+export interface OutlineItem {
+  text: string;
+  children: OutlineItem[];
+}
+
+/** 一条 Markdown 列表项：`- x` / `* x` / `+ x` / `1. x` / `1) x` */
+const LIST_ITEM = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+(.*)$/;
+
+/**
+ * 把一段**外部文字**解析成层级（用户 2026-09-21："要解析成层级"）。
+ *
+ * 判据与取舍：
+ * - 只要有**一条**是 Markdown 列表项（`- ` / `* ` / `+ ` / `1. `），就按**缩进**建层级；
+ *   缩进单位**不假设**（2 空格 / 4 空格 / Tab 都行）—— 用的是"变深就下去、变浅就上来"
+ *   这个**相对**规则，比写死 `2` 稳（用户从各处复制，缩进宽度根本不统一）。
+ * - **一条列表项都没有** ⇒ 退回"一行一个节点、全部平级"（原行为）。复制一段散文粘进来，
+ *   不该被当成缩进结构。
+ * - 列表项的**行首标记剥掉**：粘出来的是节点，圆点 / 序号由脑图自己画。
+ * - 空行丢掉；整段解析不出东西时返回空数组（调用方据此提示）。
+ * ★ 纯函数、不碰 DOM，可直接单测。
+ */
+export function parseOutlineText(text: string): OutlineItem[] {
+  interface Entry {
+    text: string;
+    columns: number;
+    item: boolean;
+  }
+  const entries: Entry[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim().length === 0) continue;
+    const match = LIST_ITEM.exec(line);
+    if (match) {
+      const body = (match[2] ?? '').trim();
+      if (body.length === 0) continue;
+      entries.push({ text: body, columns: indentColumns(match[1] ?? ''), item: true });
+      continue;
+    }
+    entries.push({
+      text: line.trim(),
+      columns: indentColumns(/^[ \t]*/.exec(line)?.[0] ?? ''),
+      item: false,
+    });
+  }
+  if (entries.length === 0) return [];
+  if (!entries.some((entry) => entry.item)) {
+    return entries.map((entry) => ({ text: entry.text, children: [] }));
+  }
+
+  const roots: OutlineItem[] = [];
+  const stack: Array<{ columns: number; node: OutlineItem }> = [];
+  for (const entry of entries) {
+    const node: OutlineItem = { text: entry.text, children: [] };
+    while (stack.length > 0 && (stack[stack.length - 1]?.columns ?? 0) >= entry.columns)
+      stack.pop();
+    const parent = stack[stack.length - 1];
+    if (parent) parent.node.children.push(node);
+    else roots.push(node);
+    stack.push({ columns: entry.columns, node });
+  }
+  return roots;
+}
+
+/** Tab 按 4 列算（各家 Markdown 的惯例），其余按字符数 */
+function indentColumns(indent: string): number {
+  let columns = 0;
+  for (const char of indent) columns += char === '\t' ? 4 - (columns % 4) : 1;
+  return columns;
+}
+
+/**
+ * 系统剪贴板里的**纯文本**是不是"就是这份载荷写出去的那一段"？
+ *
+ * ★ 用途：只拿得到纯文本时（环境的 `navigator.clipboard.read()` 不给用、拿不到 `text/html`），
+ *   用它判"剪贴板里还是我们那次复制"还是"用户已经复制了别的东西" ——
+ *   前者按**节点**粘，后者按**文字**粘。这是"内存剪贴板永不失效"那个 bug 的第二道兜底。
+ * ★ 比较前先归一：换行统一成 `\n`、去掉行尾空白、整体 `trim`（跨应用往返常被改写这些）。
+ */
+export function isOwnClipboardText(payload: MindClipboard, text: string): boolean {
+  return normalizeClipboardText(mindClipboardText(payload)) === normalizeClipboardText(text);
+}
+
+function normalizeClipboardText(value: string): string {
+  return value
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
+// ─────────────────────────────────────────────────────────────
 // 进程内的剪贴板（一份，跨视图共享）
 // ─────────────────────────────────────────────────────────────
 
@@ -245,6 +339,18 @@ export function pasteForest(
 
   mind.nodes.push(...pasted);
   return clipboard.roots.map((id) => remap.get(id)).filter((id): id is string => id !== undefined);
+}
+
+/**
+ * 剪贴板里那一支的**名字**（`Notice` 里那句"复制了什么"；空标题给一句占位）。
+ *
+ * ★ 放在模型层而不是视图层：白板（卡片里的树）与 `.nestmind` 视图**两处**都要说这句话
+ *   （`2.2.0` 收尾 · 节点粘贴改成"只能粘到脑图节点上"之后，白板那边也开始复制节点了）。
+ */
+export function clipboardLabelOf(payload: MindClipboard): string {
+  const root = payload.nodes.find((node) => node.id === payload.roots[0]);
+  const text = root?.text.trim() ?? '';
+  return text.length > 0 ? text : t('mind.nodeTitle.empty');
 }
 
 /** 单支粘贴（返回新入口的 id；多选那一套的退化情形） */

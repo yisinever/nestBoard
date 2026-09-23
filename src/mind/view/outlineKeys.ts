@@ -18,6 +18,7 @@
  * | 折叠 / 展开 | `⌃.` 或 `⌥.` | 同 | **另留 `Space`**：与画布一致 |
  * | 多选上下 | `⇧↑` / `⇧↓` | 同 | |
  * | 就地改文本 | **直接打字** | 同 | 打进来那个字**成为初始内容**（幕布 / Workflowy 的手感） |
+ * | 跳到父 / 子 | — | `←` / `→` | **用户 2026-09-21 追加**（幕布没有这一对） |
  *
  * ★ **多出来的那几条都是"本仓库已有的键"**（`⌘⏎` / `⌥↑↓` / `⌫` / `Space`）——
  *   两条都认，谁都不会觉得别扭；而**幕布那一套是主口径**（用户要求对齐的那个）。
@@ -42,6 +43,8 @@ export interface OutlineKeyEvent {
 export type OutlineKeyAction =
   /** 上下走一行；`extend` = `⇧` 加选 */
   | { kind: 'navigate'; delta: -1 | 1; extend: boolean }
+  /** 跳到**父 / 子**（`O3`，用户 2026-09-21："左右：在父子节点间切换"） */
+  | { kind: 'jump'; to: 'parent' | 'child' }
   /** 结构性改动：新建同级 / 子级 / 提升一级 */
   | { kind: 'structure'; to: 'sibling' | 'child' | 'promote' }
   /** **缩进一层**（`N3-i`）：变成上一个兄弟的子节点（`Tab`；与 `⇧Tab` 的提升对称） */
@@ -99,6 +102,16 @@ export function outlineKeyActionOf(event: OutlineKeyEvent): OutlineKeyAction {
     // 带别的修饰键（`⌘↑` / `⌃↑`…）留给系统与别处：那些组合在 macOS 上是系统级语义
     if (mod || alt) return { kind: 'none' };
     return { kind: 'navigate', delta, extend: shift };
+  }
+
+  // ★ ←/→ = 在**父 / 子**之间跳（`O3`，用户 2026-09-21："左右：在父子节点间切换"）。
+  //   ★ 带修饰键的一律不接：`⌥←/→` 在 macOS 上是"按词移动光标"、`⌘←/→` 是行首 / 行尾
+  //     —— 那些属于文本编辑的习惯，在这里变成结构导航会很难解释。
+  //   ★ `⇧←/→` 也不接：范围多选已经在上下键上（`⇧↑↓`），左右再挂一套会让"⇧ + 方向键"
+  //     在两个轴上意思不同。
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (mod || alt || shift) return { kind: 'none' };
+    return { kind: 'jump', to: event.key === 'ArrowLeft' ? 'parent' : 'child' };
   }
 
   if (event.key === 'Backspace' || event.key === 'Delete') {

@@ -32,7 +32,7 @@ import {
   type Point,
   type Rect,
 } from '../util/geometry';
-import { isFreeEndpoint } from './schema';
+import { endpointAnchorKey, isFreeEndpoint } from './schema';
 import { routeOrthogonal } from './edgeRouting';
 import type { BoardFile, Edge, EdgeCurve, EdgeEndpoint, EdgeSide } from './schema';
 
@@ -103,11 +103,15 @@ export function autoAnchorSide(from: Rect, to: Rect): AnchorSide {
 }
 
 /**
- * 按**端点 id**（卡片或分栏，`O21`）查当前几何；拿不到（已删 / 不可见）返回 `null`。
+ * 按**端点几何键**（`endpointAnchorKey`）查当前几何；拿不到（已删 / 不可见）返回 `null`。
  *
- * ★ 一个查表函数同时服务两种端点，而不是"卡片查一个、分栏查一个"：端点在几何上
- *   只是"一个矩形"，连线算法（锚点 / 路由 / 箭头）完全不需要知道对面是卡还是栏。
- *   这也是 `O21` 能只改端点来源、不动几何的原因。
+ * ★ 一个查表函数同时服务四种端点，而不是"卡片查一个、分栏查一个、节点再查一个"：
+ *   端点在几何上只是"一个矩形"，连线算法（锚点 / 路由 / 箭头）完全不需要知道
+ *   对面是卡、是栏、是整棵脑图，还是脑图里的一个节点。
+ *   这也是 `O21`（分栏成为端点）与 `2.2.0` 批 3（脑图节点成为端点）两次都只改
+ *   端点来源、不动几何的原因。
+ * ★ 键是**一层**的字符串：卡片 / 分栏 / 整棵脑图就是它们的 id，节点是
+ *   `脑图id/节点id`（`schema.nodeEndpointKey`）—— 表因此不必嵌套。
  */
 export type RectLookup = (endpointId: string) => Rect | null;
 
@@ -146,7 +150,12 @@ function endpointRect(endpoint: EdgeEndpoint, rectOf: RectLookup): Rect | null {
     if (!point) return null;
     return { x: point.x, y: point.y, width: 0, height: 0 };
   }
-  return rectOf(endpoint.cardId);
+  // ★ 查的是**端点的几何键**（`2.2.0` 批 3）：整卡 / 分栏 / 整棵脑图就是 `cardId`；
+  //   脑图里的某个节点是 `脑图id/节点id` —— 三种身份共用这一张表，本文件不必知道
+  //   它连的到底是什么，只认"一个键换一个矩形"（`O21` 那条纪律的延续）。
+  // ★ 取不到（节点被删了 / 那份 `.nestmind` 还没读到）⇒ 这条线**一个字都不画**，
+  //   而不是回落到 (0,0)：后者会在画布角落里画一条通往原点的乱线。
+  return rectOf(endpointAnchorKey(endpoint));
 }
 
 /**
@@ -168,6 +177,17 @@ export function edgeEndpoints(
 
   const fromSide = edge.from.side ?? autoAnchorSide(fromRect, toRect);
   const toSide = edge.to.side ?? autoAnchorSide(toRect, fromRect);
+  // **树连线**（`F7`）的两端锚**卡片中心**（定稿：只连中心点，中段被卡片盖住 ⇒
+  // "不与卡片重叠的部分才显示"由"连线层在卡片背后"白捡）。`side` 仍按自动选边
+  // 给出：下游（箭头方向、标签落点）认的是"方位"，中心锚只是把**点**挪进去。
+  if (edge.kind === 'tree') {
+    return {
+      from: rectCenter(fromRect),
+      to: rectCenter(toRect),
+      fromSide,
+      toSide,
+    };
+  }
   return {
     from: cardAnchor(fromRect, fromSide, endpointAngle(edge.from, angleOf)),
     to: cardAnchor(toRect, toSide, endpointAngle(edge.to, angleOf)),
@@ -777,9 +797,42 @@ export function edgesOfCard(board: BoardFile, cardId: string): Edge[] {
   return board.edges.filter((edge) => edge.from.cardId === cardId || edge.to.cardId === cardId);
 }
 
+/**
+ * 清掉"指向某棵脑图里**已经不存在的节点**"的连线（`2.2.0` 批 3）。
+ *
+ * ★ 与 `removeCards` 那条纪律同源：被删掉的东西不该在文件里留一堆看不见的线
+ *   （画不出来、又删不掉，只能手改 `.nboard`）。
+ * ★ 只在**真的知道节点清单**的时候调（内嵌脑图改完模型之后，见 `setMindModel`）：
+ *   文件脑图在标签页里被改（不经过白板）时清单是另一份，这里不猜 ——
+ *   那边删掉的节点对应的线会"画不出来但仍然在文件里"，用户把节点加回来它就回来了
+ *   （这反而是对的：撤销一次编辑不该顺手把线也删掉）。
+ * ★ 只清**这一棵**的节点端点：别的脑图、卡片、分栏、自由端的线一律不动。
+ */
+export function pruneMindNodeEdges(
+  board: BoardFile,
+  mindId: string,
+  aliveNodeIds: ReadonlySet<string>,
+): boolean {
+  const before = board.edges.length;
+  const dangling = (endpoint: EdgeEndpoint): boolean =>
+    endpoint.cardId === mindId &&
+    endpoint.nodeId !== undefined &&
+    !aliveNodeIds.has(endpoint.nodeId);
+  board.edges = board.edges.filter((edge) => !dangling(edge.from) && !dangling(edge.to));
+  return board.edges.length !== before;
+}
+
+/** 两个端点是否指向**同一个目标**（同一张卡 / 同一栏 / 同一棵脑图里的同一个节点） */
+function sameAnchorTarget(a: EdgeEndpoint, b: EdgeEndpoint): boolean {
+  // ★ 节点端点多比一层（`2.2.0` 批 3）：少了它，"同一棵脑图的两个不同节点之间连一条线"
+  //   会被当成自环丢掉，而"同一个节点连自己"又会被当成一条合法的线放进来 —— 两头都错。
+  if (a.cardId !== b.cardId) return false;
+  return (a.nodeId ?? '') === (b.nodeId ?? '');
+}
+
 /** 两个端点是否指向同一对卡片、同一对方位（查重用） */
 function sameEndpoint(a: EdgeEndpoint, b: EdgeEndpoint): boolean {
-  if (a.cardId !== b.cardId || a.side !== b.side) return false;
+  if (!sameAnchorTarget(a, b) || a.side !== b.side) return false;
   // 自由端（T2.07 / `F3-02`）的身份就是**那个坐标**：`cardId` 都是空串，
   // 只比空串的话，从同一张卡拉向三个不同方向的注释线会被判成"重复"，
   // 后拉的两条静默消失
@@ -789,11 +842,31 @@ function sameEndpoint(a: EdgeEndpoint, b: EdgeEndpoint): boolean {
 }
 
 /**
- * 端点是否指向一个**存在的端点对象**（卡片或分栏，`O21`）。
+ * 端点是否指向一个**存在的端点对象**（卡片 / 分栏 / 脑图，`O21` + `2.2.0`）。
  * 自由端不参与这项检查（它本来就不绑任何东西）。
+ *
+ * ★ 只查 `cardId` 那一层：节点这一层**故意不查** —— 节点清单在另一份模型里，
+ *   而 `.nestmind` 可能还没读到（见 `EdgeEndpoint.nodeId` 那条）。真取不到节点，
+ *   绘制时自然什么都不画，数据却还在。
  */
 function endpointAlive(endpoint: EdgeEndpoint, alive: ReadonlySet<string>): boolean {
   return isFreeEndpoint(endpoint) || alive.has(endpoint.cardId);
+}
+
+/**
+ * 这块板上**能当端点**的对象 id（卡片 ∪ 分栏 ∪ 脑图，`O21` / `2.2.0`）。
+ *
+ * ★ 抽出来给"加线"与"改端点"（{@link setEdgeEndpoint}）**共用**：两处各拼一遍的话，
+ *   迟早出现"拉新线能连到脑图、改端点却改不过去"这种只在一条路上复现的怪事。
+ */
+export function aliveEndpointIds(board: BoardFile): Set<string> {
+  const alive = new Set<string>();
+  for (const card of board.cards) alive.add(card.id);
+  for (const column of board.columns) alive.add(column.id);
+  // ★ 脑图（`2.2.0`）也是合法端点：少收它，从节点上拉出来的线会在**加进来的那一刻**
+  //   被这道校验静静丢掉 —— 界面上就是"拖了没反应"（自由端当年踩过同一个坑）。
+  for (const mind of board.minds ?? []) alive.add(mind.id);
+  return alive;
 }
 
 /**
@@ -815,14 +888,14 @@ function endpointAlive(endpoint: EdgeEndpoint, alive: ReadonlySet<string>): bool
  */
 export function addEdges(board: BoardFile, edges: readonly Edge[]): boolean {
   if (edges.length === 0) return false;
-  const alive = new Set<string>();
-  for (const card of board.cards) alive.add(card.id);
-  for (const column of board.columns) alive.add(column.id);
+  const alive = aliveEndpointIds(board);
 
   let added = false;
   for (const edge of edges) {
     // 两端都是自由端时 `'' === ''`，但那不是自环 —— 是画布上一条独立的线
-    if (!isFreeEndpoint(edge.from) && edge.from.cardId === edge.to.cardId) continue;
+    // ★ 自环判的是**同一个目标**（节点端点多比一层）：同一棵脑图里两个不同节点之间的线
+    //   是合法的，而同一个节点连自己是自环（见 `sameAnchorTarget`）
+    if (!isFreeEndpoint(edge.from) && sameAnchorTarget(edge.from, edge.to)) continue;
     if (!endpointAlive(edge.from, alive) || !endpointAlive(edge.to, alive)) continue;
     const duplicate = board.edges.some(
       (existing) => sameEndpoint(existing.from, edge.from) && sameEndpoint(existing.to, edge.to),
@@ -832,6 +905,62 @@ export function addEdges(board: BoardFile, edges: readonly Edge[]): boolean {
     added = true;
   }
   return added;
+}
+
+/**
+ * 端点重拖的目标（`2.2.0` · O1）：绑到某个对象上，或落成**自由端**。
+ *
+ * ★ `key` 是"白板级对象 id"那一格（卡片 / 分栏 / 脑图，与 `EdgeEndpoint.cardId` 同义），
+ *   `nodeId` 只在连到**脑图节点**时给。
+ */
+export type EdgeEndpointTarget =
+  { key: string; side: AnchorSide | null; nodeId?: string } | { key: null; point: Point };
+
+/**
+ * 改一条线**某一端的落点**（`2.2.0` · O1 端点重拖）。
+ *
+ * @param end `'from'` / `'to'`：改哪一端
+ * @returns 真的改了才 `true`（没变化 / 非法都返回 `false`，调用方据此不写历史）
+ *
+ * ★ 合法性规则与 {@link addEdges} **同一套**（不是"看起来差不多"）：端点必须活着、
+ *   不能自环、不能与已有连线完全重复。改端点这条路如果比"拉新线"宽一点，
+ *   用户就会得到"能用重拖做出拉不出来的线"这种只能靠猜的差异。
+ * ★ 两端都是自由端时不算自环（它们是画布上独立的两条线）—— 与 `addEdges` 同一条注释。
+ */
+export function setEdgeEndpoint(
+  board: BoardFile,
+  edgeId: string,
+  end: 'from' | 'to',
+  target: EdgeEndpointTarget,
+): boolean {
+  const edge = board.edges.find((item) => item.id === edgeId);
+  if (!edge) return false;
+
+  const other = end === 'from' ? edge.to : edge.from;
+  const next: EdgeEndpoint =
+    target.key === null
+      ? { cardId: '', side: null, point: { x: target.point.x, y: target.point.y } }
+      : {
+          cardId: target.key,
+          side: target.side,
+          ...(target.nodeId === undefined ? {} : { nodeId: target.nodeId }),
+        };
+
+  if (target.key !== null && !endpointAlive(next, aliveEndpointIds(board))) return false;
+  if (!isFreeEndpoint(other) && sameAnchorTarget(next, other)) return false;
+  if (sameEndpoint(edge[end], next)) return false;
+
+  // 重复线：与 `addEdges` 同一条（否则重拖能造出两条一模一样的线）
+  const nextFrom = end === 'from' ? next : edge.from;
+  const nextTo = end === 'to' ? next : edge.to;
+  const duplicate = board.edges.some(
+    (item) =>
+      item.id !== edgeId && sameEndpoint(item.from, nextFrom) && sameEndpoint(item.to, nextTo),
+  );
+  if (duplicate) return false;
+
+  edge[end] = next;
+  return true;
 }
 
 /** 删连线。id 不存在时返回 `false`（不产生"无变化的写入"） */

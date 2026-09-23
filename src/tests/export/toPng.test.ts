@@ -31,8 +31,17 @@ import {
   wrapText,
 } from '../../export/toPng';
 import type { PngPalette, PngRenderOptions } from '../../export/toPng';
-import { createBoardFile, createCard, createColumn, createEdge } from '../../model/factories';
+import {
+  createBoardFile,
+  createCard,
+  createColumn,
+  createEdge,
+  createMind,
+} from '../../model/factories';
 import type { BoardFile, Card } from '../../model/schema';
+import { createMindFile, createMindNode } from '../../mind/model/factories';
+import { mindPlacement } from '../../mind/embed/boardGeometry';
+import type { MindFile } from '../../mind/model/schema';
 import { MemoryVaultIO } from '../helpers/memoryVault';
 
 // ─────────────────────────────────────────────────────────────
@@ -64,6 +73,9 @@ class FakeContext {
    *   所以这一串色值本身就是断言对象。
    */
   readonly fills: string[] = [];
+
+  /** 每一次 `fillText` 的**实参**（文字 + 坐标 + 当时的字体 / 颜色） */
+  readonly texts: Array<{ text: string; x: number; y: number; font: string; fill: string }> = [];
 
   save(): void {
     this.ops.push('save');
@@ -114,6 +126,13 @@ class FakeContext {
   lineTo(): void {
     this.ops.push('lineTo');
   }
+  // 脑图的分支线（曲线 / 圆角）走这两条（`2.2.0` 批 4）
+  bezierCurveTo(): void {
+    this.ops.push('bezierCurveTo');
+  }
+  quadraticCurveTo(): void {
+    this.ops.push('quadraticCurveTo');
+  }
   arcTo(): void {
     this.ops.push('arcTo');
   }
@@ -124,8 +143,11 @@ class FakeContext {
     this.ops.push('drawImage');
     this.images.push(args);
   }
-  fillText(text: string): void {
+  fillText(text: string, x = 0, y = 0): void {
     this.ops.push(`fillText:${text}`);
+    // 脑图节点的文字**位置**是被断言的对象（`11 §15.6`：左对齐 + 垂直居中于标题带）——
+    // 只记"画过这段字"的话，"字跑到盒子外"这类问题在单测里看不出来
+    this.texts.push({ text, x, y, font: String(this.font), fill: String(this.fillStyle) });
   }
   measureText(text: string): { width: number } {
     // 等宽近似即可：折行/裁切只需要一个稳定的宽度
@@ -140,6 +162,7 @@ function fakeContext(): {
   arcs: unknown[][];
   transforms: string[];
   fills: string[];
+  texts: Array<{ text: string; x: number; y: number; font: string; fill: string }>;
 } {
   const fake = new FakeContext();
   return {
@@ -149,6 +172,7 @@ function fakeContext(): {
     arcs: fake.arcs,
     transforms: fake.transforms,
     fills: fake.fills,
+    texts: fake.texts,
   };
 }
 
@@ -556,6 +580,275 @@ describe('renderTile', () => {
     expect(ops.some((op) => op.startsWith('fillText:'))).toBe(true);
     expect(ops[ops.length - 1]).toBe('restore');
   });
+});
+
+/**
+ * 白板级脑图进导出（`2.2.0` 批 4）。
+ *
+ * 从前"一张脑图 = 一张卡"，它天然会被导出来；升格成容器之后它不在 `cards` 里 ——
+ * 不补这一笔，导出图里那棵树**整个消失**（连取景都会说"没有内容可导"）。
+ */
+describe('renderTile · 白板级脑图', () => {
+  const tile = { x: -2000, y: -2000, width: 4000, height: 4000, index: 0, column: 0, row: 0 };
+
+  /** 一棵"根 + 2 个分支"的脑图；`file` = 指向一份 `.nestmind`（不在白板文件里） */
+  function mindBoard(file = false): { board: BoardFile; rootId: string; branchId: string } {
+    const model = createMindFile({ rootText: '中心' });
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '甲', order: 0 }));
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '乙', order: 1 }));
+    const board = createBoardFile();
+    board.minds = [
+      createMind({
+        x: 100,
+        y: 100,
+        path: file ? 'Minds/一份.nestmind' : '',
+        mind: file ? undefined : model,
+      }),
+    ];
+    return { board, rootId: model.rootId, branchId: model.nodes[1].id };
+  }
+
+  it('★★ 内嵌脑图：分支线（曲线）与节点文字都画出来了', () => {
+    const { board } = mindBoard();
+    const { ctx, ops } = fakeContext();
+    renderTile(ctx, board, tile, renderOptions());
+
+    expect(ops).toContain('bezierCurveTo'); // 父子连线（默认曲线）
+    expect(ops).toContain('translate'); // 整份布局按锚点平移
+    expect(ops).toContain('fillText:中心');
+    expect(ops).toContain('fillText:甲');
+  });
+
+  it('★ 文件脑图**没给模型** ⇒ 一棵树都不画（而不是画一棵空树）', () => {
+    const { board } = mindBoard(true);
+    const { ctx, ops } = fakeContext();
+    renderTile(ctx, board, tile, renderOptions());
+
+    expect(ops).not.toContain('bezierCurveTo');
+    expect(ops).not.toContain('fillText:中心');
+  });
+
+  it('★ 文件脑图**给了模型** ⇒ 照样画（与内嵌那条同一份底稿）', () => {
+    const { board } = mindBoard(true);
+    const model = createMindFile({ rootText: '中心' });
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '甲', order: 0 }));
+    const { ctx, ops } = fakeContext();
+    renderTile(
+      ctx,
+      board,
+      tile,
+      renderOptions({ mindModels: new Map([[board.minds![0].id, model]]) }),
+    );
+
+    expect(ops).toContain('bezierCurveTo');
+    expect(ops).toContain('fillText:甲');
+  });
+
+  it('★ 范围=选中：框住一棵树 ⇒ 边界只框这棵树（远处的卡片不会被顺手带进来）', () => {
+    const { board } = mindBoard();
+    // 一块"树 + 一张远处的卡"的板子：这样才分得清"选中那棵树"与"整块板"
+    board.cards = [createCard('note', { id: 'far', x: 5000, y: 5000, width: 100, height: 100 })];
+    const mindId = board.minds![0].id;
+
+    const picked = resolveExportBounds(
+      board,
+      { range: 'selection' },
+      { selection: new Set([mindId]) },
+    )!;
+    const whole = resolveExportBounds(board, { range: 'all' })!;
+
+    expect(picked.width).toBeLessThan(whole.width);
+    // 树的根节点在 (100, 100)：外接框要罩住它，而 5000 那张卡必须在框外
+    expect(picked.x).toBeLessThan(100);
+    expect(picked.x + picked.width).toBeGreaterThan(100);
+    expect(picked.x + picked.width).toBeLessThan(5000);
+  });
+
+  /**
+   * 用户 2026-09-22 报："选中一棵树导出的 png 图样式和原脑图差很多。"
+   *
+   * 根因是**尺寸那一档没按层级估**：`mindPlacement` 用的是 `estimateNodeSize` 的默认字号
+   * （14），而样式表里中心主题是 30px、一层 18px —— 导出图里所有节点都被排成了 14px 的盒子，
+   * 字却按层级画，于是"字顶出盒子、节点比画布上小一圈"。连同三处排版数一起对齐：
+   * 标题带高度（行高 × 字号 + 上下 8px）、左对齐 + 垂直居中、粗体 700。
+   */
+  describe('导出观感与原脑图对齐（`11 §15.6`）', () => {
+    /** 一次渲染后的文字记录 + 那棵树在导出里的真实布局（`mutate` 在渲染**之前**改模型） */
+    function drawMindBoard(mutate?: (model: MindFile) => void) {
+      const { board, rootId, branchId } = mindBoard();
+      const mind = board.minds![0];
+      const model = mind.mind!;
+      mutate?.(model);
+      const { ctx, texts, ops } = fakeContext();
+      renderTile(ctx, board, tile, renderOptions());
+      const place = mindPlacement({ x: mind.x, y: mind.y }, model)!;
+      return { board, rootId, branchId, model, place, texts, ops };
+    }
+
+    it('★★ 备注（内容块）也画出来，而且**按节点内的宽度换行**', () => {
+      const note = '这是一段比较长的备注，长到必须换行才装得下，否则它会一直往右伸出去。';
+      const { rootId, place, texts } = drawMindBoard((model) => {
+        const root = model.nodes.find((node) => node.id === model.rootId)!;
+        root.note = note;
+      });
+
+      const box = place.layout.boxes.get(rootId)!;
+      // 盒子因为备注而更高（标题带之下还有内容块那几行）
+      expect(box.height).toBeGreaterThan(Math.round(30 * 1.35) + 16);
+      const drawn = texts.filter((item) => note.includes(item.text) && item.text.length > 0);
+      // 折成了多行（不再是"一条超长的线"）
+      expect(drawn.length).toBeGreaterThanOrEqual(2);
+      // 每一行都在盒子内部，且左对齐在同一个起笔位置
+      for (const line of drawn) {
+        expect(line.x).toBeCloseTo(box.x + 14, 5);
+        expect(line.y).toBeGreaterThan(box.y);
+        expect(line.y).toBeLessThan(box.y + box.height);
+      }
+      // 两行是上下排开的
+      expect(drawn[1]!.y).toBeGreaterThan(drawn[0]!.y);
+    });
+
+    it('★★ 节点上的**图片附件**也画出来：有真图就画（contain，不拉伸）', () => {
+      const file = mindBoard();
+      const model = file.board.minds![0].mind!;
+      model.nodes[0]!.refs = [{ kind: 'image', path: 'assets/图.png' }];
+      const { ctx, images, ops } = fakeContext();
+      renderTile(
+        ctx,
+        file.board,
+        tile,
+        renderOptions({
+          // 假位图：导出只读它报出来的宽高（`imageSize`）
+          images: new Map([
+            ['assets/图.png', { width: 200, height: 100 } as unknown as CanvasImageSource],
+          ]),
+        }),
+      );
+
+      expect(ops).toContain('drawImage');
+      // 五参形式：`drawImage(image, x, y, width, height)`
+      const args = images[0] as unknown[];
+      const width = args[3] as number;
+      const height = args[4] as number;
+      // contain：200×100 的图放进"节点宽 × 图片区高"里，宽高比必须保持 2:1
+      expect(width / height).toBeCloseTo(2, 5);
+    });
+
+    it('★ 拿不到那张图（没预加载到 / 文件没了）⇒ 画一块底纹，而不是让这一块空着', () => {
+      const file = mindBoard();
+      const model = file.board.minds![0].mind!;
+      model.nodes[0]!.refs = [{ kind: 'image', path: 'assets/没了.png' }];
+      const { ctx, images, ops } = fakeContext();
+      renderTile(ctx, file.board, tile, renderOptions());
+
+      expect(ops).not.toContain('drawImage');
+      // 底纹用的是同一块圆角矩形的画法（`fill` 次数比没有附件时多一次）
+      const plain = fakeContext();
+      const { board } = mindBoard();
+      renderTile(plain.ctx, board, tile, renderOptions());
+      expect(ops.filter((op) => op === 'fill').length).toBeGreaterThan(
+        plain.ops.filter((op) => op === 'fill').length,
+      );
+      expect(images).toHaveLength(0);
+    });
+
+    it('★ 标题里的换行**当空格**（画布上是一行，导出也一行，不再溢出盒子）', () => {
+      const { texts } = drawMindBoard((model) => {
+        const root = model.nodes.find((node) => node.id === model.rootId)!;
+        root.text = '第一行\n第二行';
+      });
+
+      const drawn = texts.filter((item) => item.text.includes('第一行'));
+      expect(drawn).toHaveLength(1);
+      expect(drawn[0]!.text).toBe('第一行 第二行');
+    });
+
+    it('★★ 同层等宽也落进导出几何：两个兄弟在导出图里**一样宽**', () => {
+      const { place } = drawMindBoard((file) => {
+        const root = file.nodes.find((node) => node.id === file.rootId)!;
+        file.nodes = [
+          ...file.nodes,
+          { ...root, id: 'n_长', text: '一个相当长的分支标题', parentId: root.id, order: 1 },
+          { ...root, id: 'n_短', text: '甲', parentId: root.id, order: 2 },
+        ];
+      });
+
+      const wide = place.layout.boxes.get('n_长')!;
+      const narrow = place.layout.boxes.get('n_短')!;
+      expect(narrow.width).toBe(wide.width);
+      // 右边缘齐平（同一层从同一个 x 起笔）
+      expect(narrow.x + narrow.width).toBeCloseTo(wide.x + wide.width, 5);
+    });
+
+    it('★★ 中心主题按 **30px / 粗体** 画，且左对齐在标题带内边距处、垂直居中', () => {
+      const { rootId, place, texts } = drawMindBoard();
+      const box = place.layout.boxes.get(rootId)!;
+      const drawn = texts.find((item) => item.text === '中心')!;
+
+      expect(drawn.font).toContain('30px');
+      expect(drawn.font).toContain('700'); // 从前是 600，比画布细一档
+      // 左对齐 + 14px 内边距（与 `padding: 8px 14px` 同一组数）
+      expect(drawn.x).toBeCloseTo(box.x + 14, 5);
+      // 垂直居中于"行高（1.35 × 字号）+ 上下各 8px"那条带子
+      expect(drawn.y).toBeCloseTo(box.y + 8 + Math.round(30 * 1.35) / 2, 5);
+    });
+
+    it('★★ 盒子也按层级估：中心主题那一档明显比一层高（从前清一色 14px）', () => {
+      const { rootId, branchId, place } = drawMindBoard();
+      const root = place.layout.boxes.get(rootId)!;
+      const branch = place.layout.boxes.get(branchId)!;
+
+      // 30px 那一档：行高 41 + 上下 16 = 57；14px 那一档只有 16 + 20 = 36
+      expect(root.height).toBeGreaterThanOrEqual(Math.round(30 * 1.35) + 16);
+      expect(root.height).toBeGreaterThan(branch.height);
+    });
+
+    it('★ 长标题在节点内**换行**（画出来是多行，不是一行超长）', () => {
+      const { board, rootId } = mindBoard();
+      const model = board.minds![0].mind!;
+      const long = 'abcdefghij'.repeat(4); // 40 个英文单位 ⇒ 两行（29 + 11）
+      const root = model.nodes.find((node) => node.id === rootId)!;
+      root.text = long;
+
+      const { ctx, texts } = fakeContext();
+      renderTile(ctx, board, tile, renderOptions());
+
+      const lines = texts.filter((item) => item.text.length > 0 && long.includes(item.text));
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      // 两行是**上下排**的（同一个 x，y 差一行高）
+      expect(lines[0].x).toBeCloseTo(lines[1].x, 5);
+      expect(lines[1].y - lines[0].y).toBeCloseTo(Math.round(30 * 1.35), 5);
+    });
+  });
+
+  it('★ 指着**节点**的连线也画得出来（端点表里有节点）', () => {
+    const { board, branchId } = mindBoard();
+    const mindId = board.minds![0].id;
+    const withNode = createBoardFile();
+    withNode.cards = [createCard('note', { id: 'c_1', x: 0, y: 0, width: 80, height: 60 })];
+    withNode.minds = board.minds;
+    withNode.edges = [
+      createEdge({ cardId: 'c_1', side: null }, { cardId: mindId, nodeId: branchId, side: null }),
+    ];
+    // 同样的板子，但端点指向一个**不存在的**节点（那条线会被跳过）
+    const withGhost = createBoardFile();
+    withGhost.cards = withNode.cards;
+    withGhost.minds = board.minds;
+    withGhost.edges = [
+      createEdge({ cardId: 'c_1', side: null }, { cardId: mindId, nodeId: 'n_不存在', side: null }),
+    ];
+
+    const drawn = fakeContext();
+    renderTile(drawn.ctx, withNode, tile, renderOptions());
+    const skipped = fakeContext();
+    renderTile(skipped.ctx, withGhost, tile, renderOptions());
+
+    expect(drawn.ops.length).toBeGreaterThan(skipped.ops.length);
+  });
+});
+
+describe('renderTile · 其余', () => {
+  const tile = { x: 0, y: 0, width: 200, height: 200, index: 0, column: 0, row: 0 };
 
   /** 两条线的标签不同的同一块板子（其余完全一样，好做差集） */
   function labeledBoard(label: string): BoardFile {

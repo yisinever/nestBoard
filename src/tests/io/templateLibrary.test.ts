@@ -124,12 +124,12 @@ describe('listUserTemplates', () => {
     expect(byPath.get('Templates/没标题.nboard')).toBe('没标题');
   });
 
-  it('列表里带上"多少张卡 / 多少栏 / 多少连线"的摘要', async () => {
+  it('列表里带上"多少张卡 / 多少栏 / 多少连线 / 多少棵树"的摘要', async () => {
     const { plugin } = fakePlugin({ files: { 'Templates/甲.nboard': boardText('甲') } });
 
     const { templates } = await listUserTemplates(plugin);
 
-    expect(templates[0]?.summary).toEqual({ cards: 1, columns: 0, edges: 0 });
+    expect(templates[0]?.summary).toEqual({ cards: 1, columns: 0, edges: 0, minds: 0 });
   });
 
   it('坏内容只计数不抛：一份坏文件不该让整张列表打不开', async () => {

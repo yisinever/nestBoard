@@ -133,6 +133,9 @@ export class BoardListPanelView extends ItemView {
 
     // 索引变化就重画 —— 但由指纹决定"值不值得"，见 `lastSignature`
     this.register(this.plugin.registry.onChanged(() => this.refresh()));
+    // ★ 链接 / 标签索引也要订阅（`F1` 追记）：卡内标签只活在 `LinkIndex` 里，
+    //   不订阅的话"在卡片里写一个 `#标签`，侧栏标签那一档不更新"
+    this.register(this.plugin.linkIndex.onChanged(() => this.refresh()));
   }
 
   override async onClose(): Promise<void> {
@@ -251,9 +254,10 @@ export class BoardListPanelView extends ItemView {
     recent: readonly string[],
     query: string,
   ): string {
-    const parts = entries.map(
-      (entry) => `${entry.path}\u0000${entry.title}\u0000${entry.tags.join('\u0001')}`,
-    );
+    const parts = entries.map((entry) => {
+      const cardTags = this.mode === 'tags' ? this.cardTagKeysOf(entry.path).join('\u0001') : '';
+      return `${entry.path}\u0000${entry.title}\u0000${entry.tags.join('\u0001')}\u0000${cardTags}`;
+    });
     return [this.mode, query, recent.join('\u0001'), parts.join('\n')].join('\u0002');
   }
 
@@ -306,13 +310,55 @@ export class BoardListPanelView extends ItemView {
   }
 
   private renderTags(root: HTMLElement, entries: readonly BoardListItem[]): void {
-    for (const group of groupByTag(entries)) {
+    // ★ 标签来源是**两份的并集**（`F1` 追记）：白板级 `meta.tags` ∪ **卡内标签**
+    //   —— 用户天天写的是后者，只看前者的话"在便签里写了一堆 #纪要 的板"会掉进
+    //   "未加标签"，这一档就废了。
+    for (const group of groupByTag(entries, (path) => this.cardTagKeysOf(path))) {
       root.createDiv({
         cls: 'nestboard-board-list__group-head',
         // `null` 是"没打标签"那一组；它显示成不带 `#` 的一句话，免得看起来像个叫"未加标签"的标签
         text: group.tag === null ? t('boardList.untagged') : `#${group.tag}`,
       });
-      for (const board of group.boards) this.renderRow(root, board, true);
+      for (const board of group.boards) {
+        this.renderRow(root, board, true);
+        // 这个标签是在**哪张卡上**写的：列出来，点一下直接跳过去（`F1` 的"直接"那一半）
+        if (group.tag !== null) this.renderTagHits(root, board, group.tag);
+      }
+    }
+  }
+
+  /** 一张卡上写过的标签（去重）—— 分组与指纹共用同一份来源 */
+  private cardTagKeysOf(path: string): string[] {
+    const keys = new Set<string>();
+    for (const hit of this.plugin.linkIndex.tagHitsOf(path)) {
+      const tag = hit.tag.trim();
+      if (tag.length > 0) keys.add(tag);
+    }
+    return [...keys];
+  }
+
+  /**
+   * 一个标签在某块板上**写在哪几张卡**。
+   *
+   * ★ 白板级 `meta.tags` 没有卡片可指（那是"这块板是什么"），所以这里通常为空 ——
+   *   空则一个节点都不建（不留空壳）。
+   */
+  private renderTagHits(parent: HTMLElement, board: BoardListItem, tag: string): void {
+    const hits = this.plugin.linkIndex
+      .tagHitsOf(board.path)
+      .filter((hit) => hit.tag.trim() === tag && hit.anchorId.length > 0);
+    for (const hit of hits) {
+      const item = parent.createEl('button', { cls: 'nestboard-board-list__tag-hit' });
+      item.setAttr('aria-label', t('boardList.tagHit.ariaLabel', { board: board.path }));
+      const icon = item.createSpan({ cls: 'nestboard-board-list__tag-hit-icon' });
+      setIcon(icon, 'text-select');
+      item.createSpan({
+        cls: 'nestboard-board-list__tag-hit-title',
+        text: hit.label.trim().length > 0 ? hit.label : t('boardList.tagHit.untitled'),
+      });
+      item.addEventListener('click', () => {
+        void this.openBoard(board.path, hit.anchorId);
+      });
     }
   }
 
@@ -348,8 +394,11 @@ export class BoardListPanelView extends ItemView {
     });
   }
 
-  private async openBoard(path: string): Promise<void> {
-    await openBoardView(this.app, path);
+  private async openBoard(path: string, anchorId?: string): Promise<void> {
+    const view = await openBoardView(this.app, path);
+    // 卡片级命中（`F1` 追记）：打开那块板并**把那张卡亮出来** ——
+    // 与反链面板同一条做法（那边点"哪张卡提过我"也是这么跳的）
+    if (view && anchorId !== undefined && anchorId.length > 0) view.revealCardById(anchorId);
     // 从列表里点开也算一次"打开"：已有的标签页被复用（`onLoadFile` 不会再触发）时
     // 只有这一行能把它挪到"最近打开"的队首
     this.plugin.rememberRecentBoard(path);

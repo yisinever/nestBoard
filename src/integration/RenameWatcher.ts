@@ -91,7 +91,10 @@ export function retargetBoard(board: BoardFile, oldPath: string, newPath: string
 
   for (const card of board.cards) {
     switch (card.type) {
-      // 这五种卡都是"指向一个 Vault 路径"（地图卡指向的是一张图片文件，T7.03）
+      // 这几种卡都是"指向一个 Vault 路径"（地图卡指向的是一张图片文件，T7.03）
+      // ★ 这里**没有** `'mindRef'`：老脑图卡在读入口就被转成了白板级容器
+      //   （`model/validate.mindFromLegacyCard`），内存里不可能有这种卡 ——
+      //   它那条"跟着 `.nestmind` 改名走"的职责搬到了下面的 `board.minds`。
       case 'noteRef':
       case 'image':
       case 'file':
@@ -127,6 +130,20 @@ export function retargetBoard(board: BoardFile, oldPath: string, newPath: string
       default:
         break;
     }
+  }
+
+  // 白板级脑图（`2.2.0` 收尾 · 老卡类型退出）：两件事各改各的 ——
+  // * **指向文件的树**（`path`）：改路径（这就是老 `mindRef` 卡原来那件事）；
+  // * **内嵌的树**（`mind`）：改它里面的附件引用与内联链接（`retargetMind`，
+  //   与 `.nestmind` 那条用的是同一份纯函数 —— 白板里的树与文件里的树是同一种内容）。
+  // ★ 不补这一段的话：把一份 `.nestmind` 改个名，白板上那棵树就会指向一个不存在的文件
+  //   （卡面写"找不到这份脑图文件"），而它**本来是好的**。
+  for (const mind of board.minds ?? []) {
+    if (mind.path === oldPath) {
+      mind.path = newPath;
+      changed = true;
+    }
+    if (mind.mind && retargetMind(mind.mind, oldPath, newPath)) changed = true;
   }
 
   // 嵌套白板的父指针

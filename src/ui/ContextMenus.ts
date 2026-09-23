@@ -16,10 +16,34 @@ import type { MenuItemSpec } from '../view/interact/cardMenu';
 import type { HexColor } from '../model/schema';
 import { ColorPickerModal } from './modals/ColorPickerModal';
 
+/**
+ * 我们自己的菜单上的标记类（`F2` 拟物档只认它）。
+ *
+ * ★ 为什么必须有个标记、而不是直接写 `.menu`：`.menu` 是**全 Obsidian 的**菜单
+ *   （别的插件、文件浏览器、标签页右键都用它）。拟物是个"卡片外观档"，把它套到
+ *   宿主与别人家的菜单上属于越界 —— 只给自己开的菜单加这个类，边界就干净了。
+ * ★ 注入进 Obsidian「⋯」菜单的那些项（`appendMenuItems`）**不加**：那个菜单是宿主的，
+ *   我们只是往里塞了几项（它自己还放着"左右分屏"那些）。
+ */
+export const NESTBOARD_MENU_CLASS = 'nestboard-menu';
+
+/**
+ * 给菜单打上标记类。
+ *
+ * ★ `Menu.dom` 在本版 `obsidian.d.ts` 里**没有声明** ⇒ 运行时探测（与下面
+ *   `showAtPosition` 的探测同一条纪律：拿不到就退，而不是让插件挂掉）。
+ *   拿不到的代价只是"这个菜单没换皮"，不影响任何功能。
+ */
+function markAsOurs(menu: Menu): void {
+  const dom = (menu as unknown as { dom?: HTMLElement }).dom;
+  if (dom && typeof dom.classList?.add === 'function') dom.classList.add(NESTBOARD_MENU_CLASS);
+}
+
 /** 在鼠标位置弹出菜单（空白处 / 卡片上的右键都走它） */
 export function showMenuAtMouse(event: MouseEvent, items: readonly MenuItemSpec[]): void {
   const menu = new Menu();
   appendItems(menu, items);
+  markAsOurs(menu);
   menu.showAtMouseEvent(event);
 }
 
@@ -67,6 +91,7 @@ function present(
   point: { x: number; y: number },
 ): void {
   appendItems(menu, items);
+  markAsOurs(menu);
 
   const candidate = menu as Menu & {
     showAtPosition?: (position: { x: number; y: number }) => void;

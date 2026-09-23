@@ -13,9 +13,11 @@ import {
   copySubtree,
   duplicateNodes,
   getMindClipboard,
+  isOwnClipboardText,
   mindClipboardHtml,
   mindClipboardText,
   parseMindClipboardHtml,
+  parseOutlineText,
   pasteForest,
   pasteSubtree,
   setMindClipboard,
@@ -387,5 +389,92 @@ describe('进程内的剪贴板', () => {
       side: 1,
       free: false,
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// 从**外部**粘进来的文字（`N3-j`：一行一节点 → 认得出层级）
+// ─────────────────────────────────────────────────────────────
+
+describe('parseOutlineText（外部文字 → 层级）', () => {
+  it('没有列表标记 ⇒ 一行一个节点、全部平级（散文不该被当成缩进结构）', () => {
+    expect(parseOutlineText('第一行\n第二行\n\n第三行')).toEqual([
+      { text: '第一行', children: [] },
+      { text: '第二行', children: [] },
+      { text: '第三行', children: [] },
+    ]);
+  });
+
+  it('★ Markdown 列表（2 空格缩进）⇒ 建出父子层级，行首标记剥掉', () => {
+    const items = parseOutlineText(
+      ['- 甲', '  - 甲一', '    - 甲一一', '  - 甲二', '- 乙'].join('\n'),
+    );
+    expect(items).toEqual([
+      {
+        text: '甲',
+        children: [
+          { text: '甲一', children: [{ text: '甲一一', children: [] }] },
+          { text: '甲二', children: [] },
+        ],
+      },
+      { text: '乙', children: [] },
+    ]);
+  });
+
+  it('★ 缩进宽度**不假设**：4 空格、Tab、`1.` / `1)` 序号都认', () => {
+    const four = parseOutlineText(['* 甲', '    * 甲一'].join('\n'));
+    expect(four[0]?.children.map((child) => child.text)).toEqual(['甲一']);
+
+    const tab = parseOutlineText(['+ 甲', '\t+ 甲一'].join('\n'));
+    expect(tab[0]?.children.map((child) => child.text)).toEqual(['甲一']);
+
+    const ordered = parseOutlineText(['1. 甲', '   1) 甲一'].join('\n'));
+    expect(ordered[0]?.children.map((child) => child.text)).toEqual(['甲一']);
+  });
+
+  it('缩进**变浅**就回到上一层（不是"缩进过就一直往下"）', () => {
+    const items = parseOutlineText(['- 甲', '  - 甲一', '- 乙', '  - 乙一'].join('\n'));
+    expect(items.map((item) => item.text)).toEqual(['甲', '乙']);
+    expect(items[1]?.children.map((child) => child.text)).toEqual(['乙一']);
+  });
+
+  it('空行与空的列表项丢掉；整段空白 ⇒ 空数组（调用方据此提示"没东西可粘"）', () => {
+    expect(parseOutlineText('   \n\n')).toEqual([]);
+    expect(parseOutlineText('- \n- 甲')).toEqual([{ text: '甲', children: [] }]);
+  });
+
+  it('列表里夹着散文行 ⇒ 散文按自己的缩进落位', () => {
+    const items = parseOutlineText(['- 甲', '  - 甲一', '散文'].join('\n'));
+    expect(items.map((item) => item.text)).toEqual(['甲', '散文']);
+  });
+});
+
+describe('isOwnClipboardText（只拿到纯文本时的认亲）', () => {
+  const payload = () => {
+    const mind = mindWith([
+      ['中心', null],
+      ['甲', '中心'],
+      ['甲一', '甲'],
+    ]);
+    const copied = copySubtree(mind, 'n_甲');
+    if (!copied) throw new Error('夹具坏了');
+    return copied;
+  };
+
+  it('与自己写出去的 `text/plain` 一致 ⇒ 认为是"还是那次复制"', () => {
+    const copied = payload();
+    expect(isOwnClipboardText(copied, mindClipboardText(copied))).toBe(true);
+  });
+
+  it('换行 / 行尾空白被改写也认得出来（跨应用往返常发生）', () => {
+    const copied = payload();
+    const rewritten = mindClipboardText(copied).replace(/\n/g, '\r\n').replace(/甲一/g, '甲一   ');
+    expect(isOwnClipboardText(copied, rewritten)).toBe(true);
+  });
+
+  it('★ 用户后来复制的**别的东西** ⇒ 不认（这正是那个 bug 的判据）', () => {
+    const copied = payload();
+    expect(isOwnClipboardText(copied, '一段完全无关的纯文本')).toBe(false);
+    expect(isOwnClipboardText(copied, '')).toBe(false);
   });
 });

@@ -108,6 +108,10 @@ export interface CardMenuActions {
   setShowTitle(show: boolean): void;
   /** 收起 / 展开这一张卡（`O31`） */
   toggleCollapse(id: string): void;
+  /** 树折叠（`F7`）：把这张卡的子级收成「+N」/ 展开回去 */
+  toggleTreeCollapse(id: string): void;
+  /** 解除这一张卡的树父子关系（`F7`）：删掉那条树线，子卡原样留着 */
+  unlinkTreeParent(id: string): void;
   /** 改背景色（主题编号或自定义 HEX） */
   setColor(color: CardColor): void;
   /** 改左侧强调色条（`null` = 不显示色条） */
@@ -404,6 +408,20 @@ export interface CardMenuInput {
    */
   grouped?: boolean;
   /**
+   * 这张卡的**树关系**速览（`F7`）。省略 = 视图没给（老调用方 / 测试）⇒ 三个树菜单项都不出现。
+   *
+   * ★ 与 `grouped` 同一条约定：树关系存在 `board.edges` 上、不在 `Card` 上，
+   *   规格层看不见它，由视图用 `model/tree` 算好递进来。
+   */
+  tree?: {
+    /** 直接子级数（折叠菜单项与 +N 同一个数） */
+    childCount: number;
+    /** 当前是否已折叠子级 */
+    collapsed: boolean;
+    /** 这张卡有没有树父级（决定「解除父子关系」是否出现） */
+    hasParent: boolean;
+  };
+  /**
    * 这个类型**双击会不会被自己接走**（`O35`）。省略 = `true`（双击进编辑态）。
    *
    * ★ 为 `false` 时「编辑内容」整项不出现：那些类型的双击是"打开文件 / 跳浏览器 /
@@ -649,6 +667,7 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
     readOnly = false,
     inlineEdit = true,
     hiddenItems,
+    tree,
   } = input;
   const multiple = selection.length > 1;
   const count = selection.length;
@@ -684,17 +703,18 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
    *   置灰会让用户以为"是不是哪里没满足"，而真相是这个类型根本没有可编辑的正文。
    */
 
-  const items: MenuItemSpec[] = inlineEdit && !hiddenItems?.has('editContent')
-    ? [
-        {
-          id: 'edit',
-          title: t('menu.card.edit'),
-          icon: 'pencil',
-          disabled: multiple,
-          run: () => actions.edit(target.id),
-        },
-      ]
-    : [];
+  const items: MenuItemSpec[] =
+    inlineEdit && !hiddenItems?.has('editContent')
+      ? [
+          {
+            id: 'edit',
+            title: t('menu.card.edit'),
+            icon: 'pencil',
+            disabled: multiple,
+            run: () => actions.edit(target.id),
+          },
+        ]
+      : [];
 
   /**
    * 只读板上**仍然可用**的项。
@@ -746,6 +766,32 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
             run: () => actions.toggleCollapse(target.id),
           },
         ]),
+    // 树折叠 / 解除父子（`F7`）：有子级才有"折叠"，有父级才谈"解除"。
+    // ★ 不出现而不是置灰：没有树关系的卡占绝大多数（与"重置旋转"同一条取舍）。
+    ...(tree && tree.childCount > 0 && !multiple
+      ? [
+          {
+            id: 'toggle-tree-collapse',
+            title: tree.collapsed
+              ? t('menu.card.treeExpand', { count: tree.childCount })
+              : t('menu.card.treeCollapse', { count: tree.childCount }),
+            icon: 'list-tree',
+            disabled: readOnly,
+            run: () => actions.toggleTreeCollapse(target.id),
+          },
+        ]
+      : []),
+    ...(tree && tree.hasParent && !multiple
+      ? [
+          {
+            id: 'unlink-tree-parent',
+            title: t('menu.card.treeUnlink'),
+            icon: 'unlink',
+            disabled: readOnly,
+            run: () => actions.unlinkTreeParent(target.id),
+          },
+        ]
+      : []),
     // 重置旋转（T7.06 / `F2-00-10`）：只在**真的转过的**卡片上出现。
     // ★ 不出现而不是置灰：没转过的卡片占绝大多数，"重置旋转"在那儿永远点不动 ——
     //   一排永远灰着的项会让人以为功能没做好（与 `present-step-earlier` 同一条取舍）。
@@ -1259,10 +1305,23 @@ export interface CanvasMenuActions {
   newLink?(): void;
   /** 新建空分栏（T3.27） */
   newColumn?(): void;
+  /**
+   * 开关**画布过滤条**（`2.2.0` · O3）。
+   *
+   * ★ 为什么进右键菜单（用户 2026-09-22："可以把这个操作放到菜单里"）：过滤条是个
+   *   "常驻但默认藏着"的面板，此前只有命令面板一条入口 —— 而"我想筛一下这块板"
+   *   是个**看着画布**才想起的动作（与"新建一张卡"同一处境）。
+   */
+  toggleFilter?(): void;
   /** 新建仅标题卡（`A3`）：一张"空白纸"，落卡即写 —— 能直接进右键菜单 */
   newTitleCard?(): void;
   /** 新建空图集卡（`A4`）：先落一张空的，等着往里放图 */
   newGallery?(): void;
+  /**
+   * 新建**内嵌脑图卡**（`F4`）：又一张"空白纸"—— 落下来就是"中心主题 + 3 个空分支"，
+   * 不弹选择器、不建文件，所以能直接进右键菜单。
+   */
+  newMind?(): void;
   /**
    * 新建视频卡 / 音频卡（`A1` / `A2`，用户 2026-09-18："新增的卡片类型都要放到右键菜单里"）。
    *
@@ -1467,18 +1526,100 @@ export function buildColumnMenuSpec(input: ColumnMenuInput): MenuItemSpec[] {
   return readOnly ? items.map((item) => ({ ...item, disabled: true })) : items;
 }
 
+/**
+ * **脑图（整棵树）**的右键菜单动作（`2.2.0` 收尾 · 演示对接）。
+ *
+ * ★ 只放演示四项：树的其他动作（删除 / 复制 / 搬运）已经走**选区 + 命令**那条路
+ *   （`2.2.0` 批 4 批 5 做的），这里不重复一份入口。
+ */
+export interface MindMenuActions {
+  addToPresentation(): void;
+  removeFromPresentation(): void;
+  moveEarlier(): void;
+  moveLater(): void;
+}
+
+/** 这棵树的演示状态（视图算好递进来，规格层不认识 board） */
+export interface MindMenuState {
+  /** 已经在演示路径里 */
+  inPresentation: boolean;
+  /** 还能前移 / 后移（到头的方向不出现，与卡片菜单同一条取舍） */
+  canMoveEarlier: boolean;
+  canMoveLater: boolean;
+}
+
+/**
+ * 脑图容器的右键菜单（`2.2.0` 收尾）。
+ *
+ * ★ 与卡片那份分开而不是塞进 `buildCardMenuSpec`：卡片菜单有四十来项、
+ *   还带着选择性置灰的规则，而树这一份只有演示四项 —— 混在一起读的人会以为
+ *   树的菜单也该有"改颜色 / 裁剪图片"那些。
+ */
+export function buildMindMenuSpec(state: MindMenuState, actions: MindMenuActions): MenuItemSpec[] {
+  const items: MenuItemSpec[] = [
+    state.inPresentation
+      ? {
+          id: 'mind-present-remove',
+          title: t('menu.mind.presentRemove'),
+          icon: 'minus-circle',
+          run: () => actions.removeFromPresentation(),
+        }
+      : {
+          id: 'mind-present-add',
+          title: t('menu.mind.presentAdd'),
+          icon: 'play-circle',
+          run: () => actions.addToPresentation(),
+        },
+  ];
+
+  if (state.inPresentation) {
+    if (state.canMoveEarlier) {
+      items.push({
+        id: 'mind-present-earlier',
+        title: t('menu.mind.presentEarlier'),
+        icon: 'arrow-up',
+        separatorBefore: true,
+        run: () => actions.moveEarlier(),
+      });
+    }
+    if (state.canMoveLater) {
+      items.push({
+        id: 'mind-present-later',
+        title: t('menu.mind.presentLater'),
+        icon: 'arrow-down',
+        run: () => actions.moveLater(),
+      });
+    }
+  }
+  return items;
+}
+
 export function buildCanvasMenuSpec(actions: CanvasMenuActions): MenuItemSpec[] {
   return [
     // 与工具条对齐（T3.27）：工具条上能建的"空白纸"，右键菜单里也该有。
     // ★ 图片 / 文件 / 白板**故意不放进来**：它们要先弹一个文件选择器，
     //   而右键菜单一关就没了主人 —— 菜单项的模态框会跟着一起消失。
     //   那几种只能从工具条拖着建（拖拽手势不依赖菜单活着）。
+    // 过滤条开关（`2.2.0` · O3）：放在最上面那一格旁边 —— 它是"看这块板"的动作，
+    // 后面那些是"往板上加东西"的动作
+    ...(actions.toggleFilter
+      ? [
+          {
+            id: 'canvas-filter',
+            title: t('menu.canvas.filter'),
+            icon: 'filter',
+            run: () => actions.toggleFilter?.(),
+          },
+        ]
+      : []),
     ...(actions.newNote
       ? [
           {
             id: 'new-note',
             title: t('menu.canvas.newNote'),
             icon: 'sticky-note',
+            // 与上面那条「过滤卡片…」之间画一条分隔线（"看板"的动作 / "加内容"的动作）
+            separatorBefore: true,
             run: () => actions.newNote?.(),
           },
         ]
@@ -1499,7 +1640,9 @@ export function buildCanvasMenuSpec(actions: CanvasMenuActions): MenuItemSpec[] 
     actions.newTitleCard ||
     actions.newGallery ||
     actions.newVideo ||
-    actions.newAudio
+    actions.newAudio ||
+    // 内嵌脑图卡（`F4`）同样属于"空白纸"
+    actions.newMind
       ? [
           {
             id: 'new-cards',
@@ -1586,6 +1729,17 @@ export function buildCanvasMenuSpec(actions: CanvasMenuActions): MenuItemSpec[] 
                       title: t('toolbar.gallery'),
                       icon: 'images',
                       run: () => actions.newGallery?.(),
+                    },
+                  ]
+                : []),
+              // 内嵌脑图卡（`F4`）：标签同样复用工具栏那一份
+              ...(actions.newMind
+                ? [
+                    {
+                      id: 'new-mind',
+                      title: t('toolbar.mind'),
+                      icon: 'network',
+                      run: () => actions.newMind?.(),
                     },
                   ]
                 : []),

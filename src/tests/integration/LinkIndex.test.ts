@@ -423,6 +423,40 @@ describe('LinkIndex 查询与通知', () => {
     expect(index.boardsWithTag('不存在')).toEqual([]);
   });
 
+  it('★ 标签不再限于便签卡（`F1`）：待办卡上写的标签也进索引（链接那侧仍守便签边界）', async () => {
+    const vault = new MemoryVaultIO({
+      'Boards/A.nboard': serializeBoard(
+        makeBoard('nb_a', 'A', [todoCard('#纪要 见 [[别的笔记]]'), noteCard('#纪要')]),
+      ),
+    });
+    const index = makeIndex(vault);
+    await index.rebuild();
+
+    // 标签：待办卡与便签卡都算（去重后只剩一个），与过滤条 / 搜索同一份口径
+    expect(index.tagsOf('Boards/A.nboard')).toEqual(['纪要']);
+    // 链接：待办卡里那句 `[[别的笔记]]` 不进反链（"内联卡反链"这个说法要立得住）
+    expect(index.linksOf('Boards/A.nboard')).toEqual([]);
+  });
+
+  it('★ `tagHitsOf`：标签写在**哪张卡上**（F1 追记的侧栏标签面板展开用）', async () => {
+    const cardA = noteCard('#纪要 #周报', 'A 卡');
+    const cardB = todoCard('#纪要');
+    const vault = new MemoryVaultIO({
+      'Boards/A.nboard': serializeBoard(makeBoard('nb_a', 'A', [cardA, cardB])),
+    });
+    const index = makeIndex(vault);
+    await index.rebuild();
+
+    const hits = index.tagHitsOf('Boards/A.nboard');
+    // 去重后：纪要 ×2 处（便签 + 待办） + 周报 ×1 处
+    expect(hits).toHaveLength(3);
+    const ji = hits.filter((hit) => hit.tag === '纪要');
+    expect(ji.map((hit) => hit.anchorId).sort()).toEqual([cardA.id, cardB.id].sort());
+    expect(ji.find((hit) => hit.anchorId === cardA.id)?.label).toBe('A 卡');
+    // 每一条都带好在哪份文档上（面板点它要跳过去）
+    expect(hits.every((hit) => hit.docPath === 'Boards/A.nboard')).toBe(true);
+  });
+
   it('转义字符与空目标不会造出幽灵出链', async () => {
     const vault = new MemoryVaultIO({
       'Boards/A.nboard': serializeBoard(

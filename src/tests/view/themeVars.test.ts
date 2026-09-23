@@ -11,8 +11,10 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_SETTINGS, type NestboardSettings } from '../../settings/settings';
 import {
+  BOARD_STYLE_CLASS,
   CARD_STYLE_VARS,
   CARD_STYLE_VAR,
+  applyBoardStyleClass,
   applyCardStyleVariables,
   cardStyleVariables,
   clearCardStyleVariables,
@@ -126,5 +128,50 @@ describe('clearCardStyleVariables', () => {
 
     expect(vars.size).toBe(0);
     expect(removed.sort()).toEqual([...CARD_STYLE_VARS].sort());
+  });
+});
+
+/**
+ * 外观档的**标记类**（`F2`）。
+ *
+ * 这一条守的是"原版档一个字节都不动"这条回归基线（`11 §7`）：
+ * 整套拟物规则都挂在 `.nestboard-neumorph` 下面，所以"不写类"就等于"完全没这回事"。
+ * 类名拼错 / 切回原版档时忘了摘 —— 两种错法的表现都是"外观档开关看起来没用"。
+ */
+describe('applyBoardStyleClass', () => {
+  /** 只带 `classList` 的假元素（本函数只碰它） */
+  function fakeClassElement() {
+    const classes = new Set<string>();
+    const el = {
+      classList: {
+        toggle: (name: string, force?: boolean) => {
+          const next = force ?? !classes.has(name);
+          if (next) classes.add(name);
+          else classes.delete(name);
+          return next;
+        },
+      },
+    } as unknown as HTMLElement;
+    return { el, classes };
+  }
+
+  it('拟物档：写上标记类', () => {
+    const { el, classes } = fakeClassElement();
+    applyBoardStyleClass(el, settings({ cardStyle: 'neumorph' }));
+    expect(classes.has(BOARD_STYLE_CLASS)).toBe(true);
+  });
+
+  it('★ 原版档：**摘掉**这个类（不写类 = 既有规则一条都不受影响）', () => {
+    const { el, classes } = fakeClassElement();
+    applyBoardStyleClass(el, settings({ cardStyle: 'neumorph' }));
+    applyBoardStyleClass(el, settings({ cardStyle: 'classic' }));
+    expect(classes.has(BOARD_STYLE_CLASS)).toBe(false);
+  });
+
+  it('幂等：同一个档连写两次不会来回翻', () => {
+    const { el, classes } = fakeClassElement();
+    applyBoardStyleClass(el, settings({ cardStyle: 'neumorph' }));
+    applyBoardStyleClass(el, settings({ cardStyle: 'neumorph' }));
+    expect([...classes]).toEqual([BOARD_STYLE_CLASS]);
   });
 });

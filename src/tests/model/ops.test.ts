@@ -7,7 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createBoardFile, createCard } from '../../model/factories';
+import { createBoardFile, createCard, createEdge, createMind } from '../../model/factories';
+import { createMindFile, createMindNode } from '../../mind/model/factories';
 import {
   MIN_GROUP_SIZE,
   addCards,
@@ -26,6 +27,7 @@ import {
   patchSyncGroup,
   pruneGroups,
   removeCards,
+  removeMindNodes,
   sendToBack,
   setGroupCollapsed,
   setGroupLabel,
@@ -34,7 +36,8 @@ import {
   updateCardLook,
   updateCards,
 } from '../../model/ops';
-import type { BoardFile, Card } from '../../model/schema';
+import { nodeEndpointKey } from '../../model/schema';
+import type { BoardFile, Card, Mind } from '../../model/schema';
 import { sortCardsByZ } from '../../view/render/CardLayer';
 
 function boardWith(zValues: Record<string, number>): BoardFile {
@@ -99,6 +102,105 @@ describe('patchSyncGroup（T7.04 / F2.9）', () => {
 
     expect(patchSyncGroup(board, 'sy_a', '新')).toBe(true);
     expect(cardById(board, 's1')?.content).toEqual({ key: 'sy_a', md: '新' });
+  });
+});
+
+/**
+ * 整棵层级调整 + 节点级删除（`2.2.0` 收尾）。
+ *
+ * ★ z 是**共用的一格**（分栏在最下、卡片与脑图从 10 起混排）—— 所以"置顶/置底"必须在
+ *   "卡片 ∪ 脑图"这一个序列里排，否则"把这张卡置顶"会得到一个它仍压在树下面的结果。
+ */
+describe('层级调整 × 脑图（2.2.0 收尾）', () => {
+  function boardWithMinds(): BoardFile {
+    const board = createBoardFile();
+    board.cards = [createCard('note', { id: 'a', z: 10 }), createCard('note', { id: 'b', z: 20 })];
+    board.minds = [
+      { ...createMind({ z: 30 }), id: 'nm1' },
+      { ...createMind({ z: 40 }), id: 'nm2' },
+    ];
+    return board;
+  }
+
+  it('★ 一棵树置顶：挪到卡片之上（两者在同一个 z 序列里）', () => {
+    const board = boardWithMinds();
+    expect(bringToFront(board, ['nm1'])).toBe(true);
+
+    expect(board.minds!.find((mind) => mind.id === 'nm1')!.z).toBeGreaterThan(
+      Math.max(...board.cards.map((card) => card.z)),
+    );
+    // 没被选中的那棵树一个字节不动
+    expect(board.minds!.find((mind) => mind.id === 'nm2')!.z).toBe(40);
+  });
+
+  it('★ 一张卡与一棵树一起置底：相对次序保持（卡在树下面）', () => {
+    const board = boardWithMinds();
+    expect(sendToBack(board, ['nm1', 'b'])).toBe(true);
+
+    const zOf = (id: string): number =>
+      [...board.cards, ...board.minds!].find((item) => item.id === id)!.z;
+    expect(zOf('b')).toBeLessThan(zOf('nm1'));
+    expect(zOf('nm1')).toBeLessThan(zOf('a'));
+  });
+
+  it('选中的树本来就压在顶层 → 返回 false 且一个字节都不动', () => {
+    const board = boardWithMinds();
+    const before = board.minds!.map((mind) => mind.z);
+    expect(bringToFront(board, ['nm2'])).toBe(false);
+    expect(board.minds!.map((mind) => mind.z)).toEqual(before);
+  });
+});
+
+/**
+ * 删除若干节点（`2.2.0` 收尾 · 节点级框选）。
+ *
+ * ★ 只碰**内嵌**的树：文件树的节点在 `.nestmind` 里，由调用方另走仓储
+ *   （这条纯函数读不到那份文件）—— 用例把这件事钉住，免得日后有人以为它是全能的。
+ */
+describe('removeMindNodes（2.2.0 收尾）', () => {
+  function tree(id: string, nodeIds: string[], path = ''): Mind {
+    const mind: Mind = { ...createMind({ path }), id };
+    const model = createMindFile({ rootText: '根' });
+    // 根 + `nodeIds` 里那些（第一个是根）
+    for (let index = 1; index < nodeIds.length; index += 1) {
+      model.nodes.push(createMindNode({ id: nodeIds[index], parentId: model.rootId, text: '子' }));
+    }
+    model.nodes[0].id = nodeIds[0]!;
+    model.rootId = nodeIds[0]!;
+    if (path.length === 0) mind.mind = model;
+    return mind;
+  }
+
+  it('★ 内嵌树：删掉选中的节点，并清掉指向它的连线', () => {
+    const board = createBoardFile();
+    board.cards = [createCard('note', { id: 'c1' })];
+    board.minds = [tree('nm1', ['root1', 'n_a', 'n_b'])];
+    board.edges = [
+      // 指着 n_a 的线（该跟着节点一起走）
+      createEdge({ cardId: 'c1', side: null }, { cardId: 'nm1', side: null, nodeId: 'n_a' }),
+      // 指着 n_b 的线（那条节点还在 ⇒ 留住）
+      createEdge({ cardId: 'c1', side: null }, { cardId: 'nm1', side: null, nodeId: 'n_b' }),
+    ];
+
+    expect(removeMindNodes(board, [nodeEndpointKey('nm1', 'n_a')])).toBe(true);
+
+    expect(board.minds![0].mind!.nodes.map((node) => node.id)).toEqual(['root1', 'n_b']);
+    expect(board.edges).toHaveLength(1);
+    expect(board.edges[0].to.nodeId).toBe('n_b');
+  });
+
+  it('★ 根节点删不掉（删整棵是另一个动作），返回 false', () => {
+    const board = createBoardFile();
+    board.minds = [tree('nm1', ['root1', 'n_a'])];
+    expect(removeMindNodes(board, [nodeEndpointKey('nm1', 'root1')])).toBe(false);
+  });
+
+  it('★ 文件树不归它管：一个字节都不动（那条路走仓储）', () => {
+    const board = createBoardFile();
+    board.minds = [tree('nm1', ['root1', 'n_a'], '脑图/甲.nestmind')];
+    expect(removeMindNodes(board, [nodeEndpointKey('nm1', 'n_a')])).toBe(false);
+    // 也没有 `mind` 这一份可以改（它的内容不在板子里）
+    expect(board.minds![0].mind).toBeUndefined();
   });
 });
 

@@ -5,7 +5,7 @@
  *
  * 1. **DOM 命中（委托）**：卡片层只挂 3 个监听器（`pointerdown` / `dblclick` /
  *    `contextmenu`），靠 `closest('[data-card-id], [data-column-id]')` 找到端点元素
- *    （`O21` 之后分栏也是端点，见 `resolveEndpoint`）。
+ *    （`O21` 之后分栏也是端点；`2.2.0` 批 3 起**脑图节点**也算，见 `resolveEndpoint`）。
  *    浏览器已经把"点在哪张卡上"算好了，还自带 `z-index`、`pointer-events`、
  *    圆角、`overflow` 等全部细节 —— 1000 张卡也只挂 3 个监听器，而不是 3000 个。
  * 2. **几何命中（`hitTest`）**：不依赖浏览器的场景才用 ——
@@ -17,7 +17,8 @@
  * ★ 不 import `obsidian`。几何部分可在 node 下单测；DOM 部分只在调用时触到全局对象。
  */
 
-import { CARD_ID_ATTR, COLUMN_ID_ATTR } from '../../constants';
+import { CARD_ID_ATTR, COLUMN_ID_ATTR, MIND_CONTAINER_ID_ATTR } from '../../constants';
+import { MIND_NODE_ID_ATTR } from '../../mind/view/render';
 import type { Card } from '../../model/schema';
 import {
   rectCenter,
@@ -101,39 +102,78 @@ export function resolveCardElement(
   target: EventTarget | null,
   root: HTMLElement,
 ): HTMLElement | null {
-  if (!(target instanceof HTMLElement)) return null;
-  const element = target.closest<HTMLElement>(`[${CARD_ID_ATTR}], [${COLUMN_ID_ATTR}]`);
-  if (!element || !root.contains(element)) return null;
+  // ★ 判据是 `Element` 而**不是** `HTMLElement`：`<svg>` 及它的 `rect`/`text`/`line`
+  //   都是 `SVGElement`，不属于 `HTMLElement`。从前这一行会让"指针落在卡面 SVG 上"
+  //   直接返回 `null` —— 表现是整张 `.canvas` 预览卡几乎拖不动（只有 SVG 没盖到的
+  //   几个像素能拖），因为拖动 / 选中 / 双击全都要先经过这个命中测试。
+  //   卡面上嵌 SVG 的不止这一种卡，所以修在**公共入口**，不在某张卡里绕。
+  if (!(target instanceof Element)) return null;
+  const element = target.closest(`[${CARD_ID_ATTR}], [${COLUMN_ID_ATTR}]`);
+  // 命中要求必须落在**宿主容器内**（画布外的同名属性不算），且确实是 HTML 元素
+  // （带 `data-card-id` 的总是；这里挡住的是"SVG 自身恰好被 `closest` 命中"的假想情况）
+  if (!(element instanceof HTMLElement) || !root.contains(element)) return null;
   return element;
 }
 
-/** 端点的种类（`O21`）：卡片，还是分栏 */
-export type EndpointKind = 'card' | 'column';
+/** 端点的种类（`O21` 卡片 / 分栏；`2.2.0` 批 3 加入脑图节点） */
+export type EndpointKind = 'card' | 'column' | 'node';
 
-/** 一个连线端点：id + 它是卡片还是分栏（id 在两者之间唯一，不必再带冗余字段） */
+/**
+ * 一个连线端点：id + 它是哪一种。
+ *
+ * ★ 卡片与分栏的 id 在两者之间唯一，不必再带冗余字段；**脑图节点**多一个层级
+ *   —— 它的 `id` 是**所属脑图**的 id，`nodeId` 才是那个节点（见
+ *   `schema.endpointAnchorKey`：两层拼成端点的几何键）。
+ * ★ 容器（整棵脑图）**不在**端点的名单里：用户 2026-09-21 ——
+ *   "脑图……不会作为整体对外连线"，要连就连到**具体节点**上。
+ */
 export interface ResolvedEndpoint {
   id: string;
   kind: EndpointKind;
+  /** `kind === 'node'` 时：那是脑图里的哪个节点 */
+  nodeId?: string;
 }
 
 /**
- * 从事件目标解析出**连线端点**（卡片或分栏，`O21`）。
+ * 从事件目标解析出**连线端点**（卡片 / 分栏 / 脑图节点）。
  *
  * ★ 这是 ConnectController 唯一该用的入口：它要的既不是"卡片"，也不是"栏"，
- *   而是"指针底下那个可以拖出线的东西" —— 而这两种端点在连线的世界里是同一种东西。
- * ★ 返回 `kind` 而不是只返回 id：调用方需要知道去哪张表里查几何（`cards` / `columns`），
- *   靠 id 反查两个数组虽然也行，但那是每个调用点各写一遍的猜谜。
+ *   而是"指针底下那个可以拖出线的东西" —— 而这三种端点在连线的世界里是同一种东西。
+ * ★ 返回 `kind` 而不是只返回 id：调用方需要知道去哪张表里查几何（`cards` / `columns` /
+ *   脑图节点那一层），靠 id 反查几个数组虽然也行，但那是每个调用点各写一遍的猜谜。
+ * ★ 顺序是"卡片 / 分栏 → 节点"：脑图节点住在容器的子树里（`[data-mind-id]` 的 div），
+ *   而那棵子树**不在**任何卡片元素里，所以两种判据互不干扰。
+ *   ★ 容器自己的 `data-mind-id` **不作为端点**（上面那条口径），所以这里读它只是为了
+ *   拿到"这个节点属于哪棵树"。
  */
 export function resolveEndpoint(
   target: EventTarget | null,
   root: HTMLElement,
 ): ResolvedEndpoint | null {
   const element = resolveCardElement(target, root);
-  if (!element) return null;
-  const cardId = element.getAttribute(CARD_ID_ATTR);
-  if (cardId) return { id: cardId, kind: 'card' };
-  const columnId = element.getAttribute(COLUMN_ID_ATTR);
-  return columnId ? { id: columnId, kind: 'column' } : null;
+  if (element) {
+    const cardId = element.getAttribute(CARD_ID_ATTR);
+    if (cardId) return { id: cardId, kind: 'card' };
+    const columnId = element.getAttribute(COLUMN_ID_ATTR);
+    if (columnId) return { id: columnId, kind: 'column' };
+  }
+  return resolveMindNodeEndpoint(target, root);
+}
+
+/** 指针底下的**脑图节点**（`2.2.0` 批 3）；不在节点上给 `null` */
+function resolveMindNodeEndpoint(
+  target: EventTarget | null,
+  root: HTMLElement,
+): ResolvedEndpoint | null {
+  // 与 `resolveCardElement` 同一条：`Element` 而不是 `HTMLElement`（SVG 目标也算）
+  if (!(target instanceof Element)) return null;
+  const nodeEl = target.closest(`[${MIND_NODE_ID_ATTR}]`);
+  if (!(nodeEl instanceof HTMLElement) || !root.contains(nodeEl)) return null;
+  const nodeId = nodeEl.getAttribute(MIND_NODE_ID_ATTR) ?? '';
+  const mindId =
+    nodeEl.closest(`[${MIND_CONTAINER_ID_ATTR}]`)?.getAttribute(MIND_CONTAINER_ID_ATTR) ?? '';
+  if (nodeId.length === 0 || mindId.length === 0) return null;
+  return { id: mindId, kind: 'node', nodeId };
 }
 
 /**
@@ -144,7 +184,8 @@ export function resolveEndpoint(
  *   这一点很重要：双击栏里的卡片必须进编辑态，双击栏背景才什么都不做。
  */
 export function isInsideColumn(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
+  // 与 `resolveCardElement` 同一条：`Element` 而不是 `HTMLElement`（SVG 目标也算）
+  if (!(target instanceof Element)) return false;
   return target.closest(`[${COLUMN_ID_ATTR}]`) !== null;
 }
 

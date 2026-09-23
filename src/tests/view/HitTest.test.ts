@@ -5,10 +5,10 @@
  * 这里钉住"点在哪张卡上"的判定规则 —— 它是选择、拖动、连线落点的共同前提。
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCard } from '../../model/factories';
 import type { Card } from '../../model/schema';
-import { hitTest, hitTestAtScreen } from '../../view/interact/HitTest';
+import { hitTest, hitTestAtScreen, resolveEndpoint } from '../../view/interact/HitTest';
 import { Viewport } from '../../canvas/Viewport';
 
 function cardAt(id: string, x: number, y: number, width: number, height: number, z: number): Card {
@@ -108,5 +108,91 @@ describe('hitTestAtScreen', () => {
     const card = cardAt('c1', 0, 0, 100, 100, 1);
     expect(hitTestAtScreen([card], viewport, { x: 150, y: 100 })?.id).toBe('c1');
     expect(hitTestAtScreen([card], viewport, { x: 50, y: 100 })).toBeNull();
+  });
+});
+
+/**
+ * `resolveEndpoint` 的**脑图节点**那一支（`2.2.0` 批 3）。
+ *
+ * ★ 这一段只能在"假的 `closest`"上验（真 DOM 才有的 `closest` / `instanceof`）：
+ *   文件头已经说过 DOM 委托那半边要去 Obsidian 里跑。但这里有两条**规则**值得
+ *   在单测里钉住，因为它们的反面都会静默出错：
+ *
+ * 1. **容器不是端点**（整棵脑图不作为整体连线）⇒ 只有节点能被命中；
+ * 2. 节点必须**属于画布内**的容器（`root.contains`）—— 否则别的视图里同名的
+ *    属性也会被这条委托吃到。
+ */
+describe('resolveEndpoint · 脑图节点', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 只认 `closest` 的元素（见上：真 DOM 才有 `closest`，node 下用替身） */
+  class StubElement {
+    constructor(private readonly lookup: Record<string, unknown> = {}) {}
+    closest(selector: string): unknown {
+      return this.lookup[selector] ?? null;
+    }
+  }
+
+  /** 带属性的替身元素（节点的 `data-mind-node-id` / 容器的 `data-mind-id`） */
+  class StubTagged extends StubElement {
+    constructor(
+      private readonly attrs: Record<string, string>,
+      lookup: Record<string, unknown> = {},
+    ) {
+      super(lookup);
+    }
+
+    getAttribute(name: string): string | null {
+      return this.attrs[name] ?? null;
+    }
+  }
+
+  function stubGlobals(): void {
+    // 两处 `instanceof` 都要能过：`Element`（入口那道闸门）与 `HTMLElement`（元素类型）
+    vi.stubGlobal('Element', StubElement);
+    vi.stubGlobal('HTMLElement', StubElement);
+  }
+
+  function scene(options: { insideRoot?: boolean } = {}) {
+    const container = new StubTagged({ 'data-mind-id': 'nm_1' });
+    const nodeEl = new StubTagged({ 'data-mind-node-id': 'n_a' }, { '[data-mind-id]': container });
+    const target = new StubElement({
+      // 不是卡片 / 分栏（那一支的判据拿不到东西）
+      '[data-card-id], [data-column-id]': null,
+      '[data-mind-node-id]': nodeEl,
+    });
+    const root = { contains: () => options.insideRoot ?? true };
+    return { target, root: root as unknown as HTMLElement };
+  }
+
+  it('★ 压在节点上 ⇒ 给出"哪棵脑图 + 哪个节点"（id 是脑图 id，节点在 `nodeId`）', () => {
+    stubGlobals();
+    const { target, root } = scene();
+
+    expect(resolveEndpoint(target as unknown as EventTarget, root)).toEqual({
+      id: 'nm_1',
+      kind: 'node',
+      nodeId: 'n_a',
+    });
+  });
+
+  it('★ 不在画布内的节点不算（别的视图里的同名属性不该被这条委托吃到）', () => {
+    stubGlobals();
+    const { target, root } = scene({ insideRoot: false });
+
+    expect(resolveEndpoint(target as unknown as EventTarget, root)).toBeNull();
+  });
+
+  it('★ 容器自己（`data-mind-id`）**不是**端点：整棵脑图不作为整体对外连线', () => {
+    stubGlobals();
+    const target = new StubElement({
+      '[data-card-id], [data-column-id]': null,
+      '[data-mind-node-id]': null,
+    });
+    const root = { contains: () => true } as unknown as HTMLElement;
+
+    expect(resolveEndpoint(target as unknown as EventTarget, root)).toBeNull();
   });
 });

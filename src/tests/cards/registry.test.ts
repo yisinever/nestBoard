@@ -47,11 +47,15 @@ describe('createCardRegistry', () => {
       'map',
       'syncNote',
       'comment',
+      'pdf',
+      'canvas',
+      'mindRef',
+      'mind',
     ] as const) {
       expect(registry.has(type)).toBe(true);
     }
-    // 十六种类型全在 —— 缺类型仍是**允许**的状态（那不是缺陷），但当下不该缺
-    expect(registry.size).toBe(16);
+    // 二十种类型全在 —— 缺类型仍是**允许**的状态（那不是缺陷），但当下不该缺
+    expect(registry.size).toBe(20);
   });
 
   it('get 按类型取回**对应**的定义（收窄 `T` 不能让 A 类型取到 B 的定义）', () => {

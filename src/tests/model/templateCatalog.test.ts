@@ -24,8 +24,14 @@ import {
 import { BUILTIN_TEMPLATES, TEMPLATE_CATEGORIES } from '../../model/templates';
 import { t } from '../../util/i18n';
 
-function userTemplate(path: string, title: string, cards = 3, columns = 1): CatalogUserTemplate {
-  return { path, title, summary: { cards, columns, edges: 0 } };
+function userTemplate(
+  path: string,
+  title: string,
+  cards = 3,
+  columns = 1,
+  minds = 0,
+): CatalogUserTemplate {
+  return { path, title, summary: { cards, columns, edges: 0, minds } };
 }
 
 function catalog(input: Partial<CatalogInput> = {}) {
@@ -167,5 +173,14 @@ describe('buildTemplateCatalog 条目身份', () => {
     const user = groups.find((group) => group.key === 'user')!.entries[0];
 
     expect(user.detail).toBe(t('modal.template.summary', { cards: '5', columns: '2' }));
+  });
+
+  it('★ 带脑图的模板 ⇒ 副标题多一段"K 棵脑图"（不带则一个字不加）', () => {
+    const groups = catalog({ users: [userTemplate('Templates/乙.nboard', '乙', 4, 1, 2)] });
+    const user = groups.find((group) => group.key === 'user')!.entries[0];
+
+    expect(user.detail).toBe(
+      t('modal.template.summaryMinds', { cards: '4', columns: '1', minds: '2' }),
+    );
   });
 });

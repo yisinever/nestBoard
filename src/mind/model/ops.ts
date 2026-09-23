@@ -65,6 +65,35 @@ export function siblingIds(mind: MindFile, id: string): string[] {
 }
 
 /** 根 = 0；悬浮节点也是 0（它不是任何人的孩子） */
+/**
+ * 祖先里有**完成**节点的那些节点 id（`N3-g`）。
+ *
+ * ★ 语义：**只有"自己完成"写在那一位上**，祖先完成只是让子孙"看起来"属于那一支 ——
+ *   画布、SVG 导出、PNG 导出三处都靠这一份判断（各写一遍的话，导出图与屏幕上
+ *   就会出现"这一支淡了、那一处没淡"的两套样子）。
+ * ★ 纯查询：不改模型，可以在任何一侧调用。
+ */
+export function dimmedByDoneAncestor(file: MindFile): Set<string> {
+  const byId = new Map<string, MindNode>();
+  for (const node of file.nodes) byId.set(node.id, node);
+
+  const dimmed = new Set<string>();
+  for (const node of file.nodes) {
+    let cursor = node.parentId === null ? null : (byId.get(node.parentId) ?? null);
+    // 上限只是个护栏：文件被手改坏成环时不要在这里转不出来
+    let guard = 0;
+    while (cursor && guard < 512) {
+      if (cursor.done === true && node.done !== true) {
+        dimmed.add(node.id);
+        break;
+      }
+      cursor = cursor.parentId === null ? null : (byId.get(cursor.parentId) ?? null);
+      guard += 1;
+    }
+  }
+  return dimmed;
+}
+
 export function depthOf(mind: MindFile, id: string): number {
   let depth = 0;
   let cursor = parentOf(mind, id);
@@ -190,6 +219,48 @@ export function horizontalTargetId(
   return parentOf(mind, id)?.id ?? null;
 }
 
+/**
+ * 方向键的**落点**（`06 §4.1`）—— 箭头跟着轴走。
+ *
+ * * **横向布局**（向右 / 向左 / 八爪鱼）：**上下**走**可见顺序**（深度优先的下一行 —— 它可能是
+ *   孩子，也可能真是兄弟，与"看到的就是这个次序"对齐），**左右**往父 / 孩子走；
+ * * **纵向布局**（组织结构图）：两级关系长在 **y** 上、可见顺序铺在 **x** 上 ⇒ 上下与左右**互换** ——
+ *   不换的话按"下"会跑到兄弟那儿、按"右"什么都不发生，用户只会觉得方向键坏了；
+ * * `side < 0`（孩子挂在**左边**的那一支）：左右镜像（见 {@link horizontalTargetId}）。
+ *
+ * ★ 抽成纯函数并且**两个宿主共用**（`.nestmind` 视图与白板上的脑图，`2.2.0` 收尾 ·
+ *   用户 2026-09-23："nestmind 里面的操作搬过来就行"）：两处各写一份的话，"同一个方向键在
+ *   两个宿主上意思不一样"迟早发生，而且只在其中一边复现（最难查的那一类）。
+ *
+ * ★ 判据全在模型上（可见顺序 / 父子关系），**不碰布局** —— 纵向那一档靠调用方递进来的
+ *   `vertical`，而"孩子在左还是在右"靠 `side`（视图从布局里取，见 `MindLayer.sideOf`）。
+ */
+export function neighborByArrow(
+  mind: MindFile,
+  id: string,
+  direction: 'up' | 'down' | 'left' | 'right',
+  options: { vertical?: boolean; side?: -1 | 0 | 1 } = {},
+): string | null {
+  const vertical = options.vertical === true;
+  // 兄弟轴：横向布局按上下，纵向布局按左右（见上面那条"互换"）
+  const siblingStep: 1 | -1 | null = vertical
+    ? direction === 'right'
+      ? 1
+      : direction === 'left'
+        ? -1
+        : null
+    : direction === 'down'
+      ? 1
+      : direction === 'up'
+        ? -1
+        : null;
+  if (siblingStep !== null) return nextVisibleId(mind, id, siblingStep);
+
+  // `+1` = 朝孩子那一侧，`-1` = 朝父节点那一侧（`side` 告诉它孩子长在哪边）
+  const along: 1 | -1 = vertical ? (direction === 'down' ? 1 : -1) : direction === 'right' ? 1 : -1;
+  return horizontalTargetId(mind, id, along, options.side ?? 0);
+}
+
 // ─────────────────────────────────────────────────────────────
 // 多选（`06 §4.1` 的 `⌘A` / `⇧`+点击，P3-c）
 // ─────────────────────────────────────────────────────────────
@@ -220,6 +291,35 @@ export function sanitizeSelection(mind: MindFile, ids: ReadonlySet<string>): Set
  *   根自己仍在返回值里（如果它被选中），怎么处置由调用方决定：
  *   `removeNodes` / `moveNodes` 会跳过它，`copyForest` 则只复制它那一支。
  */
+/**
+ * 一个节点**连同它的后代**（子树），按**原来的顺序**（父在前、兄弟按 `order`）。
+ *
+ * ★ 顺序必须保持（`2.2.0` · O6）：布局按 `order` 摆兄弟，打乱了复出来的那棵树就歪。
+ * ★ 节点对象是**原样引用**（浅拷贝由调用方决定）：本函数只回答"有哪些节点"。
+ */
+export function subtreeOf(mind: MindFile, rootId: string): MindNode[] | null {
+  const root = mind.nodes.find((node) => node.id === rootId);
+  if (!root) return null;
+
+  const childrenOf = new Map<string | null, MindNode[]>();
+  for (const node of mind.nodes) {
+    const bucket = childrenOf.get(node.parentId) ?? [];
+    bucket.push(node);
+    childrenOf.set(node.parentId, bucket);
+  }
+  for (const bucket of childrenOf.values()) {
+    bucket.sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  const result: MindNode[] = [];
+  const walk = (node: MindNode): void => {
+    result.push(node);
+    for (const child of childrenOf.get(node.id) ?? []) walk(child);
+  };
+  walk(root);
+  return result;
+}
+
 export function selectionRoots(mind: MindFile, ids: ReadonlySet<string>): string[] {
   const selected = sanitizeSelection(mind, ids);
   if (selected.size === 0) return [];
@@ -753,6 +853,16 @@ export function removeSubtree(mind: MindFile, id: string): boolean {
  * ★ 只删"选区的入口"：子孙会跟着它们一起走（`removeSubtree` 本来就删整棵）。
  * ★ 根节点在选区里时跳过它，其余照删 —— 与"逐条删"的手感一致。
  */
+/**
+ * 根节点的文字（**去掉首尾空白**；根节点不在 / 没写字 ⇒ 空串）。
+ *
+ * ★ 用途是"导出 `.nestmind` 时拿它当文件名"（用户 2026-09-22）：白板新建的树里
+ *   `meta.title` 是空串，只有根节点上有用户写的字 —— 文件名该跟着**看得见的那行字**走。
+ */
+export function rootTextOf(mind: MindFile): string {
+  return (mind.nodes.find((node) => node.id === mind.rootId)?.text ?? '').trim();
+}
+
 export function removeNodes(mind: MindFile, ids: ReadonlySet<string>): boolean {
   let changed = false;
   for (const id of selectionRoots(mind, ids)) {

@@ -63,6 +63,8 @@ const en = {
   'boardList.empty.none': 'No boards yet. Create one with "Create new board".',
   'boardList.empty.noMatch': 'No board matches "{query}".',
   'boardList.empty.noRecent': 'No board opened yet.',
+  'boardList.tagHit.untitled': '(untitled card)',
+  'boardList.tagHit.ariaLabel': 'Jump to that card on {board}',
   'boardList.untagged': 'Untagged',
   'boardList.open.ariaLabel': 'Open board {path}',
 
@@ -95,6 +97,10 @@ const en = {
   // 与白板各占一块，键统一挂 `mind.` 前缀：脑图是第二个**文档类型**，
   // `board.untitled` 与 `mind.untitled` 是两份不同的默认名，谁也不该顶替谁
   'mind.untitled': 'Untitled mind map',
+  // 新建脑图时**节点上**的默认文字（用户 2026-09-22：新建出来的节点要是空白的，
+  // 一眼看不出"这里该写什么"）。与 `mind.untitled` 分工不同：那个是**文件名**。
+  'mind.default.root': 'Central topic',
+  'mind.default.branch': 'Subtopic {index}',
   'view.mind.name': 'Mind map',
   'command.newMind.name': 'Create new mind map',
   'notice.mindCreated': 'Mind map created: {path}',
@@ -208,6 +214,8 @@ const en = {
   'menu.mindExpand': 'Expand',
   'menu.mindAddChild': 'Add subtopic',
   'menu.mindAddSibling': 'Add sibling topic',
+  // 容器级（`2.2.0`）：删掉**整棵**脑图（与节点级的 `menu.mindDelete` 分开措辞）
+  'menu.mindDeleteAll': 'Delete this mind map',
   'menu.mindOpenAttachment': 'Open attachment',
   'menu.mindRemoveAttachment': 'Remove attachment',
   'mind.toolbar.mark': 'Mark',
@@ -244,6 +252,11 @@ const en = {
   'notice.mindSelected': 'Selected {count} topics (⇧+click to adjust)',
   'notice.mindDeleted': 'Deleted {count} topics (⌘Z to undo)',
   'notice.mindPasteEmpty': 'Clipboard is empty — copy a topic first with ⌘C',
+  'notice.mindPasteNeedsNode':
+    'Topics can only be pasted onto a topic — point at the target topic first',
+  'notice.mindNodeCopyUnsupported':
+    'Copying topics from a file-based mind is not supported yet — open the .nestmind to copy them',
+  'notice.mindNodeCopySkipped': 'Skipped {count} topics from file-based minds (not supported yet)',
   'notice.mindConflictOnClose':
     '“{path}” has unsaved changes that could not be written (the file changed on disk and the conflict is unresolved) — closing now loses them.',
   'command.mindUndo.name': 'Undo (mind map)',
@@ -284,6 +297,29 @@ const en = {
   'card.type.map': 'Map',
   'card.type.syncNote': 'Synced note',
   'card.type.comment': 'Comment',
+  // PDF 预览卡（`F8`）
+  'card.type.pdf': 'PDF',
+  'card.pdf.empty': 'Drop a PDF here',
+  'card.pdf.page': 'Page {page}',
+  'card.pdf.prev': 'Previous page',
+  'card.pdf.next': 'Next page',
+  // `.canvas` 预览卡（`F6`）
+  'card.type.canvas': 'Canvas',
+  'card.canvas.empty': 'Drop a .canvas file here',
+  'card.canvas.missing': 'File not found',
+  'card.canvas.broken': 'Not a valid .canvas file',
+  // 脑图卡（`F3a`）：卡面就是那份 `.nestmind`（点节点即可改）
+  'card.type.mindRef': 'Mind map',
+  'card.mindRef.empty': 'Drop a .nestmind here',
+  'card.mindRef.missing': 'Mind map file not found',
+  'card.mindRef.broken': 'Cannot read this mind map',
+  'card.mindRef.more': '{count} more topics',
+  'menu.card.openMind': 'Open mind map',
+  // 内嵌脑图卡（`F4`）：脑图模型就长在这张卡里（不指向文件）
+  'card.type.mind': 'Mind map (in board)',
+  'card.mind.more': '{count} more topics',
+  'toolbar.mind': 'New mind map card',
+  'menu.mindExportFile': 'Export as .nestmind',
   // 同步便签（T7.04 / F2.9）：卡面上"这是同步组的一员"的角标
   'card.syncNote.badge': 'Synced',
   // 评论卡（T7.05 / F2.9）：本地备注线程
@@ -494,6 +530,13 @@ const en = {
   'menu.card.hideTitle': 'Hide title',
   'menu.card.collapse': 'Collapse card',
   'menu.card.expand': 'Expand card',
+  'menu.mind.presentAdd': 'Add this mind to the presentation',
+  'menu.mind.presentRemove': 'Remove this mind from the presentation',
+  'menu.mind.presentEarlier': 'Move earlier',
+  'menu.mind.presentLater': 'Move later',
+  'menu.card.treeCollapse': 'Collapse children (+{count})',
+  'menu.card.treeExpand': 'Expand children (+{count})',
+  'menu.card.treeUnlink': 'Detach from parent',
   'menu.card.resetRotation': 'Reset rotation',
   'menu.card.color': 'Card color',
   'menu.card.accent': 'Accent bar',
@@ -543,6 +586,7 @@ const en = {
   'history.edgeLabel': 'Change connection label',
   'history.edgeCurve': 'Bend connection',
   'menu.canvas.newNote': 'New note',
+  'menu.canvas.filter': 'Filter cards…',
   'menu.canvas.moreCards': 'More cards',
   'menu.canvas.newSyncNote': 'New synced note',
   'menu.canvas.newComment': 'New comment card',
@@ -601,9 +645,14 @@ const en = {
 
   // 撤销栈里的操作名（T1.48）：显示给用户看，必须是"人话"而不是函数名
   'history.move': 'Move',
+  // 白板级脑图（`2.2.0`）：树内部的一次改动（内嵌那份走白板撤销栈时的记录名）
+  'history.mindEdit': 'Edit mind map',
   'history.resize': 'Resize',
   'history.rotate': 'Rotate card',
   'history.delete': 'Delete cards',
+  'history.treeLink': 'Link as child',
+  'history.treeCollapse': 'Collapse children',
+  'history.treeUnlink': 'Detach from parent',
   'history.duplicate': 'Duplicate cards',
   'history.paste': 'Paste cards',
   'history.color': 'Card color',
@@ -814,6 +863,7 @@ const en = {
   'card.boardRef.empty': 'Double-click to create a sub-board',
   'card.boardRef.missing': 'Board not found: {path}',
   'card.boardRef.cards': '{count} cards',
+  'card.boardRef.cardsAndMinds': '{cards} cards · {minds} mind maps',
   'menu.card.openBoard': 'Open board',
   'menu.card.newChildBoard': 'New sub-board',
   // 卡面预览档位（T7.09 / `F7-10`）。父项说"卡面显示什么"，各子项是一个档位 ——
@@ -873,6 +923,8 @@ const en = {
   'notice.presentAdded': 'Added to the presentation (step {step}).',
   'notice.presentRemoved': 'Removed from the presentation.',
   'notice.presentCleared': 'Presentation cleared.',
+  'notice.treeCycle': 'Cannot link: that would create a loop.',
+  'notice.treeHasParent': 'Cannot link: that card already has a parent.',
 
   // 导出 PNG（T2.11 / F9-02）
   'modal.exportPng.title': 'Export PNG',
@@ -985,6 +1037,7 @@ const en = {
   'modal.template.builtin': 'Built-in',
   'modal.template.user': 'My templates',
   'modal.template.summary': '{cards} cards · {columns} columns',
+  'modal.template.summaryMinds': '{cards} cards · {columns} columns · {minds} minds',
   'modal.template.skipped': '{count} template(s) could not be read and were skipped.',
   'modal.template.hint':
     'A new board is created in {folder}; the template itself is left untouched.',
@@ -1023,7 +1076,9 @@ const en = {
 
   // 内置模板的内容（T4.14）—— 模板正文也是文案，跟着界面语言走
   'template.research.name': 'Desk research',
-  'template.research.desc': 'Question → sources → insight → conclusion, on one board',
+  'template.research.desc':
+    'Question → sources → insight → conclusion, plus a question tree to grow',
+  'template.research.mind.root': 'Research question',
   'template.research.colA': 'Question',
   'template.research.colB': 'Sources',
   'template.research.colC': 'Insight → Conclusion',
@@ -1212,9 +1267,9 @@ const en = {
   'notice.attachmentFailed': 'Could not import the file: {error}',
   'notice.importing': 'Importing {count} file(s)…',
   'notice.pastedImage': 'Image saved: {path}',
-  'notice.copiedCards': 'Copied {count} card(s) — paste into any board',
+  'notice.copiedCards': 'Copied {count} object(s) — paste into any board',
   'notice.copyFailed': 'Could not write to the system clipboard.',
-  'notice.pastedCards': 'Pasted {count} card(s)',
+  'notice.pastedCards': 'Pasted {count} object(s)',
   // 白板 URI（T5.06 / F10-06）。★ 三条拒绝理由各说各的：
   // 只回一句"链接无效"的话，用户没法知道该改哪一个字
   'notice.protocolMissingFile': 'This link has no board path in it (missing `?file=…`).',
@@ -1289,6 +1344,11 @@ const en = {
   'settings.cardColor.customHex.name': 'Custom color',
   'settings.cardColor.customHex.desc':
     'A hex value such as #4c8bf5. Anything invalid falls back to the theme color.',
+  'settings.cardStyle.name': 'Card style',
+  'settings.cardStyle.desc':
+    'Neumorphic adds the soft double shadow (keeping each card’s colour) to cards, columns, bars and menus. Classic is the 2.1.3 look.',
+  'settings.cardStyle.classic': 'Classic (2.1.3)',
+  'settings.cardStyle.neumorph': 'Neumorphic',
   'settings.cardRadius.name': 'Corner radius',
   'settings.cardRadius.desc': 'Corner radius of every card in pixels.',
   'settings.cardRadius.value': '{px} px',
@@ -1340,7 +1400,7 @@ const en = {
   'toolbar.gridSnapOn': 'Grid snapping: on',
   'toolbar.gridSnapOff': 'Grid snapping: off',
   'toolbar.createHint': 'Drag onto the canvas to create a card',
-  'notice.emptyBoardHint': 'This board is empty — use the toolbar to add a card.',
+  'notice.emptyBoardHint': 'This board is empty — use the toolbar to add a card or a mind map.',
   'notice.mobileToolbarHint':
     'Tip: drag a tool from the bottom bar onto the canvas to create a card; long-press a card for its menu.',
 
@@ -1577,7 +1637,7 @@ const en = {
   'settings.section.indexNote': 'Index notes',
   'settings.indexNote.name': 'Maintain an index note per board',
   'settings.indexNote.desc':
-    'Off by default. When on, each board gets a small Markdown file holding its metadata and the links written inside its note cards — so the board shows up in the graph, in search and in Dataview. Those files are generated: editing one by hand has no effect.',
+    'Off by default. When on, each board gets a small Markdown file — plus one "tag hub" note per tag (in a _tags folder inside the index folder). They hold the board’s metadata and the links and #tags written inside its note cards, so all of it shows up in the graph, the tag pane, global search (tag:#tag) and Dataview. ★ With this off, tags written on a board stay invisible to Obsidian — it never reads .nboard files. Those files are generated: editing one by hand has no effect.',
   'settings.indexNote.folder.name': 'Index note folder',
   'settings.indexNote.folder.desc':
     'Where the generated notes go. Your vault structure is mirrored inside it, so two boards with the same name never collide.',
@@ -1587,6 +1647,9 @@ const en = {
   'indexNote.summaryNoDate': 'This board holds {cards} card(s).',
   'indexNote.summaryNoCards': 'This board was last saved {updated}.',
   'indexNote.openBoard': 'Open this board',
+  'tagHub.warning': 'Generated by Nestboard — anything you write here will be overwritten.',
+  'tagHub.section.boards': 'Boards using this tag',
+  'tagHub.empty': 'No board uses this tag yet.',
   'indexNote.section.links': 'Links written inside notes',
   'indexNote.section.unresolved': 'Links that matched no file',
   'indexNote.unresolvedHint':
@@ -1654,6 +1717,8 @@ const zhCn: Record<MessageKey, string> = {
   'boardList.empty.none': '库里还没有白板。用「新建白板」建一块。',
   'boardList.empty.noMatch': '没有匹配「{query}」的白板。',
   'boardList.empty.noRecent': '还没有打开过白板。',
+  'boardList.tagHit.untitled': '（无标题卡片）',
+  'boardList.tagHit.ariaLabel': '跳到 {board} 上的那张卡',
   'boardList.untagged': '未加标签',
   'boardList.open.ariaLabel': '打开白板 {path}',
 
@@ -1683,6 +1748,10 @@ const zhCn: Record<MessageKey, string> = {
 
   // ── 脑图（`.nestmind`，`06`）────────────────────────────────
   'mind.untitled': '未命名脑图',
+  // 新建脑图时**节点上**的默认文字（用户 2026-09-22）：中心主题 + 分支主题 1..N。
+  // ★ 与 `mind.untitled` 分工不同：那个是**文件名**（`meta.title`），这个写在节点上。
+  'mind.default.root': '中心主题',
+  'mind.default.branch': '分支主题 {index}',
   'view.mind.name': '脑图',
   'command.newMind.name': '新建脑图',
   'notice.mindCreated': '已创建脑图：{path}',
@@ -1796,6 +1865,7 @@ const zhCn: Record<MessageKey, string> = {
   'menu.mindExpand': '展开',
   'menu.mindAddChild': '加子节点',
   'menu.mindAddSibling': '加兄弟节点',
+  'menu.mindDeleteAll': '删除整棵脑图',
   'menu.mindOpenAttachment': '打开附件',
   'menu.mindRemoveAttachment': '删除附件',
   'mind.toolbar.mark': '标记',
@@ -1832,6 +1902,9 @@ const zhCn: Record<MessageKey, string> = {
   'notice.mindSelected': '已选中 {count} 个节点（⇧+点击可增减）',
   'notice.mindDeleted': '已删除 {count} 个节点（⌘Z 可撤销）',
   'notice.mindPasteEmpty': '剪贴板是空的 —— 先选中一支按 ⌘C 复制',
+  'notice.mindPasteNeedsNode': '节点只能粘到脑图节点上 —— 把指针移到目标节点上再粘',
+  'notice.mindNodeCopyUnsupported': '文件脑图里的节点暂不支持复制 —— 打开那份 .nestmind 再复制',
+  'notice.mindNodeCopySkipped': '有 {count} 个文件脑图里的节点没能复制（暂不支持）',
   'notice.mindConflictOnClose':
     '「{path}」有改动没能落盘（磁盘上的版本更新过，冲突还没处理）—— 现在关掉就没了。',
   'command.mindUndo.name': '撤销（脑图）',
@@ -1870,6 +1943,29 @@ const zhCn: Record<MessageKey, string> = {
   'card.type.map': '地图',
   'card.type.syncNote': '同步便签',
   'card.type.comment': '评论',
+  // PDF 预览卡（`F8`）
+  'card.type.pdf': 'PDF',
+  'card.pdf.empty': '把 PDF 拖进来',
+  'card.pdf.page': '第 {page} 页',
+  'card.pdf.prev': '上一页',
+  'card.pdf.next': '下一页',
+  // `.canvas` 预览卡（`F6`）
+  'card.type.canvas': 'Canvas',
+  'card.canvas.empty': '把 .canvas 拖进来',
+  'card.canvas.missing': '找不到这个文件',
+  'card.canvas.broken': '这不是一份有效的 .canvas',
+  // 脑图卡（`F3a`）
+  'card.type.mindRef': '脑图',
+  'card.mindRef.empty': '把 .nestmind 拖进来',
+  'card.mindRef.missing': '找不到这份脑图文件',
+  'card.mindRef.broken': '这份脑图读不出来',
+  'card.mindRef.more': '还有 {count} 个节点',
+  'menu.card.openMind': '打开脑图',
+  // 内嵌脑图卡（`F4`）
+  'card.type.mind': '脑图卡',
+  'card.mind.more': '还有 {count} 个节点',
+  'toolbar.mind': '新建脑图卡',
+  'menu.mindExportFile': '导出为 .nestmind',
   'card.syncNote.badge': '同步',
   // 评论卡（T7.05 / F2.9）：本地备注线程
   'card.comment.empty': '还没有备注',
@@ -2069,6 +2165,13 @@ const zhCn: Record<MessageKey, string> = {
   'menu.card.hideTitle': '隐藏标题',
   'menu.card.collapse': '收起卡片',
   'menu.card.expand': '展开卡片',
+  'menu.mind.presentAdd': '把这棵脑图加入演示',
+  'menu.mind.presentRemove': '把这棵脑图移出演示',
+  'menu.mind.presentEarlier': '前移一位',
+  'menu.mind.presentLater': '后移一位',
+  'menu.card.treeCollapse': '折叠子级（+{count}）',
+  'menu.card.treeExpand': '展开子级（+{count}）',
+  'menu.card.treeUnlink': '解除父子关系',
   'menu.card.resetRotation': '重置旋转',
   'menu.card.color': '卡片颜色',
   'menu.card.accent': '强调色条',
@@ -2117,6 +2220,7 @@ const zhCn: Record<MessageKey, string> = {
   'history.edgeLabel': '编辑连线标签',
   'history.edgeCurve': '调整连线弧度',
   'menu.canvas.newNote': '新建便签',
+  'menu.canvas.filter': '过滤卡片…',
   'menu.canvas.moreCards': '更多卡片',
   'menu.canvas.newSyncNote': '新建同步便签',
   'menu.canvas.newComment': '新建评论卡',
@@ -2168,9 +2272,13 @@ const zhCn: Record<MessageKey, string> = {
   'color.invalid': '颜色代码无效（请用 #RGB 或 #RRGGBB）。',
 
   'history.move': '移动卡片',
+  'history.mindEdit': '编辑脑图',
   'history.resize': '调整卡片尺寸',
   'history.rotate': '旋转卡片',
   'history.delete': '删除卡片',
+  'history.treeLink': '建立父子关系',
+  'history.treeCollapse': '折叠子级',
+  'history.treeUnlink': '解除父子关系',
   'history.duplicate': '复制卡片',
   'history.paste': '粘贴卡片',
   'history.color': '卡片配色',
@@ -2357,6 +2465,7 @@ const zhCn: Record<MessageKey, string> = {
   'card.boardRef.empty': '双击新建子白板',
   'card.boardRef.missing': '白板不存在：{path}',
   'card.boardRef.cards': '{count} 张卡片',
+  'card.boardRef.cardsAndMinds': '{cards} 张卡片 · {minds} 棵脑图',
   'menu.card.openBoard': '进入白板',
   'menu.card.newChildBoard': '新建子白板',
   // 卡面预览档位（T7.09 / `F7-10`）：与 `en` 同样是**互斥档位**的名词
@@ -2410,6 +2519,8 @@ const zhCn: Record<MessageKey, string> = {
   'notice.presentAdded': '已加入演示路径（第 {step} 步）。',
   'notice.presentRemoved': '已移出演示路径。',
   'notice.presentCleared': '演示路径已清空。',
+  'notice.treeCycle': '不能连接：这样会形成环。',
+  'notice.treeHasParent': '不能连接：那张卡已经有父级了。',
 
   // 导出 PNG（T2.11 / F9-02）
   'modal.exportPng.title': '导出 PNG',
@@ -2514,6 +2625,7 @@ const zhCn: Record<MessageKey, string> = {
   'modal.template.builtin': '内置',
   'modal.template.user': '我的模板',
   'modal.template.summary': '{cards} 张卡片 · {columns} 个分栏',
+  'modal.template.summaryMinds': '{cards} 张卡片 · {columns} 个分栏 · {minds} 棵脑图',
   'modal.template.skipped': '有 {count} 份模板读不出来，已跳过。',
   'modal.template.hint': '会在 {folder} 里新建一块白板；模板本身不会被改动。',
   // 模板市场（T6.09）：分类筛选与空模板占位
@@ -2548,7 +2660,8 @@ const zhCn: Record<MessageKey, string> = {
 
   // 内置模板的内容（T4.14）—— 模板正文也是文案，跟着界面语言走
   'template.research.name': '桌面研究',
-  'template.research.desc': '问题 → 资料 → 洞察 → 结论，把一次调研收在一页里',
+  'template.research.desc': '问题 → 资料 → 洞察 → 结论，另带一棵"研究问题树"',
+  'template.research.mind.root': '研究问题',
   'template.research.colA': '问题',
   'template.research.colB': '资料',
   'template.research.colC': '洞察 → 结论',
@@ -2718,9 +2831,9 @@ const zhCn: Record<MessageKey, string> = {
   'notice.attachmentFailed': '导入文件失败：{error}',
   'notice.importing': '正在导入 {count} 个文件…',
   'notice.pastedImage': '图片已保存：{path}',
-  'notice.copiedCards': '已复制 {count} 张卡片（可以贴到任何一块白板里）',
+  'notice.copiedCards': '已复制 {count} 个对象（可以贴到任何一块白板里）',
   'notice.copyFailed': '没能写入系统剪贴板。',
-  'notice.pastedCards': '已粘贴 {count} 张卡片',
+  'notice.pastedCards': '已粘贴 {count} 个对象',
   'notice.protocolMissingFile': '这个链接里没有白板路径（缺 `?file=…`）。',
   'notice.protocolNotBoard': '这个链接指向的不是白板 —— 路径要以 `.nboard` 结尾。',
   'notice.protocolOutsideVault': '这个链接指向了库外，已拒绝打开。',
@@ -2782,6 +2895,11 @@ const zhCn: Record<MessageKey, string> = {
   'settings.cardColor.custom': '自定义颜色…',
   'settings.cardColor.customHex.name': '自定义颜色',
   'settings.cardColor.customHex.desc': '形如 #4c8bf5 的十六进制色值。非法值会回落成主题色。',
+  'settings.cardStyle.name': '卡片外观档',
+  'settings.cardStyle.desc':
+    '「拟物」给卡片加上柔和的双阴影与内阴影（保留卡片主色），分栏 / 工具条 / 菜单一起换；「原版」是 2.1.3 那套样子。',
+  'settings.cardStyle.classic': '原版（2.1.3）',
+  'settings.cardStyle.neumorph': '拟物',
   'settings.cardRadius.name': '卡片圆角',
   'settings.cardRadius.desc': '所有卡片的圆角半径（像素）。',
   'settings.cardRadius.value': '{px} 像素',
@@ -2833,8 +2951,11 @@ const zhCn: Record<MessageKey, string> = {
   'toolbar.gridSnapOn': '网格吸附：开',
   'toolbar.gridSnapOff': '网格吸附：关',
   'toolbar.createHint': '拖到画布上松手即可新建卡片',
-  'notice.emptyBoardHint': '这块白板还是空的 —— 用工具条加一张卡片吧。',
-  'notice.mobileToolbarHint': '提示：把底部工具条上的按钮拖到画布上即可建卡；长按卡片可打开菜单。',
+  // 引导语跟得上"脑图也是一等公民"（`2.2.0` 收尾 · O5）：只说"加一张卡片"会把
+  // 刚插了一棵树的人绕回原点 —— 他眼前明明已经有内容了
+  'notice.emptyBoardHint': '这块白板还是空的 —— 用工具条加一张卡片或一棵脑图吧。',
+  'notice.mobileToolbarHint':
+    '提示：把底部工具条上的按钮拖到画布上即可建卡或建脑图；长按卡片可打开菜单。',
 
   // 画布右键菜单补齐（T3.27：与工具条 / 命令面板同一批动作）
   'menu.canvas.newSwatch': '新建色板',
@@ -3058,7 +3179,7 @@ const zhCn: Record<MessageKey, string> = {
   'settings.section.indexNote': '索引笔记',
   'settings.indexNote.name': '为每块白板维护一份索引笔记',
   'settings.indexNote.desc':
-    '默认关闭。打开后，每块白板会多出一个 .md 文件，里面写着这块白板的元信息、以及便签卡里写过的链接 —— 于是它们在图谱、搜索和 Dataview 里都看得见。这些文件是生成物：手动改动没有效果，下次保存白板时会被覆盖。',
+    '默认关闭。打开后，每块白板会多出一个 .md 文件，**每个标签再多一份「枢纽笔记」**（在索引目录的 _tags/ 里）：它们写着这块白板的元信息、便签卡里写过的链接与 #标签 —— 于是这些内容在图谱、**标签面板**、**全局搜索（tag:#标签）**和 Dataview 里都看得见。★ 不开这个开关，白板里的标签对 Obsidian 是不存在的（它从不读 .nboard）。这些文件是生成物：手动改动没有效果，下次保存白板时会被覆盖。',
   'settings.indexNote.folder.name': '索引笔记目录',
   'settings.indexNote.folder.desc':
     '生成的笔记放在这里。目录内部会镜像你库里的层级，所以同名的两块白板不会互相覆盖。',
@@ -3068,6 +3189,9 @@ const zhCn: Record<MessageKey, string> = {
   'indexNote.summaryNoDate': '这块白板有 {cards} 张卡片。',
   'indexNote.summaryNoCards': '这块白板最近保存于 {updated}。',
   'indexNote.openBoard': '打开这块白板',
+  'tagHub.warning': '这一页由 Nestboard 自动生成 —— 在这里写的内容会被覆盖。',
+  'tagHub.section.boards': '用到这个标签的白板',
+  'tagHub.empty': '还没有白板用到这个标签。',
   'indexNote.section.links': '便签里写过的链接',
   'indexNote.section.unresolved': '没对上文件的链接',
   'indexNote.unresolvedHint':

@@ -117,13 +117,28 @@ export function recentBoards(
  * ★ 没打标签的那一组**排在最后**：它是一个"待办"性质的桶（这些板还没被归类），
  *   不该插在 `#项目` 和 `#资料` 中间打乱字母序。
  */
-export function groupByTag(items: readonly BoardListItem[]): BoardTagGroup[] {
+export function groupByTag(
+  items: readonly BoardListItem[],
+  /**
+   * 这块板上**卡内**写过的标签（`F1` 追记：侧栏标签面板）。
+   *
+   * ★ 为什么要有第二个来源：`item.tags` 是白板级 `meta.tags`（"这块板是什么"），
+   *   而用户真正天天写的是**卡片正文里的 `#标签`** —— 只看前者的话，
+   *   在便签里写了十个 `#纪要` 的板在"按标签"里是**未加标签**，面板等于白给。
+   * ★ 缺席 = 只按白板级标签分组（老调用方 / 测试一个字都不用改）。
+   */
+  cardTagsOf?: (path: string) => readonly string[],
+): BoardTagGroup[] {
   const groups = new Map<string, BoardListItem[]>();
   const untagged: BoardListItem[] = [];
 
   for (const item of items) {
     // 同一块板里写了两遍同一个标签（复制粘贴的产物）只算一次
-    const tags = new Set(item.tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0));
+    const tags = new Set([
+      ...item.tags.map((tag) => tag.trim()),
+      ...(cardTagsOf?.(item.path) ?? []).map((tag) => tag.trim()),
+    ]);
+    tags.delete('');
     if (tags.size === 0) {
       untagged.push(item);
       continue;

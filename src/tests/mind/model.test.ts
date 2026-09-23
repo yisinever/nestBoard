@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIND_SPEC, MIND_VERSION } from '../../constants';
 import { createMindFile, createMindNode } from '../../mind/model/factories';
+import { rootTextOf } from '../../mind/model/ops';
 import { t } from '../../util/i18n';
 import type { NormalizedMind } from '../../mind/model/validate';
 import { normalizeMindFile, parseMindFile } from '../../mind/model/validate';
@@ -69,13 +70,38 @@ describe('createMindFile（新建的唯一入口）', () => {
     expect(file.nodes).toHaveLength(1);
     expect(file.nodes[0]?.id).toBe(file.rootId);
     expect(file.nodes[0]?.parentId).toBeNull();
-    expect(file.nodes[0]?.text).toBe('产品脑暴');
+    // ★ 根节点的文字与**文件名**是两件事（用户 2026-09-22）：给了标题只管文件名，
+    //   节点上那行字仍是「中心主题」—— 除非显式给了 `rootText`。
+    expect(file.nodes[0]?.text).toBe(t('mind.default.root'));
   });
 
-  it('没给标题时用 i18n 的默认名（中心主题也跟着它）', () => {
-    const file = createMindFile();
+  it('★ 根节点默认「中心主题」、分支默认「分支主题 N」（用户 2026-09-22）', () => {
+    const file = createMindFile({ branches: 3 });
+    // 文件名走 i18n 的默认名，与节点文字分开
     expect(file.meta.title).toBe(t('mind.untitled'));
-    expect(file.nodes[0]?.text).toBe(t('mind.untitled'));
+    expect(file.nodes[0]?.text).toBe(t('mind.default.root'));
+
+    const branches = file.nodes.filter((node) => node.parentId === file.rootId);
+    expect(branches.map((node) => node.text)).toEqual([
+      t('mind.default.branch', { index: 1 }),
+      t('mind.default.branch', { index: 2 }),
+      t('mind.default.branch', { index: 3 }),
+    ]);
+  });
+
+  it('显式给了 `rootText` 就听它的（老调用方那条路不受影响）', () => {
+    const file = createMindFile({ title: '甲', rootText: '产品脑暴' });
+    expect(file.nodes[0]?.text).toBe('产品脑暴');
+    expect(file.meta.title).toBe('甲');
+  });
+
+  it('★ `rootTextOf`：取根节点的文字并去掉首尾空白（导出文件名靠它）', () => {
+    const file = createMindFile({ rootText: '  产品脑暴  ' });
+    expect(rootTextOf(file)).toBe('产品脑暴');
+
+    // 根节点没写字 ⇒ 空串（调用方据此回落到"未命名脑图"）
+    const blank = createMindFile({ rootText: '   ' });
+    expect(rootTextOf(blank)).toBe('');
   });
 
   it('★ 可选键按需写：新建的文件里没有 `collapsed` / `props` / `refs` 这些键', () => {

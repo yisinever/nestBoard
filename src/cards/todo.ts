@@ -374,6 +374,8 @@ function renderEditor(el: HTMLElement, content: TodoContent, ctx: CardRenderCont
       value: todoToMarkdown(content),
       onSubmit: (value) => ctx.updateContent(markdownToTodo(value)),
       onExit: () => ctx.setMode('display'),
+      pasteImage: ctx.pasteImage,
+      suggestLinks: ctx.suggestLinks,
     }).focus();
     return;
   }
@@ -424,6 +426,8 @@ function renderSplitEditor(el: HTMLElement, content: TodoContent, ctx: CardRende
     onExit: () => ctx.setMode('display'),
     // 焦点挪到同一张卡里的标题框 = 换了一格，不是离开（内容原地留着，见上面那张表）
     keepEditingOnBlur: (event) => staysInside(el, event.relatedTarget),
+    pasteImage: ctx.pasteImage,
+    suggestLinks: ctx.suggestLinks,
   });
 
   /**

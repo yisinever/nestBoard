@@ -54,6 +54,16 @@ export interface NodeBox {
    * ★ 缺席 = 横向（既有构造点与单测夹具都不必改）。
    */
   vertical?: boolean;
+  /**
+   * 同层等宽的**下限宽度**（px，用户 2026-09-21："一个分支下同一层级的节点长度，
+   * 以同层级最长的那个节点为准，大家都对齐它"）。
+   *
+   * ★ 为什么是"下限"而不是"宽度"：节点的真实宽度由 CSS + 内容决定，并且是**量出来的**
+   *   （`measure`）而不是布局写下去的。布局只告诉渲染层"这一层至少要这么宽"，渲染层把它
+   *   写成 `min-width`，下一轮量测量到的就是真值 —— 不会变成"自己写、自己量"的自证。
+   * ★ 缺席 = 这一层只有它自己（或调用方没要求等宽）。
+   */
+  minWidth?: number;
 }
 
 export interface MindLayout {
@@ -102,6 +112,23 @@ export interface MindLayoutOptions {
    * ★ 渲染层量到真尺寸后再调一次本函数即可完成重排 —— 布局本身不缓存任何东西。
    */
   sizeOf?: (node: MindNode) => Size;
+  /**
+   * 算"**同层等宽**"（`minWidth`）用的尺寸。**默认就取 `sizeOf` 那一份**。
+   *
+   * ── 为什么量到真尺寸的那一路必须单独给这一份（`2.2.0` 收尾 · 用户 2026-09-22 报的
+   *    "超过第二级同层就不齐了"）──────────────────────────────
+   *
+   * `min-width` **只抬高、不压低**。画布上那条路是这样跑的：布局给出下限 → 渲染层写成
+   * `min-width` → 量真尺寸 → 再排一遍。要是第二遍还拿"量到的宽度"去算"这一层谁最宽"，
+   * 量到的那个数里已经含着**上一轮自己撑开**的那一档 ⇒ 算出来永远是"就是刚才那个下限"
+   * ⇒ "比最宽的窄"这个判据一个都不成立 ⇒ **下限当场消失**、节点又变得参差不齐。
+   *
+   * ★ 所以：这一份要的是**内容真宽** —— 把下限摘掉之后量到的宽度
+   *   （`render.measureNodeSizes` 就是干这个的），缩略图 / 导出那一路不必给
+   *   （它们的 `sizeOf` 本来就是估算，没有 DOM，也就无所谓"自证"）。
+   * ★ 只有**宽度**会从这里读（同层等宽永远是宽度上的事，不分横竖）。
+   */
+  intrinsicSizeOf?: (node: MindNode) => Size;
   /** 传给估算器的参数（渲染层把真实字号 / 行高传进来） */
   measure?: MeasureOptions;
   /** 主树走向（见 {@link MindDirection}，默认两侧交替） */
@@ -116,6 +143,54 @@ export interface MindLayoutOptions {
    * ★ id 不在（节点被删 / 文件被手改坏）⇒ 退回真正的根（见函数体里的说明）。
    */
   focusId?: string;
+}
+
+/**
+ * **两遍**布局：把"同层等宽"从样式提示**落进几何**（`2.2.0` 批 4 六）。
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────
+ *
+ * "同层等宽"（用户 2026-09-21）在画布上是这么实现的：布局给的 `box.minWidth` 只写成 CSS 变量
+ * （`--nestboard-mind-node-min-width`），节点**先按内容宽摆一次**，样式表把矮的几个撑宽，
+ * 紧接着渲染层**量一遍真尺寸**再排第二次 —— 于是最终画面上同层是齐的。
+ *
+ * 拿不到 DOM 的那一侧（缩略图 / PNG·SVG·PDF 导出）**没有第二次测量**：只有估算那一路，
+ * 而估算给的是"内容宽" ⇒ 导出的树里同层节点参差不齐，比画布上窄一大截。
+ * 用户报的"绘制尺寸不是很还原"就是这一处。
+ *
+ * ── 做法 ─────────────────────────────────────────────────
+ *
+ * 第一遍照常排（拿到每个节点该有的"下限"），第二遍把**每个节点的宽至少撑到那个下限**
+ * 再排一次。第二遍算出来的下限与前一遍一致（每层最宽的那个没变），因此一遍就收敛。
+ *
+ * ★ 第二遍走的是"把 `sizeOf` 撑宽"这条路，而 `intrinsicSizeOf` **原样透传**：
+ *   画布那条路（`MindView` / `EmbedMind`）传进来的正是"内容真宽"，于是第二遍里
+ *   那几个窄的仍然"比最宽的窄" ⇒ 它们的 `minWidth` 还在 ⇒ 渲染层照旧把下限写下去。
+ *   不传 `intrinsicSizeOf` 的话第二遍的判据会失效（见那一条的说明），
+ *   画布上的结果就是"撑了一下、又缩回去"。
+ */
+export function layoutMindEqualLevels(file: MindFile, options: MindLayoutOptions = {}): MindLayout {
+  const first = layoutMind(file, options);
+  const minWidths = new Map<string, number>();
+  for (const [id, box] of first.boxes) {
+    if (box.minWidth !== undefined) minWidths.set(id, box.minWidth);
+  }
+  // 一层里没有更宽的邻居（绝大多数小树）⇒ 两遍是同一份结果，不必再排一次
+  if (minWidths.size === 0) return first;
+
+  const base =
+    options.sizeOf ??
+    ((node: MindNode): Size =>
+      options.measure ? estimateNodeSize(node, options.measure) : estimateNodeSize(node));
+
+  return layoutMind(file, {
+    ...options,
+    sizeOf: (node) => {
+      const size = base(node);
+      const min = minWidths.get(node.id);
+      return min !== undefined && min > size.width ? { ...size, width: min } : size;
+    },
+  });
 }
 
 export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): MindLayout {
@@ -153,9 +228,63 @@ export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): Min
     return options.measure ? estimateNodeSize(node, options.measure) : estimateNodeSize(node);
   };
 
+  /**
+   * 算"同层最宽"用的尺寸（见 `intrinsicSizeOf` 的说明）：默认与 `measure` 同一份 ——
+   * 估算那一路到此为止就够，而**量到真尺寸**的那一路必须单独给一份"内容真宽"，
+   * 否则下限会被自己上一轮撑开的宽度抹掉（这一条就是那句"尺寸不能自证"）。
+   */
+  const intrinsicMeasure = options.intrinsicSizeOf ?? measure;
+
   /** 折叠的节点：孩子一个都不排 */
   const visibleChildren = (node: MindNode): MindNode[] =>
     node.collapsed === true ? [] : (children.get(node.id) ?? []);
+
+  // ── 同层等宽（用户 2026-09-21）──────────────────────────────
+  //
+  // "一个分支下同一层级的节点长度，以同层级最长的那个节点为准，大家都对齐它。"
+  // 实现成**每一侧、每一深度**取一次最大宽度（左右两侧互不影响，与 `collectLevelSizes`
+  // 同一条口径），再把那个宽度记到同层每个**比它窄**的节点上（`minWidth`）。
+  //
+  // ★ 与 `collectLevelSizes` 分开写：那个收的是**层级轴**上的长度（横向布局下是宽、
+  //   纵向布局下是高），而这一条**不分方向**，收的永远是宽。
+  const minWidths = new Map<string, number>();
+
+  const collectLevelWidths = (
+    heads: readonly MindNode[],
+    into: Map<number, number>,
+    depth = 1,
+  ): void => {
+    for (const head of heads) {
+      // ★ 用 `intrinsicMeasure`（内容真宽）而不是 `measure`：后者在画布那条路上是"量到的
+      //   宽度"，里面已经含着上一轮自己写下的下限 —— 用它算最宽等于拿答案当条件。
+      const width = intrinsicMeasure(head).width;
+      if (width > (into.get(depth) ?? 0)) into.set(depth, width);
+      collectLevelWidths(visibleChildren(head), into, depth + 1);
+    }
+  };
+
+  /** 把"这一层最宽的那个值"记到同层每个比它窄的节点上（记的是**下限**） */
+  const noteLevelWidths = (
+    heads: readonly MindNode[],
+    into: Map<number, number>,
+    depth = 1,
+  ): void => {
+    for (const head of heads) {
+      const width = into.get(depth);
+      // ★ 比的是**内容真宽**（理由同上）：拿量到的宽度比，被撑开过的那些永远"不窄于最宽"
+      //   ⇒ 它们拿不到下限 ⇒ 下一遍 `applyNodeBox` 把下限变量摘掉 ⇒ 节点缩回内容宽
+      if (width !== undefined && width > intrinsicMeasure(head).width)
+        minWidths.set(head.id, width);
+      noteLevelWidths(visibleChildren(head), into, depth + 1);
+    }
+  };
+
+  /** 出盒子前把同层等宽的下限挂上去（没记过就不挂 —— 缺席即"不要求等宽"） */
+  const withMinWidth = (box: NodeBox): NodeBox => {
+    const minWidth = minWidths.get(box.id);
+    if (minWidth !== undefined) box.minWidth = minWidth;
+    return box;
+  };
 
   // ── 轴（`08 §1.2` 的"轴通用化"）────────────────────────────
   //
@@ -284,7 +413,10 @@ export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): Min
   ): void => {
     const size = measure(node);
     const start = levelStart(levelSizes, rootHalf, depth);
-    boxes.set(node.id, boxOf(node, size, start, siblingCenter, side, depth, baseLevel, false));
+    boxes.set(
+      node.id,
+      withMinWidth(boxOf(node, size, start, siblingCenter, side, depth, baseLevel, false)),
+    );
 
     const kids = visibleChildren(node);
     if (kids.length === 0) return;
@@ -312,6 +444,8 @@ export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): Min
     free: false,
     ...(vertical ? { vertical: true } : {}),
   });
+
+  // ★ 根自己**不参与同层等宽**：它一个人占一层（`depth 0`），拉宽它只会把整张图撑开
 
   const rootKids = visibleChildren(root);
   // ★ 分侧按**下标交替**（偶右奇左），而不是"按当前高度贪心配平"：
@@ -342,6 +476,10 @@ export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): Min
     if (heads.length === 0) continue;
     const levelWidths = new Map<number, number>();
     collectLevelSizes(heads, levelWidths);
+    // 同层等宽：这一侧各层"最宽的那个"先算出来、记到同层节点上（必须在出盒子之前）
+    const boxWidths = new Map<number, number>();
+    collectLevelWidths(heads, boxWidths);
+    noteLevelWidths(heads, boxWidths);
     // 这一侧的整段长度（最后那个孩子后面不加间距）
     const span =
       heads.reduce((sum, kid) => sum + siblingExtentOf(kid), 0) + siblingGap * (heads.length - 1);
@@ -385,6 +523,10 @@ export function layoutMind(file: MindFile, options: MindLayoutOptions = {}): Min
 
     const levelWidths = new Map<number, number>();
     collectLevelSizes(kids, levelWidths);
+    // 悬浮节点的子树自成一支：同层等宽在它内部各算一份
+    const boxWidths = new Map<number, number>();
+    collectLevelWidths(kids, boxWidths);
+    noteLevelWidths(kids, boxWidths);
     const span =
       kids.reduce((sum, kid) => sum + siblingExtentOf(kid), 0) + siblingGap * (kids.length - 1);
     // ★ 悬浮节点的子树跟着**这一份图的方向**走（横向往右、纵向往下）：

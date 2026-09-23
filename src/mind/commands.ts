@@ -87,7 +87,7 @@ export function registerMindCommands(plugin: NestboardPlugin): void {
     id: MIND_COMMAND_IDS.paste,
     nameKey: 'command.mindPaste.name',
     available: (view) => view.canPaste,
-    run: (view) => view.pasteClipboard(),
+    run: (view) => void view.pasteClipboard(),
   });
   registerMindViewCommand(plugin, {
     id: MIND_COMMAND_IDS.selectAll,
@@ -171,6 +171,11 @@ export function registerMindCommands(plugin: NestboardPlugin): void {
   registerMindViewCommand(plugin, {
     id: MIND_COMMAND_IDS.toggleCollapse,
     nameKey: 'command.mindToggleCollapse.name',
+    // ★ 默认热键 `⌥⌘/`（`O3`，用户 2026-09-21："折展快捷键给默认热键，这个组合本身就偏，
+    //   不容易冲突"）。这是**知情取舍**：社区审核的 `no-default-hotkeys` 规则会因此报一条
+    //   warning（建议级、不阻塞）—— 口径已在 PR 回复里说明；用户在「设置 → 热键」里仍可改绑。
+    //   ★ 这里是脑图命令里**唯一**带默认键的一条（其余各条的理由见上面那几段注释）。
+    hotkeys: [{ modifiers: ['Mod', 'Alt'], key: '/' }],
     available: (view) => view.canToggleCollapse,
     run: (view) => view.toggleSelectionCollapse(),
   });

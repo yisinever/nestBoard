@@ -19,8 +19,9 @@
  */
 
 import { Modal, type App } from 'obsidian';
-import { searchBoard, type SearchHit } from '../model/search';
-import type { BoardFile } from '../model/schema';
+import { MAX_SEARCH_HITS, searchBoard, type SearchHit } from '../model/search';
+import type { BoardFile, Mind } from '../model/schema';
+import type { MindFile } from '../mind/model/schema';
 import { t } from '../util/i18n';
 import type { MessageKey } from '../util/i18n';
 
@@ -50,6 +51,14 @@ export interface SearchPanelOptions {
    */
   initialQuery?: string;
   initialCursor?: number;
+  /**
+   * 一棵脑图的**模型**（`2.2.0` 批 4）：节点里的字也要能被搜到，而指向 `.nestmind`
+   *   的那些模型不在白板文件里 —— 只有视图拿得到。
+   *
+   * ★ 缺席 ⇒ 只索引**内嵌**脑图的节点（与缩略图 / 导出同一条口径）。
+   * ★ 面板自己不认识脑图：它只是把一个"取模型的口子"原样递给 `searchBoard`。
+   */
+  mindModelOf?: (mind: Mind) => MindFile | null;
 }
 
 export class SearchPanel extends Modal {
@@ -160,7 +169,13 @@ export class SearchPanel extends Modal {
 
   private refresh(): void {
     const board = this.options.board();
-    this.hits = board ? searchBoard(board, this.query) : [];
+    // 脑图节点的模型（`2.2.0` 批 4）：内嵌的 `searchBoard` 自己会读，
+    // 指向 `.nestmind` 的由视图喂进来
+    this.hits = board
+      ? searchBoard(board, this.query, MAX_SEARCH_HITS, {
+          mindModelOf: this.options.mindModelOf,
+        })
+      : [];
     this.cursor = -1;
     this.renderList();
 

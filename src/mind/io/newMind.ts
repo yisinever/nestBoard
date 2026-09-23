@@ -16,6 +16,7 @@ import { DEFAULT_MIND_FOLDER, MIND_EXT } from '../../constants';
 import { noteNameFrom, uniquePath } from '../../util/fileName';
 import { t } from '../../util/i18n';
 import { createMindFile } from '../model/factories';
+import type { MindFile } from '../model/schema';
 import { serializeMindFile } from './serialize';
 import type NestboardPlugin from '../../main';
 
@@ -48,6 +49,24 @@ export async function createMindInVault(
 ): Promise<string> {
   const trimmed = options.title?.trim();
   const title = trimmed && trimmed.length > 0 ? trimmed : t('mind.untitled');
+  return writeMindToVault(plugin, createMindFile({ title }), { ...options, title });
+}
+
+/**
+ * 把**现成的一份模型**写成一份新的 `.nestmind`（`F4`：内嵌脑图卡的「导出为 `.nestmind`」）。
+ *
+ * ★ 与 `createMindInVault` 的差别只有一处：那边先造一份空脑图、这边写的是调用方给的模型。
+ *   路径计算（目录 + 重名顺延）与落盘那一行**共用**，免得"新建"与"导出"两条路慢慢分叉。
+ * ★ `updatedAt` 现取：导出的是一份**新文件**，它的时间戳该是"此刻"，而不是内嵌卡里
+ *   那份模型当初被创建的时间。
+ * ★ 重名顺延（`uniquePath`）在这条路上更要紧：这里**绝不覆盖**任何已有文件。
+ */
+export async function writeMindToVault(
+  plugin: NestboardPlugin,
+  file: MindFile,
+  options: NewMindOptions = {},
+): Promise<string> {
+  const title = options.title?.trim() || file.meta.title.trim() || t('mind.untitled');
   const folder = options.folder ?? DEFAULT_MIND_FOLDER;
 
   const path =
@@ -56,7 +75,10 @@ export async function createMindInVault(
       plugin.vaultIO.exists(candidate),
     ));
 
-  const file = createMindFile({ title });
-  await plugin.vaultIO.create(path, serializeMindFile(file));
+  const stamped: MindFile = {
+    ...file,
+    meta: { ...file.meta, updatedAt: new Date().toISOString() },
+  };
+  await plugin.vaultIO.create(path, serializeMindFile(stamped));
   return path;
 }

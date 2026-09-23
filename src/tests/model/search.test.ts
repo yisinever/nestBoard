@@ -13,9 +13,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createBoardFile, createCard } from '../../model/factories';
+import { createBoardFile, createCard, createMind } from '../../model/factories';
 import { MAX_SEARCH_HITS, parseTerms, searchBoard } from '../../model/search';
-import type { BoardFile, Card } from '../../model/schema';
+import type { BoardFile, Card, Mind } from '../../model/schema';
+import { createMindFile, createMindNode } from '../../mind/model/factories';
 
 function boardOf(cards: Card[]): BoardFile {
   return createBoardFile({ cards });
@@ -93,6 +94,95 @@ describe('searchBoard —— 搜得到什么', () => {
 
   it('搜不到就是空数组，不抛错', () => {
     expect(searchBoard(boardOf([note('便签')]), '不存在的词')).toEqual([]);
+  });
+});
+
+/**
+ * 脑图的节点进搜索索引（`2.2.0` 批 4）。
+ *
+ * ★ 从前"一张脑图 = 一张卡"，节点里的字天然在索引里（`searchableFields` 里那两个
+ *   `mind` / `mindRef` 分支）；升格成容器之后它不在 `cards` 里 —— 不补这一笔，
+ *   "搜节点里写过的那个词"会**一条都搜不到**（用户只会以为索引坏了）。
+ */
+describe('searchBoard —— 脑图节点', () => {
+  /** 一棵"中心主题 + 2 个分支（其中一个带备注）"的树 */
+  function mindFile() {
+    const model = createMindFile({ rootText: '季度规划' });
+    const branch = createMindNode({ parentId: model.rootId, text: '预算盘点', order: 0 });
+    const withNote = createMindNode({ parentId: model.rootId, text: '风险', order: 1 });
+    withNote.note = '现金流要盯紧';
+    model.nodes.push(branch, withNote);
+    return { model, branch, withNote };
+  }
+
+  function boardWithMind(mind: Mind): BoardFile {
+    const board = createBoardFile();
+    board.minds = [mind];
+    return board;
+  }
+
+  it('★★ 搜到了节点里的字：带出"哪棵脑图 + 哪个节点"，`cardId` 为空串', () => {
+    const { model, branch } = mindFile();
+    const board = boardWithMind(createMind({ path: '', mind: model }));
+
+    const hits = searchBoard(board, '预算');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].mind).toEqual({ mindId: board.minds![0].id, nodeId: branch.id });
+    expect(hits[0].cardId).toBe('');
+    expect(hits[0].type).toBe('mind');
+    // 面板上那一行的"名字"是中心主题 —— 它就是这棵树叫什么
+    expect(hits[0].title).toBe('季度规划');
+    expect(hits[0].field).toBe('text');
+  });
+
+  it('★ 节点的**备注**也搜得到（与卡片正文同一条待遇）', () => {
+    const { model, withNote } = mindFile();
+    const board = boardWithMind(createMind({ path: '', mind: model }));
+
+    const hits = searchBoard(board, '现金流');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].mind?.nodeId).toBe(withNote.id);
+  });
+
+  it('★ 中心主题按**标题**那一档（搜"季度"时，中心主题命中排在"分支里提了一句"前面）', () => {
+    const { model } = mindFile();
+    model.nodes.push(createMindNode({ parentId: model.rootId, text: '季度复盘', order: 2 }));
+    const board = boardWithMind(createMind({ path: '', mind: model }));
+
+    // 同一棵树只会给出**一处**最优命中：中心主题（title 档）赢过分支（text 档）
+    const hits = searchBoard(board, '季度');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].field).toBe('title');
+    expect(hits[0].mind?.nodeId).toBe(model.rootId);
+  });
+
+  it('★ 卡片与脑图混排：照样按字段权重排（标题档 > 正文档）', () => {
+    const { model } = mindFile();
+    const board = createBoardFile({ cards: [note('正文里提了一句预算')] });
+    board.minds = [createMind({ path: '', mind: model })];
+
+    const hits = searchBoard(board, '预算');
+    expect(hits).toHaveLength(2);
+    // 脑图那条是**中心主题/分支**命中：分支是 text 档、卡片正文也是 text 档，
+    // 命中位置更靠前的赢（"预算盘点"里"预算"在第 0 位）
+    expect(hits[0].mind).toBeDefined();
+    expect(hits[0].snippet.startsWith('预算')).toBe(true);
+  });
+
+  it('★ 文件脑图**没给模型** ⇒ 不进索引（不是报错，也不是画一棵空树）', () => {
+    const board = boardWithMind(createMind({ path: 'Minds/一份.nestmind' }));
+    expect(searchBoard(board, '预算')).toEqual([]);
+  });
+
+  it('★ 文件脑图**给了模型** ⇒ 照样搜得到（视图把仓储里的模型喂进来）', () => {
+    const { model } = mindFile();
+    const board = boardWithMind(createMind({ path: 'Minds/一份.nestmind' }));
+
+    const hits = searchBoard(board, '预算', MAX_SEARCH_HITS, {
+      mindModelOf: () => model,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].mind?.nodeId).toBe(model.nodes[1].id);
   });
 });
 

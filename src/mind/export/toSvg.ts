@@ -22,6 +22,7 @@ import { MIND_CHAR_WIDTH_RATIO } from '../layout/measure';
 import type { MindLayout, NodeBox } from '../layout/tree';
 import { firstRefOf, refLabelOf } from '../model/refs';
 import { mainHexOf, mindPaletteOf, titleBoldOf, titleSizeOf } from '../model/palette';
+import { dimmedByDoneAncestor } from '../model/ops';
 import type { MindEdgeStyle, MindFile, MindNode } from '../model/schema';
 import { edgePathOf, edgeTrunkPathOf } from '../layout/edges';
 import { linkArrowEnds, linkArrowPoints, linkMidpointOf, linkPathOf } from '../layout/links';
@@ -185,7 +186,7 @@ export function mindToSvg(
   // ── 节点 ──
   // 完成（`N3-g`）：祖先里有完成的那些也要**画淡**（与画布一致）。
   // ★ 先算成一个集合：每次现沿父链走的话，n 个节点就是 n×深度 次查表
-  const dimmed = dimmedByDoneAncestor(file, byId);
+  const dimmed = dimmedByDoneAncestor(file);
   for (const box of layout.boxes.values()) {
     const node = byId.get(box.id);
     if (node) parts.push(nodeSvg(node, box, box.free ? 1 : box.depth, dimmed.has(node.id)));
@@ -193,32 +194,6 @@ export function mindToSvg(
 
   parts.push('</svg>');
   return parts.join('\n');
-}
-
-/**
- * 祖先里有完成的节点 id（`N3-g`）。
- *
- * ★ 与画布那边同一条语义：**只有"自己完成"写在那一位上**，祖先完成只是让子孙"看起来"
- *   属于那一支 —— 导出时也一样（不然导出的图与屏幕上不是一回事）。
- */
-function dimmedByDoneAncestor(
-  file: MindFile,
-  byId: ReadonlyMap<string, MindNode>,
-): ReadonlySet<string> {
-  const dimmed = new Set<string>();
-  for (const node of file.nodes) {
-    let cursor = node.parentId === null ? null : (byId.get(node.parentId) ?? null);
-    let guard = 0;
-    while (cursor && guard < 512) {
-      if (cursor.done === true && node.done !== true) {
-        dimmed.add(node.id);
-        break;
-      }
-      cursor = cursor.parentId === null ? null : (byId.get(cursor.parentId) ?? null);
-      guard += 1;
-    }
-  }
-  return dimmed;
 }
 
 /** 一个节点：标题带（圆角矩形 + 一行字）+ 内容块（可换行）+ 附件一行 */

@@ -59,6 +59,15 @@ export interface CreateMindFileOptions {
   /** 中心主题的初始文字（默认跟标题走） */
   rootText?: string;
   view?: Partial<MindViewState>;
+  /**
+   * 初始**分支数**（根下面直接挂几个空子节点）。
+   *
+   * ★ `.nestmind` 新建时不给（= 0）：一张只有中心主题的脑图是合法起点。
+   * ★ 白板里**内嵌的脑图卡**（`F4`）给 3 —— 用户 2026-09-21 定的口径：
+   *   "创建时只创建根节点和 3 个子节点"。它是一张"随手就能往里写"的卡，
+   *   空着只有一个中心主题的话，用户第一步还得先想"怎么加分支"。
+   */
+  branches?: number;
   /** 注入时钟，仅为可测试性（与 `createId` 的 `now` 同一条约定） */
   now?: () => string;
 }
@@ -76,7 +85,23 @@ export function createMindFile(options: CreateMindFileOptions = {}): MindFile {
   //   这个字符串会写进 `meta.title`、也会当文件名，所以它必须是**当前语言**下的默认名
   //   —— 两处各写一份字面量迟早会分叉（`board.untitled` 的注释说的就是这件事）
   const title = options.title ?? t('mind.untitled');
-  const root = createMindNode({ text: options.rootText ?? title, order: 0 });
+  // ★ 根节点的默认文字是「中心主题」，**不是**文件名（用户 2026-09-22：新建出来的节点
+  //   该带着可照抄的占位文字）。两者分工：`meta.title` 管文件名，节点文字管画面上那行字。
+  const root = createMindNode({ text: options.rootText ?? t('mind.default.root'), order: 0 });
+
+  // 初始分支：**带占位文字**「分支主题 N」（同一轮反馈 —— 从前是空文字，
+  //   新建出来三个空白框，用户不知道该往哪儿写）。用户一敲字就整格替换。
+  const branches = Math.max(0, Math.floor(options.branches ?? 0));
+  const children: MindNode[] = [];
+  for (let index = 0; index < branches; index++) {
+    children.push(
+      createMindNode({
+        parentId: root.id,
+        order: index,
+        text: t('mind.default.branch', { index: index + 1 }),
+      }),
+    );
+  }
 
   const meta: MindMeta = {
     id: createId(ID_PREFIX.mind),
@@ -92,7 +117,7 @@ export function createMindFile(options: CreateMindFileOptions = {}): MindFile {
     meta,
     view: { ...DEFAULT_MIND_VIEW, ...options.view },
     rootId: root.id,
-    nodes: [root],
+    nodes: [root, ...children],
   };
 }
 

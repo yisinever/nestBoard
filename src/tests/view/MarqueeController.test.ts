@@ -10,6 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { rectFromPoints } from '../../util/geometry';
+import { nodeEndpointKey } from '../../model/schema';
 import { SelectionModel, marqueeSelectableCards } from '../../view/interact/MarqueeController';
 
 // ─────────────────────────────────────────────────────────────
@@ -64,6 +65,115 @@ describe('选区里的分栏（能多栏、可与卡片共存）', () => {
     expect(selection.columnId).toBe('c9');
     expect(selection.cardIds.size).toBe(0);
     expect(selection.edgeIds.size).toBe(0);
+  });
+});
+
+/**
+ * 脑图进选区（`2.2.0` 批 5）。
+ *
+ * 这一档的规矩只有两条，但两条都关系到"能不能按 Delete"：
+ *
+ * 1. **只选中一棵树也算"有选区"** —— `isEmpty` / `size` 不认它的话，
+ *    `Delete` 的可用条件（`canManipulateSelection`）当场失效，用户框住一棵树按下去毫无反应；
+ * 2. `set` 的老规矩**一个字不改**：它是整体替换，省略的那类一律清空
+ *    （框选每帧都调它，漏清一类就会出现"框选完了，上次选的树还亮着"）。
+ */
+describe('选区里的脑图（`2.2.0` 批 5）', () => {
+  it('★ `set` 能放进好几棵，且与卡片 / 分栏共存', () => {
+    const selection = new SelectionModel();
+    selection.set({ cards: ['a'], columns: ['c1'], minds: ['nm1', 'nm2'] });
+
+    expect([...selection.mindIds].sort()).toEqual(['nm1', 'nm2']);
+    expect(selection.hasMind('nm1')).toBe(true);
+    expect(selection.hasMind('nm9')).toBe(false);
+    expect(selection.size).toBe(4);
+  });
+
+  it('★ 整体替换：不写 `minds` = 清空脑图那一类（与 cards / columns 同一条）', () => {
+    const selection = new SelectionModel();
+    selection.set({ minds: ['nm1'] });
+
+    expect(selection.set({ cards: ['a'] })).toBe(true);
+    expect(selection.mindIds.size).toBe(0);
+    expect(selection.hasCard('a')).toBe(true);
+  });
+
+  it('★ 只选中一棵树也是"有选区"（`Delete` 的闸门靠它）', () => {
+    const selection = new SelectionModel();
+    expect(selection.isEmpty).toBe(true);
+
+    selection.set({ minds: ['nm1'] });
+    expect(selection.isEmpty).toBe(false);
+    expect(selection.size).toBe(1);
+
+    expect(selection.clear()).toBe(true);
+    expect(selection.isEmpty).toBe(true);
+  });
+
+  it('★ `mindIds` 是活引用（渲染层直接缓存它，换对象就等于让它指向过期数据）', () => {
+    const selection = new SelectionModel();
+    const ref = selection.mindIds;
+    selection.set({ minds: ['nm1'] });
+
+    expect(selection.mindIds).toBe(ref);
+    expect([...ref]).toEqual(['nm1']);
+  });
+
+  it('内容相同的 set 返回 false（框选每帧都调它，不能每帧都刷一遍选中框）', () => {
+    const selection = new SelectionModel();
+    selection.set({ minds: ['nm1', 'nm2'] });
+    expect(selection.set({ minds: ['nm2', 'nm1'] })).toBe(false);
+  });
+
+  it('★ 点选一栏 ⇒ 脑图选区一起放下（"我要动这一栏"与"点一张卡放下别的"同一语义）', () => {
+    const selection = new SelectionModel();
+    selection.set({ minds: ['nm1'] });
+
+    expect(selection.selectColumn('c1')).toBe(true);
+    expect(selection.mindIds.size).toBe(0);
+    expect(selection.columnId).toBe('c1');
+  });
+
+  it('★ 节点级选中（`2.2.0` 收尾）：两种粒度各存各的，`isEmpty` / `size` 都认', () => {
+    const selection = new SelectionModel();
+    // 键是 `脑图id::节点id`（与连线端点、过滤表同一把）
+    selection.set({ mindNodes: [nodeEndpointKey('nm1', 'n1'), nodeEndpointKey('nm2', 'n1')] });
+
+    expect(selection.hasMindNode(nodeEndpointKey('nm1', 'n1'))).toBe(true);
+    // 同一个 nodeId 在两棵树里各是一个独立的选中项（只存 nodeId 就会撞车）
+    expect(selection.mindNodeKeys.size).toBe(2);
+    expect(selection.isEmpty).toBe(false);
+    expect(selection.size).toBe(2);
+    // 整棵那一档**没有**被顺手带上（框到节点 ≠ 选中整棵）
+    expect(selection.mindIds.size).toBe(0);
+
+    // 整体替换：不写 `mindNodes` = 清空这一类
+    expect(selection.set({ minds: ['nm1'] })).toBe(true);
+    expect(selection.mindNodeKeys.size).toBe(0);
+
+    expect(selection.clear()).toBe(true);
+    expect(selection.isEmpty).toBe(true);
+  });
+
+  it('★ 节点选区是活引用，dispose 之后也空掉', () => {
+    const selection = new SelectionModel();
+    const ref = selection.mindNodeKeys;
+    selection.set({ mindNodes: [nodeEndpointKey('nm1', 'n1')] });
+
+    expect(selection.mindNodeKeys).toBe(ref);
+    expect([...ref]).toEqual([nodeEndpointKey('nm1', 'n1')]);
+
+    selection.dispose();
+    expect(selection.mindNodeKeys.size).toBe(0);
+  });
+
+  it('dispose 之后脑图选区也空掉', () => {
+    const selection = new SelectionModel();
+    selection.set({ minds: ['nm1'] });
+    selection.dispose();
+
+    expect(selection.isEmpty).toBe(true);
+    expect(selection.mindIds.size).toBe(0);
   });
 });
 

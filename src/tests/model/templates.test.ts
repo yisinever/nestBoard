@@ -21,6 +21,8 @@ import {
   createEdge,
   createGroup,
 } from '../../model/factories';
+import { createMind } from '../../model/factories';
+import { createMindFile } from '../../mind/model/factories';
 import type { BoardFile } from '../../model/schema';
 import {
   BUILTIN_TEMPLATES,
@@ -147,6 +149,87 @@ function fixture(): BoardFile {
     groups: [createGroup([inColumn.id, loose.id], '一组')],
   });
 }
+
+/**
+ * 模板 × 脑图（`2.2.0` 收尾 · 模板对接）。
+ *
+ * 钉三件事：① 树跟着模板走（id 换新、内容随行）；② **指向树 / 分栏的连线不能丢**
+ *   —— 这是这一批顺手修掉的一处静默丢数据（从前只给卡片换 id，别的对象一律判成
+ *   "指向不存在的卡片"）；③ 「另存为模板」要带上树。
+ */
+describe('模板 × 脑图（2.2.0 收尾）', () => {
+  /** 一块"卡 + 栏 + 树"的板，外加两条分别连到**树**与**分栏**的连线 */
+  function fixtureWithMind(): BoardFile {
+    const column = createColumn({ title: '栏', x: 0, y: 0 });
+    const card = createCard('note', { columnId: column.id, order: 0 });
+    const mind = createMind({
+      x: 320,
+      y: 40,
+      mind: createMindFile({ branches: 2, title: '树' }),
+    });
+    return createBoardFile({
+      columns: [column],
+      cards: [card],
+      minds: [mind],
+      edges: [
+        // 卡 → 整棵树
+        createEdge({ cardId: card.id, side: null }, { cardId: mind.id, side: null }),
+        // 树里的**根节点** → 分栏（两种"非卡片端点"一次覆盖）
+        createEdge(
+          { cardId: mind.id, side: 'right', nodeId: mind.mind!.rootId },
+          { cardId: column.id, side: 'left' },
+        ),
+      ],
+    });
+  }
+
+  it('★ 树跟着模板走：容器 id 换新，树本身（节点）原样带过来', () => {
+    const source = fixtureWithMind();
+    const made = instantiateTemplate(source);
+    const oldMind = source.minds![0];
+
+    expect(made.minds).toHaveLength(1);
+    expect(made.minds![0].id).not.toBe(oldMind.id);
+    expect(made.minds![0].mind?.nodes).toHaveLength(oldMind.mind!.nodes.length);
+    expect(made.minds![0].x).toBe(oldMind.x);
+  });
+
+  it('★ 指向树 / 分栏的连线都留住了，端点换成新 id', () => {
+    const made = instantiateTemplate(fixtureWithMind());
+    expect(made.edges).toHaveLength(2);
+
+    const newMindId = made.minds![0].id;
+    const newColumnId = made.columns[0].id;
+    const toMind = made.edges.find((edge) => edge.to.cardId === newMindId);
+    const toColumn = made.edges.find((edge) => edge.to.cardId === newColumnId);
+
+    expect(toMind).toBeDefined();
+    expect(toColumn).toBeDefined();
+    // 树里那个节点的引用**不动**（它属于树，不属于板）
+    expect(toColumn?.from.nodeId).toBe(made.minds![0].mind!.rootId);
+  });
+
+  it('★ 「另存为模板」把树一起带走（`packTemplate` 不挑内容）', () => {
+    const packed = packTemplate(fixtureWithMind(), '树模板');
+    expect(packed.minds).toHaveLength(1);
+    expect(packed.minds![0].mind?.nodes.length).toBeGreaterThan(0);
+  });
+
+  it('内置「研究」模板带一棵"研究问题树"', () => {
+    const research = BUILTIN_TEMPLATES.find((template) => template.id === 'research')!;
+    const board = research.build();
+
+    expect(board.minds).toHaveLength(1);
+    const tree = board.minds![0].mind!;
+    // 根节点写着"研究问题"，外加 3 个空分支（用户下一步就在它们上面打字）
+    expect(tree.nodes.find((node) => node.id === tree.rootId)?.text).toBe(
+      t('template.research.mind.root'),
+    );
+    expect(tree.nodes).toHaveLength(4);
+    // 树必须在分栏底板之上（与卡片同层的要求）
+    expect(board.minds![0].z).toBeGreaterThan(Math.max(...board.columns.map((c) => c.z)));
+  });
+});
 
 describe('instantiateTemplate', () => {
   it('所有 id 重新生成：板 / 卡 / 栏 / 连线 / 编组', () => {
@@ -322,8 +405,8 @@ describe('packTemplate', () => {
 });
 
 describe('describeTemplate', () => {
-  it('数出卡片 / 分栏 / 连线，供列表那行数字使用', () => {
-    expect(describeTemplate(fixture())).toEqual({ cards: 3, columns: 1, edges: 1 });
+  it('数出卡片 / 分栏 / 连线 / 脑图，供列表那行数字使用', () => {
+    expect(describeTemplate(fixture())).toEqual({ cards: 3, columns: 1, edges: 1, minds: 0 });
 
     for (const template of BUILTIN_TEMPLATES) {
       const board = template.build();
@@ -331,6 +414,8 @@ describe('describeTemplate', () => {
         cards: board.cards.length,
         columns: board.columns.length,
         edges: board.edges.length,
+        // 内置的「研究」带一棵树（`2.2.0` 收尾 · 模板对接）—— 这里只是"数数对得上"
+        minds: (board.minds ?? []).length,
       });
     }
   });

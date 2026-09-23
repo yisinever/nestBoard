@@ -84,6 +84,19 @@ export interface IndexNoteInput {
   title: string;
   tags: readonly string[];
   /**
+   * **卡内**标签（`F1`）：白板里的 md（便签卡正文 / 标题 / 备注…）写下的 `#标签`。
+   *
+   * ★ 与 {@link tags}（白板级 `meta.tags`）并进同一份 frontmatter，而不是分两栏：
+   *   `tag:#纪要` 查询在 Obsidian 侧只认一条 `tags:`，分栏的话用户得记住
+   *   "有的板在 A 栏、有的在 B 栏"。合并之后口径是一句话：
+   *   **这块板上任何地方写过这个标签，`tag:` 就命中它**。
+   * ★ 顺序稳定：白板标签在前、卡内标签在后（`renderIndexNote` 里按给进来的顺序去重）——
+   *   同一份输入永远得到同一份文本，`IndexNoteBridge` 的"没变就不写盘"靠的就是它。
+   * ★ 可选：老调用方（测试、没接 `LinkIndex` 的宿主）不传 ⇒ 只有白板级标签，
+   *   与 `F1` 之前一字不差。
+   */
+  cardTags?: readonly string[];
+  /**
    * 卡片数；**`null` = 不知道**，此时整栏都不写。
    *
    * ★ 为什么允许"不知道"：卡片数是**懒加载**的（`R4`：启动时读全库白板的 JSON 会把
@@ -181,7 +194,10 @@ export function renderIndexNote(input: IndexNoteInput): string {
     lines.push(`nestboard-updated: ${yamlString(input.updatedAt)}`);
   }
   lines.push('tags:');
-  for (const tag of tagsOf(input.tags)) lines.push(`  - ${yamlString(tag)}`);
+  // 白板标签 + **卡内标签**（`F1`）并成一份：`tag:#纪要` 只要"板上任何地方写过"就命中
+  for (const tag of tagsOf([...input.tags, ...(input.cardTags ?? [])])) {
+    lines.push(`  - ${yamlString(tag)}`);
+  }
   lines.push('---');
   lines.push('');
 

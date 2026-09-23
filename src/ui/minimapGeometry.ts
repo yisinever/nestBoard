@@ -26,7 +26,10 @@
  *   选中态由画布上那圈描边回答，在缩略图里再画一遍（几百个点）只是让它更糊。
  */
 
-import type { BoardFile } from '../model/schema';
+import type { BoardFile, Mind } from '../model/schema';
+import { mindPlacement } from '../mind/embed/boardGeometry';
+import type { MindFile } from '../mind/model/schema';
+import { mindMinimapShapes } from '../mind/view/minimapShapes';
 import { boundsOf, rotatedBoundsOf, roundTo, type Point, type Rect } from '../util/geometry';
 
 /** 地图盒子的可用尺寸（CSS 像素）。实际值由样式给出，这里只是入参的形状 */
@@ -98,16 +101,74 @@ function rectOf(item: { x: number; y: number; width: number; height: number }): 
 }
 
 /**
+ * **白板上一棵脑图** → 缩略图格子（世界坐标，`2.2.0` 批 4）。
+ *
+ * 与 `mind/view/minimapShapes.ts`（标签页那一份）的分工：
+ *
+ * * 那个函数回答"这一棵图**自己**长什么样"（布局坐标）；
+ * * 这里回答"它**摆在白板的哪儿**"—— 容器的 `x/y` 是**根节点中心**，
+ *   所以要把整份布局按"根节点中心对准锚点"平移一次，与 `MindLayer` /
+ *   `EmbedMind(placement: 'anchor')` 是同一条口径。
+ *
+ * ★ 尺寸用**估算值**（不传 `sizeOf`）：缩略图上一格只有几个像素，量到真值只为了让
+ *   一两个像素更准，却要多跑一遍 DOM 测量。
+ * ★ 模型还没读到（文件脑图首次打开 / 文件没了）⇒ 空清单：地图上**不画**这棵树，
+ *   比画一棵空树诚实（与 `MindLayer` 那句"还没读到"同一个取舍）。
+ */
+function mindShapesOnBoard(anchor: Point, mind: MindFile | null): MinimapShape[] {
+  // ★ 与导出 / SVG 共用同一份摆法（`mind/embed/boardGeometry`）：地图上的树与
+  //   导出的树因此永远在同一些位置（各算一次布局就会出现"两处差几个像素"）
+  const place = mindPlacement(anchor, mind);
+  if (!place) return [];
+  const dx = place.dx;
+  const dy = place.dy;
+
+  return mindMinimapShapes(place.file, place.layout).map((shape) => ({
+    kind: shape.kind,
+    rect: {
+      x: shape.rect.x + dx,
+      y: shape.rect.y + dy,
+      width: shape.rect.width,
+      height: shape.rect.height,
+    },
+  }));
+}
+
+/** `minimapShapes` 的额外输入（都是"地图之外才知道的东西"） */
+export interface MinimapShapesOptions {
+  /**
+   * 一棵脑图的**模型**（`2.2.0` 批 4）：文件脑图在仓储里、内嵌的就在 `mind.mind` 里，
+   * 而地图这一层两者都够不着 ⇒ 由调用方（视图）喂进来。
+   *
+   * ★ 缺席 = 不画脑图（老调用方行为不变）。返回 `null`（还没读到）⇒ 那一棵不画。
+   */
+  mindModelOf?: (mind: Mind) => MindFile | null;
+}
+
+/**
  * 白板 → 缩略图里的格子清单。
  *
- * ★ 分栏在前、卡片在后：地图里的压盖关系与世界容器一致（卡片压在它所在的分栏上）。
+ * ★ 分栏在前、脑图之后、卡片最后：地图里的压盖关系与世界容器一致
+ *   （卡片压在分栏上、脑图的节点画在连线之下）。
  *   `BoardFile | null` 直接收下（`null` = 还没加载 / 板不可用），省得每个调用点
  *   自己写一遍 `board ? [...board.cards] : []`。
+ * ★ **脑图进地图**（`2.2.0` 批 4）：从前"一张脑图 = 一张卡"，它自然会在地图上占一格；
+ *   升格成容器之后它不在 `cards` 里了 —— 不补这一笔，地图上那棵树会**凭空消失**，
+ *   用户看到的是"这块板的缩略图比实际小一圈"。
  */
-export function minimapShapes(board: BoardFile | null): MinimapShape[] {
+export function minimapShapes(
+  board: BoardFile | null,
+  options: MinimapShapesOptions = {},
+): MinimapShape[] {
   if (!board) return [];
+  const mindModelOf = options.mindModelOf;
   return [
     ...board.columns.map((column): MinimapShape => ({ kind: 'column', rect: rectOf(column) })),
+    ...(mindModelOf
+      ? (board.minds ?? []).flatMap((mind) =>
+          mindShapesOnBoard({ x: mind.x, y: mind.y }, mindModelOf(mind)),
+        )
+      : []),
     // ★ 卡片取**外接框**（T7.06）：地图上画的是轴对齐的小方块，转过的卡片只有用
     //   外接框才覆盖它真正占的那块地方（用布局框会把转出来的角漏在地图外，
     //   表现是"地图上这块板比实际小一圈、最边上那张卡被切掉一块"）。

@@ -32,10 +32,13 @@
 
 import { ID_PREFIX } from '../constants';
 import { createId } from '../util/id';
-import { boundsOf, roundTo, type Point } from '../util/geometry';
+import { boundsOf, roundTo, type Point, type Rect } from '../util/geometry';
 import { nextZ } from './factories';
-import { cloneJson } from './ops';
-import type { BoardFile, Card, Edge } from './schema';
+import { cloneJson, cloneMindForCopy } from './ops';
+import { splitEndpointKey } from './schema';
+import type { BoardFile, Card, Edge, EdgeEndpoint, Mind } from './schema';
+import { copyForest, type MindClipboard } from '../mind/model/clipboard';
+import type { MindNode } from '../mind/model/schema';
 import { isRecord, normalizeBoardFile, safeJsonParse } from './validate';
 
 /**
@@ -50,28 +53,108 @@ const TRANSFER_MARKER = 'cards';
 /** 一份可粘贴的搬运载荷（已经是合法卡片，见 `parseCardTransfer`） */
 export interface CardTransfer {
   cards: Card[];
+  /**
+   * **整棵脑图**（`2.2.0` 批 4 五）。
+   *
+   * ★ 老载荷（这一批之前复制进剪贴板的文本）里没有这个键 ⇒ 解析时补 `[]`，
+   *   于是"跨版本粘贴"两个方向都成立：老的粘不丢东西，新的在老板子上粘
+   *   也只是少了一棵树（`normalizeBoardFile` 会把不认识的键丢掉，不会写坏）。
+   * ★ 内嵌脑图的**节点 id 在粘贴时会重新生成**（见 `pasteCardTransfer`）：
+   *   否则"粘回同一块板"会得到两棵树共用同一批节点 id —— 而连线端点正是按
+   *   `脑图id/节点id` 认节点的。
+   */
+  minds: Mind[];
   edges: Edge[];
 }
 
 /**
- * 把选中的卡片做成一段可放进系统剪贴板的文本。
+ * 把选中的对象做成一段可放进系统剪贴板的文本。
  *
  * @param ids 选中的卡片 id（不在板上的会被忽略）
- * @returns 没有可搬的卡片时返回 `null`（调用方据此提示"没选中卡片"）
+ * @param mindIds 选中的**整棵脑图** id（同上；`2.2.0` 批 4 五起）
+ * @returns 两者都没得搬时返回 `null`（调用方据此提示"没选中东西"）
  */
-export function buildCardTransfer(board: BoardFile, ids: readonly string[]): string | null {
+export function buildCardTransfer(
+  board: BoardFile,
+  ids: readonly string[],
+  mindIds: readonly string[] = [],
+): string | null {
   const wanted = new Set(ids);
   const cards = board.cards.filter((card) => wanted.has(card.id));
-  if (cards.length === 0) return null;
+  const wantedMinds = new Set(mindIds);
+  const minds = (board.minds ?? []).filter((mind) => wantedMinds.has(mind.id));
 
-  // ★ 判定用"卡片是否在选中集里"，而不是"这条连线是否被选中"：
-  //   连线的端点可能被删、可能是自由端，逐条判端点才是唯一可靠的口径
-  const copied = new Set(cards.map((card) => card.id));
-  const edges = board.edges.filter(
-    (edge) => copied.has(edge.from.cardId) && copied.has(edge.to.cardId),
-  );
+  if (cards.length === 0 && minds.length === 0) return null;
 
-  return `${JSON.stringify({ nestboard: TRANSFER_MARKER, cards, edges }, null, 2)}\n`;
+  // 判定用"这个端点对象是否在选中集里"，而不是"这条连线是否被选中"：
+  // 连线的端点可能被删、可能是自由端，逐条判端点才是唯一可靠的口径。
+  //   ★ 卡片、分栏、脑图共用 `cardId` 一个字段 ⇒ 这一条判据对整棵树同样成立；
+  //     而**节点端点**（`nodeId`）不用单独判：节点属于它那棵树，树搬走了节点就跟着走
+  //     （内嵌那种会重编 id，粘贴时连线的端点也一起改，见 `pasteCardTransfer`）。
+  const copied = new Set<string>([...cards.map((card) => card.id), ...minds.map((m) => m.id)]);
+  const edges = board.edges
+    .filter((edge) => copied.has(edge.from.cardId) && copied.has(edge.to.cardId))
+    .map((edge) => cloneJson(edge));
+
+  return `${JSON.stringify({ nestboard: TRANSFER_MARKER, cards, minds, edges }, null, 2)}\n`;
+}
+
+/**
+ * 把白板上的**节点选中**做成一份节点剪贴板载荷（`⌘C` 落在脑图节点上时）。
+ *
+ * ── 为什么是这一份而不是卡片载荷（用户 2026-09-23）────────────────
+ *
+ * 节点是"某棵树内部"的东西：它的落点只能是**另一棵树里的某个节点**（成为那个节点的子级）。
+ * 于是它走的是脑图自己的剪贴板（`mind/model/clipboard`，与 `.nestmind` 视图**同一份格式**）——
+ * 顺带还多了一件事：在卡片里复制的节点可以直接粘进一个 `.nestmind` 视图，反之亦然。
+ *
+ * ★ 从前它被抽成"合成容器"塞进卡片载荷 ⇒ 粘到白板空白处就长出一棵棵新树
+ *   （用户报的"变成各种根节点了"）。那条路已经拆掉。
+ * ★ 只认**板内嵌**的树（`mind` 就在板子里）。文件树的节点内容在 `.nestmind` 里，这一层
+ *   （纯模型）读不到 ⇒ 跳过，并用 `skipped` 让调用方说清楚（与删除那条同一条口径）。
+ * ★ 多棵树里各选了几个 ⇒ 合成**同一份**载荷（各支都是入口，粘到目标节点下依次排开）。
+ *   节点 id 是 `nm_…` 随机串，跨树撞号的概率可以当零；何况 `pasteForest` 粘的时候
+ *   整表都会换成新 id。
+ *
+ * @returns 一份载荷 + 被跳过的节点数；一个能复制的都没有时给 `null`
+ */
+export function buildNodeClipboard(
+  board: BoardFile,
+  nodeKeys: readonly string[],
+): { payload: MindClipboard; skipped: number } | null {
+  const grouped = new Map<string, string[]>();
+  let skipped = 0;
+  for (const key of nodeKeys) {
+    const { cardId, nodeId } = splitEndpointKey(key);
+    if (nodeId === null) {
+      skipped += 1;
+      continue;
+    }
+    const bucket = grouped.get(cardId) ?? [];
+    bucket.push(nodeId);
+    grouped.set(cardId, bucket);
+  }
+
+  const roots: string[] = [];
+  const nodes: MindNode[] = [];
+  for (const [mindId, nodeIds] of grouped) {
+    const source = (board.minds ?? []).find((mind) => mind.id === mindId);
+    // 文件树（`path` 有值）模型读不到 ⇒ 跳过；`copyForest` 自己会剔掉"祖先也被选中"的重复
+    if (!source || source.path.length > 0 || !source.mind) {
+      skipped += nodeIds.length;
+      continue;
+    }
+    const payload = copyForest(source.mind, nodeIds);
+    if (!payload) {
+      skipped += nodeIds.length;
+      continue;
+    }
+    roots.push(...payload.roots);
+    nodes.push(...payload.nodes);
+  }
+
+  if (roots.length === 0 || nodes.length === 0) return null;
+  return { payload: { roots, nodes }, skipped };
 }
 
 /**
@@ -88,7 +171,17 @@ export function parseCardTransfer(text: string): CardTransfer | null {
 
   const normalized = normalizeBoardFile(value);
   if (!normalized) return null;
-  return { cards: normalized.board.cards, edges: normalized.board.edges };
+  return {
+    cards: normalized.board.cards,
+    // 老载荷没有 `minds` ⇒ 补空数组（见 `CardTransfer.minds`）
+    minds: normalized.board.minds ?? [],
+    edges: normalized.board.edges,
+  };
+}
+
+/** 搬运时"一个端点对象占的地方"（脑图没有尺寸 ⇒ 用根节点中心那一点当它的位置） */
+function positionRectOf(mind: Mind): Rect {
+  return { x: mind.x, y: mind.y, width: 0, height: 0 };
 }
 
 /**
@@ -97,19 +190,29 @@ export function parseCardTransfer(text: string): CardTransfer | null {
  * 直接改 `board`（与 `duplicateCards` / `addCards` 同一约定：模型层只改数据，
  * 记历史、刷视图、发通知都是视图层的事）。
  *
- * @param at 落点（世界坐标）：整组卡片的**包围盒左上角**会落在这里
- * @returns 新插入的卡片（用于"贴完选中它们"，与复制粘贴的通用手感一致）
+ * @param at 落点（世界坐标）：整组对象的**包围盒左上角**会落在这里。脑图没有尺寸，
+ *   于是它按**根节点中心**那一点参与包围盒（`positionRectOf`）—— 缺这一笔，
+ *   "只粘一棵树"会算出空包围盒、落点退化成 `(0,0)` 的位移，粘出来正好压在原树上。
+ * @returns 新插入的卡片与脑图（用于"贴完选中它们"，与复制粘贴的通用手感一致）
  */
-export function pasteCardTransfer(board: BoardFile, transfer: CardTransfer, at: Point): Card[] {
+export function pasteCardTransfer(
+  board: BoardFile,
+  transfer: CardTransfer,
+  at: Point,
+): { cards: Card[]; minds: Mind[] } {
   const sources = transfer.cards;
-  if (sources.length === 0) return [];
+  const mindSources = transfer.minds;
+  if (sources.length === 0 && mindSources.length === 0) return { cards: [], minds: [] };
 
-  const box = boundsOf(sources);
+  const box = boundsOf([...sources, ...mindSources.map(positionRectOf)]);
   const dx = box ? at.x - box.x : 0;
   const dy = box ? at.y - box.y : 0;
 
   const idMap = new Map<string, string>();
+  /** 每个**内嵌**脑图里"老节点 id → 新节点 id"（文件脑图不在这里，它一个 id 都不改） */
+  const nodeIdMap = new Map<string, string>();
   let z = nextZ(board);
+
   const cards = sources.map((source) => {
     const id = createId(ID_PREFIX.card);
     idMap.set(source.id, id);
@@ -126,6 +229,16 @@ export function pasteCardTransfer(board: BoardFile, transfer: CardTransfer, at: 
     } as Card;
   });
 
+  const minds = mindSources.map((source) => {
+    const { mind, nodeIds } = cloneMindForCopy(source);
+    idMap.set(source.id, mind.id);
+    for (const [oldId, newId] of nodeIds) nodeIdMap.set(nodeKey(source.id, oldId), newId);
+    mind.x = roundTo(source.x + dx);
+    mind.y = roundTo(source.y + dy);
+    mind.z = z++;
+    return mind;
+  });
+
   // 端点没跟着搬过来的连线不复制：宁可不画这条线，也不留一条指向空白处的线
   const edges: Edge[] = [];
   for (const edge of transfer.edges) {
@@ -135,12 +248,34 @@ export function pasteCardTransfer(board: BoardFile, transfer: CardTransfer, at: 
     edges.push({
       ...cloneJson(edge),
       id: createId(ID_PREFIX.edge),
-      from: { ...edge.from, cardId: from },
-      to: { ...edge.to, cardId: to },
+      from: remapEndpoint(edge.from, from, nodeIdMap),
+      to: remapEndpoint(edge.to, to, nodeIdMap),
     });
   }
 
   board.cards.push(...cards);
   board.edges.push(...edges);
-  return cards;
+  if (minds.length > 0) board.minds = [...(board.minds ?? []), ...minds];
+  return { cards, minds };
+}
+
+/** 端点身份的键（与 `schema.nodeEndpointKey` 同形；本文件的节点 id 映射表按它查） */
+function nodeKey(mindId: string, nodeId: string): string {
+  return `${mindId}/${nodeId}`;
+}
+
+/**
+ * 把一个端点的 `cardId` 换成新 id，**顺便**把节点那一层也换掉。
+ *
+ * ★ 内嵌脑图里的节点 id 全换了新（见 `cloneMindForCopy`）⇒ 指着"老节点"的线必须跟着改；
+ *   文件脑图的节点 id 属于那份文件、一个字都没变 ⇒ 原样保留（`nodeIdMap` 里查不到）。
+ */
+function remapEndpoint(
+  endpoint: EdgeEndpoint,
+  cardId: string,
+  nodeIdMap: ReadonlyMap<string, string>,
+): EdgeEndpoint {
+  if (!endpoint.nodeId) return { ...endpoint, cardId };
+  const mapped = nodeIdMap.get(nodeKey(endpoint.cardId, endpoint.nodeId));
+  return mapped ? { ...endpoint, cardId, nodeId: mapped } : { ...endpoint, cardId };
 }

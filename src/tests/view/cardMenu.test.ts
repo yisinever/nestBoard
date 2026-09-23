@@ -20,6 +20,7 @@ import type { CardMenuItemKey } from '../../cards/registry';
 import {
   buildCanvasMenuSpec,
   buildCardMenuSpec,
+  buildMindMenuSpec,
   buildColumnMenuSpec,
   buildEdgeMenuSpec,
   type CardMenuActions,
@@ -33,6 +34,8 @@ function makeActions(overrides: Partial<CardMenuActions> = {}): CardMenuActions 
     edit: vi.fn(),
     editTitle: vi.fn(),
     setShowTitle: vi.fn(),
+    toggleTreeCollapse: vi.fn(),
+    unlinkTreeParent: vi.fn(),
     toggleCollapse: vi.fn(),
     setColor: vi.fn(),
     setAccent: vi.fn(),
@@ -65,6 +68,152 @@ const ANNOTATE_ITEM = {
 // 链接卡 = 跳浏览器、白板卡 = 进子板），它点下去是**跳转**而不是编辑 —— 名不副实。
 // 视图把注册表的 `inlineEditable(type)` 传进来，为 `false` 时这一项**整项不出现**。
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * 脑图容器的右键菜单（`2.2.0` 收尾 · 演示对接）。
+ *
+ * 只有演示四项 —— 钉的是"出场判据"：不在路径里给「加入演示」，在路径里给「移出演示」，
+ * 而前移 / 后移**到头的方向不出现**（与卡片菜单同一条取舍）。
+ */
+/**
+ * 画布菜单里的「过滤卡片…」（`2.2.0` · O3）。
+ *
+ * ★ 钉两件事：**传了才出现**（与"不传 = 不出现"的既有纪律一致）；分隔线画在
+ *   `new-note` 那一条上（它是"加内容"那一组的头，而过滤是"看板"的动作）。
+ */
+describe('buildCanvasMenuSpec × 过滤入口（2.2.0 · O3）', () => {
+  it('★ 传了 `toggleFilter` ⇒ 最上面一条是「过滤卡片…」，且与下面那组之间有分隔线', () => {
+    const toggleFilter = vi.fn();
+    const spec = buildCanvasMenuSpec({
+      // 三个必给的"看板"动作（与视图那边的调用一致）
+      selectAll: vi.fn(),
+      fitContent: vi.fn(),
+      zoomReset: vi.fn(),
+      toggleFilter,
+      newNote: () => undefined,
+    });
+
+    expect(spec[0].id).toBe('canvas-filter');
+    spec[0].run?.();
+    expect(toggleFilter).toHaveBeenCalledTimes(1);
+    // 分隔线画在"加内容"那一组的头一条上（`new-note`），而不是凭空多一条空项
+    expect(spec[1].id).toBe('new-note');
+    expect(spec[1].separatorBefore).toBe(true);
+  });
+
+  it('不传就没有这一条（老调用方一行都不用改）', () => {
+    const spec = buildCanvasMenuSpec({
+      selectAll: vi.fn(),
+      fitContent: vi.fn(),
+      zoomReset: vi.fn(),
+      newNote: () => undefined,
+    });
+    expect(spec.some((item) => item.id === 'canvas-filter')).toBe(false);
+  });
+});
+
+describe('buildMindMenuSpec × 演示四项（2.2.0 收尾）', () => {
+  const makeMindActions = () => ({
+    addToPresentation: vi.fn(),
+    removeFromPresentation: vi.fn(),
+    moveEarlier: vi.fn(),
+    moveLater: vi.fn(),
+  });
+
+  it('不在路径里 ⇒ 只有「加入演示」（没有前移 / 后移）', () => {
+    const actions = makeMindActions();
+    const spec = buildMindMenuSpec(
+      { inPresentation: false, canMoveEarlier: false, canMoveLater: false },
+      actions,
+    );
+    expect(spec.map((item) => item.id)).toEqual(['mind-present-add']);
+    spec[0].run?.();
+    expect(actions.addToPresentation).toHaveBeenCalledTimes(1);
+  });
+
+  it('在路径里 ⇒ 「移出演示」+ 两个方向都能动时两条都在', () => {
+    const actions = makeMindActions();
+    const spec = buildMindMenuSpec(
+      { inPresentation: true, canMoveEarlier: true, canMoveLater: true },
+      actions,
+    );
+    expect(spec.map((item) => item.id)).toEqual([
+      'mind-present-remove',
+      'mind-present-earlier',
+      'mind-present-later',
+    ]);
+    spec[0].run?.();
+    spec[1].run?.();
+    spec[2].run?.();
+    expect(actions.removeFromPresentation).toHaveBeenCalledTimes(1);
+    expect(actions.moveEarlier).toHaveBeenCalledTimes(1);
+    expect(actions.moveLater).toHaveBeenCalledTimes(1);
+  });
+
+  it('到头的那一侧不出现（第一位没有「前移」、最后一位没有「后移」）', () => {
+    const first = buildMindMenuSpec(
+      { inPresentation: true, canMoveEarlier: false, canMoveLater: true },
+      makeMindActions(),
+    );
+    expect(first.map((item) => item.id)).toEqual(['mind-present-remove', 'mind-present-later']);
+
+    const last = buildMindMenuSpec(
+      { inPresentation: true, canMoveEarlier: true, canMoveLater: false },
+      makeMindActions(),
+    );
+    expect(last.map((item) => item.id)).toEqual(['mind-present-remove', 'mind-present-earlier']);
+  });
+});
+
+describe('buildCardMenuSpec × 树折叠 / 解除父子（F7）', () => {
+  const target = createCard('note');
+
+  it('★ 有子级：给「折叠子级」；已折叠给「展开子级」—— run 绑定被右击的那张', () => {
+    const spec = buildCardMenuSpec({
+      selection: [target],
+      target,
+      actions: makeActions(),
+      tree: { childCount: 3, collapsed: false, hasParent: false },
+    });
+    const item = spec.find((entry) => entry.id === 'toggle-tree-collapse');
+    expect(item).toBeDefined();
+    expect(item?.title).toContain('+3');
+  });
+
+  it('★ 已折叠：同一项换成「展开子级」', () => {
+    const actions = makeActions();
+    const spec = buildCardMenuSpec({
+      selection: [target],
+      target,
+      actions,
+      tree: { childCount: 2, collapsed: true, hasParent: false },
+    });
+    const item = spec.find((entry) => entry.id === 'toggle-tree-collapse');
+    item?.run?.();
+    expect(actions.toggleTreeCollapse).toHaveBeenCalledWith(target.id);
+  });
+
+  it('没有子级 ⇒ 折叠项不出现；有父级 ⇒ 给「解除父子关系」并绑对目标', () => {
+    const actions = makeActions();
+    const spec = buildCardMenuSpec({
+      selection: [target],
+      target,
+      actions,
+      tree: { childCount: 0, collapsed: false, hasParent: true },
+    });
+    expect(spec.some((entry) => entry.id === 'toggle-tree-collapse')).toBe(false);
+    const unlink = spec.find((entry) => entry.id === 'unlink-tree-parent');
+    expect(unlink).toBeDefined();
+    unlink?.run?.();
+    expect(actions.unlinkTreeParent).toHaveBeenCalledWith(target.id);
+  });
+
+  it('没传 tree（老调用方 / 测试）⇒ 两个树菜单项都不出现', () => {
+    const spec = buildCardMenuSpec({ selection: [target], target, actions: makeActions() });
+    expect(spec.some((entry) => entry.id === 'toggle-tree-collapse')).toBe(false);
+    expect(spec.some((entry) => entry.id === 'unlink-tree-parent')).toBe(false);
+  });
+});
 
 describe('buildCardMenuSpec × 「编辑内容」（O35）', () => {
   const target = createCard('file', { content: { path: 'a.pdf', showSize: true } });

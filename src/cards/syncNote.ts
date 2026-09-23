@@ -66,10 +66,11 @@ export const syncNoteCard: CardTypeDefinition<'syncNote'> = {
     }
 
     if (ctx.mode === 'edit') {
-      renderNoteEditor(el, card.title, card.content.md, ctx, (patch) => {
-        // 标题是**这一张卡**的（每张各存一份），正文是**整组共用**的 —— 两格各自写回
-        if (patch.title !== undefined) ctx.updateCard({ title: patch.title });
-        if (patch.md !== undefined) submitContent(card.content, patch.md, ctx);
+      // ★ `F5` 起编辑态只有正文那一格（与便签 / 文档节点同一套，见 `note.ts` 文件头），
+      //   标题不再从编辑器里提交 —— 改标题走卡面那一行的就地输入（`BoardView.editCardTitle`）。
+      //   正文是**整组共用**的，所以收口换成 `submitContent`（一张改、全组一起改）。
+      renderNoteEditor(el, card.content.md, ctx, (value) => {
+        submitContent(card.content, value, ctx);
       });
     } else {
       renderNotePreview(el, card.content.md, ctx);

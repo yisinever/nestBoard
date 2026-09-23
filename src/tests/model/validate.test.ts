@@ -64,6 +64,42 @@ function rawNoteCard(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+/**
+ * `2.2.0` 收尾 · 演示对接：树上的步骤号必须落盘、也必须读得回来。
+ *
+ * ★ 这条用例是补的：`normalizeMindContainer` 是**逐字段重建**对象的，
+ *   漏接一个字段的后果不是"少一栏"，而是"编好演示顺序、重开白板又乱了"。
+ */
+describe('normalizeBoardFile × 脑图的演示步骤号（2.2.0 收尾 · 演示对接）', () => {
+  /** 一个最小的内嵌脑图容器（raw 形态） */
+  const rawMind = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'nm_x',
+    x: 0,
+    y: 0,
+    z: 1,
+    path: '',
+    mind: { revision: 1, rootId: 'n_root', nodes: [] },
+    ...overrides,
+  });
+
+  function read(presentStep: unknown) {
+    const container = rawMind(presentStep === undefined ? {} : { presentStep });
+    const result = normalizeBoardFile(rawBoard({ minds: [container] }));
+    return result!.board.minds?.[0] ?? null;
+  }
+
+  it('★ 存过步骤号 ⇒ 读回来还在（否则"编好顺序、重开白板又乱"）', () => {
+    expect(read(3)?.presentStep).toBe(3);
+    // 与卡片同一条归一：非有限数不认、至少是 1
+    expect(read(0)?.presentStep).toBe(1);
+    expect(read('3')?.presentStep).toBeUndefined();
+  });
+
+  it('没存过 ⇒ **不补这个键**（缺席纪律：读一遍写回去逐字节不变）', () => {
+    expect('presentStep' in (read(undefined) ?? {})).toBe(false);
+  });
+});
+
 describe('parseBoardJson —— 信封判定（W6：解析失败绝不覆盖）', () => {
   it('非法 JSON → invalid-json', () => {
     expect(parseBoardJson('{ 不是 json')).toEqual({ ok: false, reason: 'invalid-json' });

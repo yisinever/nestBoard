@@ -109,7 +109,11 @@ describe('titleCard.render', () => {
   it('★ 只认标题：把同一句话放在 `content.text` 里**不会**被画出来', () => {
     const doc = createFakeDocument();
     const el = createFakeElement(doc);
-    const ctx = { mode: 'display', updateCard: vi.fn(), setMode: vi.fn() } as unknown as CardRenderContext;
+    const ctx = {
+      mode: 'display',
+      updateCard: vi.fn(),
+      setMode: vi.fn(),
+    } as unknown as CardRenderContext;
     titleCard.render(
       el as unknown as HTMLElement,
       createCard('titleCard', { title: '', content: { text: '内容里的字' } } as never),

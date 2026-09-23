@@ -89,7 +89,8 @@ describe('videoCard 定义', () => {
     expect(dropKindForPath('a/b/录屏.MOV')).toBe('video');
     // 解不了的容器仍退回文件卡（给了播放器只会是个黑框）
     expect(dropKindForPath('movie.mkv')).toBe('file');
-    expect(dropKindForPath('report.pdf')).toBe('file');
+    // `.pdf` 不归视频卡管：它有自己的预览卡（`F8`）
+    expect(dropKindForPath('report.pdf')).toBe('pdf');
   });
 
   it('导出成 Markdown 用内嵌（`![[…]]`，Obsidian 自己会渲染成播放器）', () => {

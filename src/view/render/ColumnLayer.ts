@@ -27,12 +27,7 @@ import { columnDisplayHeight, measureColumns } from '../../model/columns';
 import { columnViewport } from '../../model/columnScroll';
 import { rectsIntersect, roundTo, type Rect } from '../../util/geometry';
 import { t } from '../../util/i18n';
-import {
-  cardColorValue,
-  normalizeHex,
-  relativeLuminance,
-  THEME_COLOR_VAR,
-} from '../../util/color';
+import { cardColorValue, normalizeHex, relativeLuminance, THEME_COLOR_VAR } from '../../util/color';
 import { RESIZE_HANDLE_ATTR, COLUMN_ID_ATTR } from '../../constants';
 import { RESIZE_HANDLES, type ResizeHandle } from './CardLayer';
 import type { Viewport } from '../../canvas/Viewport';
@@ -86,7 +81,10 @@ const CLASSES = ['nestboard-column', 'is-collapsed', 'is-selected', 'is-readonly
 function resolveColumnInk(host: HTMLElement, color: CardColor): string | null {
   let hex = '';
   if (isHexColor(color)) hex = normalizeHex(color) ?? '';
-  else if (isThemeColor(color)) hex = getComputedStyle(host).getPropertyValue(THEME_COLOR_VAR[color as ThemeColor]).trim();
+  else if (isThemeColor(color))
+    hex = getComputedStyle(host)
+      .getPropertyValue(THEME_COLOR_VAR[color as ThemeColor])
+      .trim();
   if (!hex) return null;
   const lum = relativeLuminance(hex);
   if (lum === null) return null;

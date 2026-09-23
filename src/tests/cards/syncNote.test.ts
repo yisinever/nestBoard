@@ -64,9 +64,9 @@ function renderSyncNote(
   return { el, updateContent, updateCard, setMode };
 }
 
-/** 编辑态的**正文**编辑器（两格里的第二格） */
+/** 编辑态里**唯一**那一格：正文编辑器（`F5` 起与便签一样，没有标题格） */
 function bodyOf(el: FakeElement): FakeTextarea {
-  const textarea = (el.children[1] as FakeElement).children[0] as unknown as FakeTextarea;
+  const textarea = el.children[0] as unknown as FakeTextarea;
   textarea.focus();
   return textarea;
 }
@@ -204,18 +204,19 @@ describe('写回路由', () => {
     expect(setMode).toHaveBeenCalledWith('display');
   });
 
-  it('★ 标题是**这一张卡**的（`updateCard`），正文是**整组**的（`writeSyncGroup`）', () => {
+  it('★ 编辑态里没有标题那一格，提交也**不会**去写 `card.title`（`F5`）', () => {
     const writeSyncGroup = vi.fn();
     const { el, updateCard } = renderSyncNote({ key: 'sy_7', md: '原文' }, 'edit', {
       writeSyncGroup,
     });
 
-    const input = el.children[0] as FakeElement;
-    input.value = '这张卡的名字';
-    input.emit('blur', { relatedTarget: null });
+    // 只有正文一格：标题另有入口（卡面那一行的就地输入，见 `BoardView.editCardTitle`）
+    expect(el.children.length).toBe(1);
+    const textarea = bodyOf(el);
+    textarea.value = '原文';
+    textarea.emit('blur', { relatedTarget: null }); // 没改 → 连提交都不该发生
 
-    expect(updateCard).toHaveBeenCalledWith({ title: '这张卡的名字' });
-    // 正文没动 → 不该去写整组
+    expect(updateCard).not.toHaveBeenCalled();
     expect(writeSyncGroup).not.toHaveBeenCalled();
   });
 });

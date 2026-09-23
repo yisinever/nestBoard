@@ -213,6 +213,15 @@ export interface CardLayerOptions {
    */
   toggleCollapsed?: (cardId: string) => void;
   /**
+   * 这张卡的**树折叠角标**该显示几（`F7`）。`0` = 不显示。
+   *
+   * ★ 与 `toggleCollapsed` 同一条"本层不认识模型"的约定：数子树是模型层
+   *   （`tree.treeHiddenCountOf`）的事，本层只管"把这个数画出来"。
+   */
+  treeBadgeOf?: (cardId: string) => number;
+  /** 点「+N」角标：展开 / 折叠子级（写回模型由视图做，同 `toggleCollapsed`） */
+  onTreeBadgeToggle?: (cardId: string) => void;
+  /**
    * 每类卡片的节点复用池上限（T3.22）。省略即 {@link MAX_POOL_PER_TYPE}。
    *
    * ★ 由视图按性能档位传进来：池子占的是**常驻内存**，手机上那是最稀缺的资源，
@@ -613,6 +622,9 @@ export class CardLayer {
       // 搜索高亮也必须清掉（T2.09）：池里复用的节点带着上一次的 `is-search-hit`，
       // 下一张卡会在完全无关的时候亮一下
       'is-search-hit',
+      // 无框卡（`F3a` / `F4`）：下一张卡可能是带框的，戴着 `is-bare` 出场会少一圈边框。
+      // ★ `applyCard` 每次都会 `toggle` 写对，这里清一遍是"池子里的东西必须是干净的"那条纪律
+      'is-bare',
     );
     // 栏内滚动的裁剪必须清掉（T2.03）：留着它，下一张用这个节点的卡片
     // 会莫名缺掉一角 —— 而"回收池最脏的那种 bug"就是这种"内容对了但样子不对"
@@ -700,6 +712,20 @@ export class CardLayer {
       const id = element.getAttribute(CARD_ID_ATTR);
       if (id) this.options.toggleCollapsed?.(id);
     });
+    // 树折叠角标（`F7`）：「+N」——这一支下面还收着 N 张卡。画法与色板卡的
+    // `.nestboard-swatch-more` 同一套（定稿原文）；挂在标题行里，跟着那行显隐。
+    // ★ 点它 = 展开 / 折叠子级（与菜单里那一项同一条提交路径）。
+    const treeMore = document.createElement('button');
+    treeMore.type = 'button';
+    treeMore.className = 'nestboard-card-tree-more is-empty';
+    treeMore.setAttribute('aria-hidden', 'true');
+    treeMore.addEventListener('pointerdown', (event: Event) => event.stopPropagation());
+    treeMore.addEventListener('click', (event: Event) => {
+      event.stopPropagation();
+      const id = element.getAttribute(CARD_ID_ATTR);
+      if (id) this.options.onTreeBadgeToggle?.(id);
+    });
+    header.appendChild(treeMore);
     header.appendChild(collapse);
     element.appendChild(header);
 
@@ -800,6 +826,16 @@ export class CardLayer {
       iconEl.classList.toggle('is-empty', mark.length === 0);
     }
 
+    // 树折叠角标（`F7`）：`+N` / 隐藏。**每帧现问** `treeBadgeOf`（模型那边
+    // 折叠 / 解除 / 撤销都会变），与本文件"骨架常驻、状态每帧写"的节奏一致。
+    const treeMore = element.querySelector<HTMLElement>('.nestboard-card-tree-more');
+    if (treeMore) {
+      const hiddenCount = this.options.treeBadgeOf?.(card.id) ?? 0;
+      treeMore.textContent = hiddenCount > 0 ? `+${hiddenCount}` : '';
+      treeMore.classList.toggle('is-empty', hiddenCount === 0);
+      treeMore.setAttribute('title', hiddenCount > 0 ? `+${hiddenCount}` : '');
+    }
+
     const look = card.titleStyle;
     // ★ 加粗**只在用户设过时才写**：标题本来是半粗的（样式表定的），
     //   无条件写 `normal` 会把所有卡的标题都压平（这是个会一眼看出来的回归）
@@ -823,6 +859,12 @@ export class CardLayer {
     // 收起（`O31`）：class 收掉内容槽（样式表），高度在上面写 `style.height` 时已经压过
     const collapsed = card.collapsed === true;
     element.classList.toggle('is-collapsed', collapsed);
+
+    // 无框卡（`F3a` / `F4` 的脑图卡，`chrome: 'bare'`）：把边框 / 底色 / 圆角 / 阴影全卸掉，
+    // 卡面只剩"一块看不见的容器"—— 内容自己就是画面上的东西。
+    // ★ 写在 `applyCard` 而不是 `createNode`：复用池里的节点按类型借还，但**类型可能不同**
+    //   （池子清空 / 上限到了会丢弃），每次 `applyCard` 用 `toggle` 写死当前值最省心。
+    element.classList.toggle('is-bare', this.options.registry.get(card.type)?.chrome === 'bare');
     const collapseButton = element.querySelector<HTMLElement>('.nestboard-card-collapse');
     if (collapseButton) {
       const key = collapsed ? 'menu.card.expand' : 'menu.card.collapse';

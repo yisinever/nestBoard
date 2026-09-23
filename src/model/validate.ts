@@ -24,6 +24,14 @@ import { normalizeIcon } from '../util/emoji';
 // ★ 弧度归一化与写入侧（`curveFromMidpoint`）**共用这一份**：两边判据分开写的话，
 //   会出现"拖出来的值写进去、读回来变成另一条线"这种最难查的不一致
 import { normalizeEdgeCurve } from './edges';
+// 内嵌脑图卡（`F4`）：那份脑图模型交给**脑图自己的校验器**（见 `normalizeMindContent`）；
+// 初始形态走白板的工厂（`INLINE_MIND_BRANCHES` 那一处定的"根 + 3 分支"）
+import { createMindFile } from '../mind/model/factories';
+import { normalizeMindFile } from '../mind/model/validate';
+// 老脑图卡 → 容器时的**根节点落点**要按布局算（见 `mindFromLegacyCard`）——
+// 布局是纯函数、不碰 DOM，所以白板这一侧可以直接用（`12 §4.5` 的读时转换）
+import { directionForStructure, layoutMind } from '../mind/layout/tree';
+import { INLINE_MIND_BRANCHES } from './factories';
 import type {
   BoardFile,
   BoardMeta,
@@ -54,6 +62,7 @@ import type {
   MapContent,
   MapCoords,
   MapPin,
+  Mind,
   NoteEditorMode,
   NoteContent,
   NoteRefMode,
@@ -274,6 +283,26 @@ function normalizeFileContent(raw: unknown): CardContent | null {
   const path = readString(raw.path);
   if (path.length === 0) return null;
   return { path, showSize: readBoolean(raw.showSize, true) };
+}
+
+/**
+ * 内嵌脑图卡（`F4`）的内容：**整份脑图模型**长在卡片里。
+ *
+ * ★ 把那份模型交给**脑图自己的校验器**（`mind/model/validate.normalizeMindFile`）：
+ *   同一个形状在 `.nestmind` 与卡片里必须是同一套读法，各写一份迟早出现
+ *   "文件里能读出来、卡里读不出来"这种最难查的不一致。
+ * ★ **永远返回结果、绝不返回 `null`**（其它归一函数的"认不出来就 null"在这里是错的）：
+ *   `null` 会让这张卡**整个消失**（调用方按"内容不合法"丢弃它），而脑图卡是用户写下的
+ *   东西 —— 读不出来时退回"一张全新的空脑图"，卡片还在、用户还能打开文件看原数据。
+ *   这是与其它卡片不同的一条取舍，写在这里免得下次被"统一"掉。
+ */
+function normalizeMindContent(raw: unknown): CardContent | null {
+  if (!isRecord(raw)) return null;
+  const parsed = normalizeMindFile(raw.mind);
+  // 认不出来（`ok: false`）= 那份数据不是脑图：给一张全新的（根 + 3 个分支），
+  // 而不是让卡片凭空消失。原数据仍在 `.nboard` 里，用户随时能去文件里找。
+  if (!parsed.ok) return { mind: createMindFile({ branches: INLINE_MIND_BRANCHES, title: '' }) };
+  return { mind: parsed.file };
 }
 
 function normalizeLinkContent(raw: unknown): CardContent | null {
@@ -566,6 +595,14 @@ const CONTENT_NORMALIZERS: {
   video: normalizeFileContent,
   // 音频卡（`A2`）：与文件卡 / 视频卡同一个内容形状（一个路径）⇒ 同一个归一函数
   audio: normalizeFileContent,
+  // PDF 预览卡（`F8`）：同上（一个路径）
+  pdf: normalizeFileContent,
+  // `.canvas` 预览卡（`F6`）：同上（一个路径）
+  canvas: normalizeFileContent,
+  // 脑图卡（`F3a`）：同上（一个路径，指向一份 `.nestmind`）
+  mindRef: normalizeFileContent,
+  // 内嵌脑图卡（`F4`）：内容里装着**整份脑图模型**（见上面的 `normalizeMindContent`）
+  mind: normalizeMindContent,
   // 仅标题卡（`A3`）：一行字 + 两档样式
   titleCard: normalizeTitleCardContent,
   // 图集卡（`A4`）：一串图片路径 + 当前看的是第几张
@@ -657,6 +694,8 @@ function normalizeCard(
     content,
     // `O31`：收起态。**只在真的收起时写这个键**（缺省 = 展开），旧文件一个字不动
     ...(readBoolean(raw.collapsed, false) ? { collapsed: true } : {}),
+    // `F7`：树折叠（折叠子级 ⇒ +N）。与 `collapsed` 同一条"缺席不写键"的纪律
+    ...(readBoolean(raw.treeCollapsed, false) ? { treeCollapsed: true } : {}),
     // 图片卡的"要不要边框"（2026-09-17）：**缺省 = 有边框** ⇒ 同样只在关掉过时写这个键
     ...(readBoolean(raw.showBorder, true) ? {} : { showBorder: false }),
     // `O38`：卡面标记 + 标题整条格式。两条都是可选键，缺省一个字节都不写
@@ -745,19 +784,27 @@ function normalizeEndpoint(raw: unknown): EdgeEndpoint | null {
   const side = EDGE_SIDES.includes(raw.side as EdgeSide) ? (raw.side as EdgeSide) : null;
   const cardId = readString(raw.cardId);
   const point = readPoint(raw.point);
+  // 脑图里的某个节点（`2.2.0` 批 3）：**照读、不校验**（见 `EdgeEndpoint.nodeId` 那条）——
+  // 节点清单在另一份模型里，这一刻 `.nestmind` 可能还没读到；判"悬空"会把好数据删掉。
+  // 空串 / 非字符串一律当作"没有这一层"（= 整卡片），与"可选键缺席"同一个待遇。
+  const nodeId = readString(raw.nodeId);
+  const node = nodeId.length > 0 ? { nodeId } : {};
 
   if (cardId.length === 0) return point ? { cardId: '', side, point } : null;
   // 绑对象的端点上允许留着 `point`：用户把端点拖离卡片、又拖回卡片时，
   // 那个落点可以直接复用，不必重新算一次（`schema.ts` 有说明）
-  return point ? { cardId, side, point } : { cardId, side };
+  return point ? { cardId, side, point, ...node } : { cardId, side, ...node };
 }
 
 /**
  * 读一条边。
  *
- * `aliveIds` = **卡片 id ∪ 分栏 id**（`O21`）：两种共用 `cardId` 一个字段，
- * 校验时也就必须共用一张表 —— 只喂卡片的话，每条指向分栏的线都会在**读盘时**
+ * `aliveIds` = **卡片 id ∪ 分栏 id**（`O21`）**∪ 脑图 id**（`2.2.0`）：它们共用
+ * `cardId` 一个字段，校验时也就必须共用一张表 —— 少喂一类，指向它的线就会在**读盘时**
  * 被当作"悬空"丢掉（用户那边表现为"连线莫名其妙没了，而且重启一次少一条"）。
+ *
+ * ★ 校验**到此为止**：端点上的 `nodeId`（脑图里的哪个节点）这里不查 ——
+ *   节点清单在另一份模型里，这一刻可能还没读到。理由见 `EdgeEndpoint.nodeId`。
  */
 function normalizeEdge(
   raw: unknown,
@@ -809,6 +856,8 @@ function normalizeEdge(
     // ★ 缺席就不写这个键（而不是写 `curve: null`）：存量文件读一遍再写回去
     //   必须**逐字节不变**，多一个 `null` 键就把这条纪律破了
     ...(curve ? { curve } : {}),
+    // `F7`：树连线标记。缺席不写键（普通线一个字节不变）
+    ...(raw.kind === 'tree' ? { kind: 'tree' as const } : {}),
   };
 }
 
@@ -919,6 +968,125 @@ function readArrayField(
  *   `spec` / `version`（那是为了容忍手写与精简文件），所以迁移之后再判就永远为真 ——
  *   `{"hello":"world"}` 也会被规范化成"一块 0 张卡的白板"。判定必须在盖章之前做。
  */
+// ─────────────────────────────────────────────────────────────
+// 脑图容器（`2.2.0`）：白板级的"一棵树"
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 读一个**脑图容器**（`Mind`）：与卡片 / 分栏 / 编组平级的白板对象。
+ *
+ * ★ 模型那一份交给**脑图自己的校验器**（`normalizeMindFile`）：同一个形状在 `.nestmind`
+ *   与白板里必须是同一套读法（与 `normalizeMindContent` 那条理由一致）。
+ * ★ 内嵌模型读不出来时**保留容器、里面放一张全新的空脑图**（不是丢掉这一棵）：
+ *   与内嵌脑图卡同一条取舍 —— 用户写下的东西不该因为一次解析失败整棵消失，
+ *   原数据仍在 `.nboard` 里（懒迁移：文件本身要等用户编辑才会被改写）。
+ * ★ `path` 非空 = 文件脑图：模型不在这里（渲染时去读那个 `.nestmind`），所以**不碰 `mind`**。
+ */
+function normalizeMindContainer(
+  raw: unknown,
+  index: number,
+  issues: IssueCollector,
+  seenIds: Set<string>,
+): Mind | null {
+  if (!isRecord(raw)) {
+    issues.dropped(`minds[${index}]`, '不是对象');
+    return null;
+  }
+  const id = readString(raw.id);
+  if (id.length === 0) {
+    issues.dropped(`minds[${index}]`, '缺少 id');
+    return null;
+  }
+  if (seenIds.has(id)) {
+    issues.dropped(`minds[${index}]`, 'id 重复');
+    return null;
+  }
+  seenIds.add(id);
+
+  const path = readString(raw.path);
+  const mind: Mind = {
+    id,
+    x: readNumber(raw.x, 0),
+    y: readNumber(raw.y, 0),
+    z: Math.round(readNumber(raw.z, 0)),
+    path,
+  };
+  // 只读（缺席 = 可编辑）：与 `rotation` / `locked` 同一条纪律 —— 不补 `false`
+  if (readBoolean(raw.locked, false)) mind.locked = true;
+
+  // 演示步骤号（`2.2.0` 收尾 · 演示对接）：**设过才写这个键**（缺席 = 不在演示路径里）。
+  // ★ 漏掉这一行的后果不是"少一栏"：树上的步骤号会在存盘后**整个消失**，
+  //   表现为"编好顺序、重开白板又乱了" —— 所以它与 `locked` 一样必须在这里接住。
+  const presentStep = readPresentStep(raw.presentStep);
+  if (presentStep !== null) mind.presentStep = presentStep;
+
+  if (path.length === 0) {
+    const parsed = normalizeMindFile(raw.mind);
+    if (parsed.ok) {
+      mind.mind = parsed.file;
+    } else {
+      mind.mind = createMindFile({ branches: INLINE_MIND_BRANCHES, title: '' });
+      issues.fixed(
+        `minds[${index}].mind`,
+        '读不出这份脑图，已保留容器并放入一张空脑图（原数据仍在文件里）',
+      );
+    }
+  }
+  return mind;
+}
+
+/**
+ * **老脑图卡 → 容器**（读时转换，`12 §4.5`）。
+ *
+ * 认这两种：
+ * * `mindRef`（`F3a`：卡的 `content.path` 指向一份 `.nestmind`）→ 容器带 `path`；
+ * * `mind`（`F4`：整份模型在卡里）→ 容器内嵌 `mind`。
+ *
+ * ★ **容器沿用那张卡的 id**：断在它身上的连线（`EdgeEndpoint.cardId`）因此不用改 ——
+ *   端点本来就只认"一个白板级 id"（分栏就是这么加进来的），这一条让迁移不丢连线。
+ * ★ 位置：**根节点中心落在原卡中心**。内嵌卡还能按布局把原来那棵树的位置还原
+ *   （树在卡里是居中摆放的）；**文件卡做不到**（这一刻还没读到那份 `.nestmind`），
+ *   整棵树会相对原位偏"半个树宽"——用户可以拖，记在 `12 §4.5` 的已知偏差里。
+ * ★ 转换**只在内存里**：文件要等用户真的编辑这块板才按新形状写回（懒迁移）。
+ */
+function mindFromLegacyCard(card: Card, seenIds: Set<string>, issues: IssueCollector): Mind | null {
+  if (card.type !== 'mind' && card.type !== 'mindRef') return null;
+  const content = card.content as { path?: unknown; mind?: unknown };
+  const mind: Mind = {
+    // 见上：沿用卡的 id，连线断不了
+    id: card.id,
+    x: roundTo(card.x + card.width / 2),
+    y: roundTo(card.y + card.height / 2),
+    z: card.z,
+    path: card.type === 'mindRef' ? readString(content.path) : '',
+  };
+  if (card.locked) mind.locked = true;
+
+  if (mind.path.length === 0) {
+    const parsed = normalizeMindFile(content.mind);
+    mind.mind = parsed.ok
+      ? parsed.file
+      : createMindFile({ branches: INLINE_MIND_BRANCHES, title: '' });
+    if (parsed.ok) {
+      // 把"根节点在原来那张卡里落在哪"还原出来：卡里那棵树是按**整体包围盒**居中摆的
+      const direction = directionForStructure(parsed.file.view.structure ?? 'logic-right');
+      const layout = layoutMind(parsed.file, { direction });
+      const root = layout.boxes.get(parsed.file.rootId);
+      if (root && layout.bounds) {
+        mind.x = roundTo(
+          mind.x + (root.x + root.width / 2 - (layout.bounds.x + layout.bounds.width / 2)),
+        );
+        mind.y = roundTo(
+          mind.y + (root.y + root.height / 2 - (layout.bounds.y + layout.bounds.height / 2)),
+        );
+      }
+    }
+  }
+  seenIds.add(mind.id);
+  issues.fixed(`card ${card.id}`, '脑图卡已转为白板级脑图（`2.2.0`）');
+  return mind;
+}
+
 export function looksLikeBoardFile(input: unknown): input is Record<string, unknown> {
   if (!isRecord(input)) return false;
   return (
@@ -976,10 +1144,42 @@ export function normalizeBoardFile(input: unknown): NormalizedBoard | null {
     }
   });
 
-  // ★ 连线的合法端点是**卡片 ∪ 分栏**（`O21`）：两张表在这里拼齐，再交给 `normalizeEdge`。
-  //   必须在**读完 columns 之后**建（上面那段），否则分栏 id 还是空的，
-  //   指向分栏的线会被当成悬空整条丢掉 —— 而 `edges` 恰好排在 `columns` 后面，正合适。
-  const aliveIds = new Set<string>([...seenCardIds, ...columnIds]);
+  // ── 脑图（`2.2.0`）：白板级容器 ─────────────────────────────
+  // 顺序：先读 `minds`，再把老的两种脑图卡**就地转成**容器（读时转换）。
+  // ★ 转换必须在这里做完 —— 后面建连线端点集合、编组成员、导出都要看到"最终的一类对象"。
+  const minds: Mind[] = [];
+  const mindIds = new Set<string>();
+  // ★ 这里**不走 `readArrayField`**：那个读法对"缺键"也会记一条 `fixed`，
+  //   而 `minds` 是**可选键**（绝大多数板子没有脑图）—— 让每块板都多一条"minds 缺失"
+  //   的噪声，等于把真正的异常淹掉。于是就地读：缺键 = 空数组、**不记**；
+  //   类型不对才记一条 dropped。
+  const rawMinds = input.minds;
+  if (rawMinds !== undefined && !Array.isArray(rawMinds)) {
+    issues.dropped('minds', 'minds 不是数组，已视为没有脑图');
+  }
+  if (Array.isArray(rawMinds)) {
+    rawMinds.forEach((entry, index) => {
+      const mind = normalizeMindContainer(entry, index, issues, mindIds);
+      if (mind) minds.push(mind);
+    });
+  }
+
+  const keptCards: Card[] = [];
+  for (const card of cards) {
+    const migrated = mindFromLegacyCard(card, mindIds, issues);
+    if (migrated) {
+      minds.push(migrated);
+      continue;
+    }
+    keptCards.push(card);
+  }
+  cards.length = 0;
+  cards.push(...keptCards);
+
+  // ★ 连线的合法端点是**卡片 ∪ 分栏 ∪ 脑图**（`O21` / `2.2.0`）：三张表在这里拼齐，
+  //   再交给 `normalizeEdge`。脑图必须算进来 —— 否则"指着某棵脑图的线"会被当成悬空丢掉，
+  //   而迁移恰恰**沿用了原卡的 id**，正是为了让这些线活下来。
+  const aliveIds = new Set<string>([...seenCardIds, ...columnIds, ...mindIds]);
   const edges: Edge[] = [];
   readArrayField(input, 'edges', issues).forEach((entry, index) => {
     const edge = normalizeEdge(entry, index, issues, aliveIds);
@@ -987,10 +1187,13 @@ export function normalizeBoardFile(input: unknown): NormalizedBoard | null {
   });
 
   const groups: Group[] = [];
+  // ★ 编组的成员只认**卡片**（与连线不同）：一张脑图卡迁移成容器之后，它不再是卡片，
+  //   于是它从编组里退出（连线照旧活着 —— 那是"指着谁"的关系，编组是"一起选中"的关系）。
+  const aliveCardIds = new Set(cards.map((card) => card.id));
   readArrayField(input, 'groups', issues).forEach((entry, index) => {
     const group = normalizeGroup(entry, index, issues);
     if (!group) return;
-    const kept = group.cardIds.filter((cardId) => seenCardIds.has(cardId));
+    const kept = group.cardIds.filter((cardId) => aliveCardIds.has(cardId));
     if (kept.length !== group.cardIds.length) {
       issues.fixed(`groups[${index}].cardIds`, '移除了不存在的成员');
     }
@@ -1013,6 +1216,10 @@ export function normalizeBoardFile(input: unknown): NormalizedBoard | null {
       cards,
       edges,
       groups,
+      // ★ 可选键：**没有脑图就不写这个键**（与 `rotation` / `curve` 同一条纪律）——
+      //   于是"没有脑图的板子"读一遍写回去逐字节不变，老插件也读得懂（版本号同理，
+      //   见 `io/BoardRepository.serializeBoard`）。
+      ...(minds.length > 0 ? { minds } : {}),
     },
     issues: issues.issues,
   };

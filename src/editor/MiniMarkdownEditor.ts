@@ -50,6 +50,14 @@
  */
 
 import { t } from '../util/i18n';
+import {
+  applyLinkSuggestion,
+  detectLinkQuery,
+  labelOf,
+  rankLinkCandidates,
+  type LinkCandidate,
+  type LinkQuery,
+} from './linkSuggest';
 
 /** 缩进单位。Markdown 里 2 空格足够表达层级，且不会撑爆卡片宽度 */
 export const INDENT_UNIT = '  ';
@@ -335,6 +343,23 @@ export interface MiniMarkdownEditorOptions {
    *   收口处（那边会把两格合并成一次 patch —— 见 `cards/todo.ts` 的收口表）。
    */
   keepEditingOnBlur?: (event: FocusEvent) => boolean;
+  /**
+   * 把剪贴板里的一张图片**落进库**，返回它的 vault 相对路径（失败给 `null`），`F5`。
+   *
+   * ★ 编辑器自己不碰 Obsidian（文件头那条纪律）⇒ 写盘由宿主注入。现成件正是
+   *   `io/AttachmentManager`（二进制 → 路径：跟随用户的附件目录设置、同名顺延、可选去重），
+   *   宿主包一层即可，不必新写一套。
+   * ★ 不注入 = 不支持粘贴图片（纯文本粘贴、拖拽等原生行为照旧放行）。
+   */
+  pasteImage?: (file: File) => Promise<string | null>;
+  /**
+   * 敲 `[[` 时的候选来源（`F5`）。**同步**返回一组库内文件。
+   *
+   * ★ 同步是有意的：候选列表由宿主**预取**（库内 `.md` 清单本来就常驻内存），
+   *   每次敲字去异步问一遍会让浮层忽闪；过滤与排序交给 `linkSuggest.rankLinkCandidates`。
+   * ★ 不注入 = 不做补全（`[[` 就是普通文本，照旧）。
+   */
+  suggestLinks?: (query: string) => readonly LinkCandidate[];
 }
 
 /**
@@ -373,6 +398,24 @@ export class MiniMarkdownEditor {
     // 只挂在这块 textarea 上：它随内容槽一起被清掉，不需要额外的 dispose 通道
     textarea.addEventListener('keydown', this.onKeyDown);
     textarea.addEventListener('blur', this.onBlur);
+    if (options.pasteImage) {
+      this.pasteImage = options.pasteImage;
+      textarea.addEventListener('paste', this.onPaste);
+    }
+    if (options.suggestLinks) {
+      this.suggestLinks = options.suggestLinks;
+      textarea.addEventListener('input', this.onInput);
+      // 光标只用键盘挪（←→ / ↑↓）不会触发 `input`：补一手 `keyup` 才能发现
+      // "光标已经离开那段 `[[查询`"（进去前把浮层收掉）
+      textarea.addEventListener('keyup', this.onInput);
+    }
+    // ⌘B / ⌘I 另挂**窗口捕获**（理由见 `onWindowKeyDown`）。单测的假 DOM 没有
+    // `defaultView` ⇒ 拿不到就当没有，那一档由 textarea 上的监听器兜着（逻辑同一份）
+    const win = textarea.ownerDocument.defaultView;
+    if (win) {
+      win.addEventListener('keydown', this.onWindowKeyDown, true);
+      this.windowRef = win;
+    }
   }
 
   /** 聚焦并把光标放到末尾。延迟一轮微任务：渲染时节点还没进文档，立刻 focus 会被抢走 */
@@ -393,6 +436,165 @@ export class MiniMarkdownEditor {
 
   // ── 按键分流 ────────────────────────────────────────────────
 
+  /** 挂 ⌘B / ⌘I 的那个 window（构造时拿到、`finish()` 里摘掉） */
+  private windowRef: Window | null = null;
+
+  /**
+   * ⌘B / ⌘I 挂**窗口捕获阶段**（`F5`）。
+   *
+   * ★ 为什么不能只挂在这块 textarea 上 —— 这正是它第一版"按了没反应"的原因：
+   *   **Obsidian 自己内置了 ⌘B（"切换粗体"）等全局热键**，它在 `document` 上先处理
+   *   这一下、处理完停掉传播；挂在 textarea（冒泡路径末端）的监听器于是**永远收不到**。
+   *   脑图那边的剪贴板三键挂窗口捕获，就是同一条理由（见 `MindView.onWindowKeyDown`）。
+   * ★ 只认**焦点在这块 textarea 上**的那一下（比对 `event.target`），所以库里别的输入框
+   *   不受影响；编辑会话一结束立刻摘掉。
+   */
+  private readonly onWindowKeyDown = (event: KeyboardEvent): void => {
+    if (this.finished || event.target !== this.textarea) return;
+    if (event.isComposing || event.keyCode === 229) return;
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    const lower = event.key.toLowerCase();
+    const marker = lower === 'b' ? '**' : lower === 'i' ? '*' : null;
+    if (marker === null) return;
+    // 抢在 Obsidian 的内置热键之前把这一下收掉（否则它先 preventDefault 就没有下文了）
+    event.preventDefault();
+    event.stopPropagation();
+    this.wrapSelection(marker);
+  };
+
+  /** 落盘端口（未注入时为 `undefined`，见 `MiniMarkdownEditorOptions.pasteImage`） */
+  private pasteImage?: (file: File) => Promise<string | null>;
+
+  // ── `[[` 补全（`F5`）───────────────────────────────────────
+
+  /** 候选来源（未注入 = 不做补全） */
+  private suggestLinks?: (query: string) => readonly LinkCandidate[];
+  /** 浮层：懒建一次，之后复用（不是每敲一个字建一个） */
+  private linkBox: HTMLElement | null = null;
+  /** 当前候选与选中项 */
+  private linkItems: readonly LinkCandidate[] = [];
+  private linkActive = 0;
+  /** 正在替换的那段 `[[查询`；`null` = 浮层没开 */
+  private linkQuery: LinkQuery | null = null;
+
+  /** 浮层开着吗 —— `↑↓/⏎/Tab/Esc` 归谁，就看它 */
+  private linkListOpen(): boolean {
+    return this.linkQuery !== null && this.linkItems.length > 0;
+  }
+
+  /**
+   * 文本 / 光标变了之后重算一次：该弹就弹、该收就收。
+   *
+   * ★ 查询串没变时**不重置选中项**：`↑↓` 会先改选中项再触发这一趟，
+   *   一重置就永远停在第一条。
+   */
+  private syncLinkList(): void {
+    const provider = this.suggestLinks;
+    if (!provider) return;
+
+    const el = this.textarea;
+    const query = detectLinkQuery(el.value, el.selectionStart);
+    if (!query) {
+      this.closeLinkList();
+      return;
+    }
+    const items = rankLinkCandidates(provider(query.query), query.query);
+    if (items.length === 0) {
+      this.closeLinkList();
+      return;
+    }
+
+    const sameQuery =
+      this.linkQuery !== null &&
+      this.linkQuery.start === query.start &&
+      this.linkQuery.query === query.query &&
+      this.linkItems.length === items.length;
+    if (!sameQuery) this.linkActive = 0;
+    this.linkQuery = query;
+    this.linkItems = items;
+    this.paintLinkList();
+  }
+
+  private paintLinkList(): void {
+    const box = this.ensureLinkBox();
+    const doc = box.ownerDocument;
+    const rows = this.linkItems.map((item, index) => {
+      const row = doc.createElement('div');
+      row.className = 'nestboard-link-suggest-item';
+      if (index === this.linkActive) row.classList.add('is-active');
+      row.textContent = labelOf(item);
+      row.title = item.path;
+      // ★ 用 `pointerdown` 而不是 `click`：`click` 之前输入框会先失焦，
+      //   而失焦 = 提交 + 关编辑器 ⇒ 点下去变成"什么都没选就退出了"
+      row.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.acceptLink(item);
+      });
+      return row;
+    });
+    box.replaceChildren(...rows);
+    box.classList.remove('is-hidden');
+  }
+
+  private ensureLinkBox(): HTMLElement {
+    if (this.linkBox) return this.linkBox;
+    const box = this.host.ownerDocument.createElement('div');
+    box.className = 'nestboard-link-suggest is-hidden';
+    this.host.appendChild(box);
+    this.linkBox = box;
+    return box;
+  }
+
+  private closeLinkList(): void {
+    this.linkQuery = null;
+    this.linkItems = [];
+    this.linkActive = 0;
+    this.linkBox?.classList.add('is-hidden');
+  }
+
+  /** 接受一条候选：写回仍走 `replaceRange`（`execCommand`，保住撤销栈），随后收浮层 */
+  private acceptLink(item: LinkCandidate): void {
+    const query = this.linkQuery;
+    if (!query) return;
+    const el = this.textarea;
+    // `applyLinkSuggestion` 只算"变成什么"；插进去的那一段就是它算出来的那截
+    const next = applyLinkSuggestion(el.value, el.selectionStart, query, item);
+    this.closeLinkList();
+    this.replaceRange(query.start, el.selectionStart, next.value.slice(query.start, next.caret));
+  }
+
+  /** 文本动了就重算（`input`；光标只用键盘挪时靠 `keyup` 补一手） */
+  private readonly onInput = (): void => {
+    this.syncLinkList();
+  };
+
+  /**
+   * 粘贴图片（`F5`）。截图直接粘进正文是这类编辑器的核心手感。
+   *
+   * ★ **只接管"剪贴板里真有图片"的那种粘贴**：纯文本 / 富文本一律放行给浏览器默认行为
+   *   （自己插会丢掉换行与"替换选区"这些细节）。
+   * ★ 剪贴板事件是**同步**的、落盘是异步的 ⇒ 必须先 `preventDefault` 再 `await`，
+   *   否则浏览器会先把 `image.png` 插进来，我们再补一条路径 —— 正文里多一段垃圾。
+   * ★ 落盘失败（返回 `null`）就什么都不插：给用户提示是宿主的活（编辑器没有 Notice 通道）。
+   * ★ 插入位置取**落盘完成那一刻**的光标，不是按下去那一刻的：等的那几百毫秒里用户
+   *   完全可能又点了别处，按老位置插会把字劈开。
+   */
+  private readonly onPaste = (event: ClipboardEvent): void => {
+    const handler = this.pasteImage;
+    if (!handler) return;
+    const files = Array.from(event.clipboardData?.files ?? []);
+    const image = files.find((file) => file.type.startsWith('image/'));
+    if (!image) return;
+
+    event.preventDefault();
+    void handler(image).then((path) => {
+      if (this.finished || !path) return;
+      const el = this.textarea;
+      this.replaceRange(el.selectionStart, el.selectionEnd, `![[${path}]]`);
+    });
+  };
+
   private readonly onBlur = (event: FocusEvent): void => {
     // 焦点只是挪到了**同一张卡里的另一格**（待办卡的标题框）：这一下既不是提交、
     // 也不是离开 —— 整张卡什么时候收口由卡片自己说了算（O02）
@@ -406,6 +608,34 @@ export class MiniMarkdownEditor {
 
     const { key, metaKey, ctrlKey, shiftKey, altKey } = event;
 
+    /**
+     * ★ 浮层开着时这几个键**先归它** —— 而且必须排在下面 `Esc` 之前：
+     *   否则一按 Esc 就把整个编辑态退掉了，而用户只想关掉候选列表。
+     */
+    if (this.linkListOpen()) {
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
+        event.preventDefault();
+        const count = this.linkItems.length;
+        const step = key === 'ArrowDown' ? 1 : -1;
+        this.linkActive = (this.linkActive + step + count) % count;
+        this.paintLinkList();
+        return;
+      }
+      if (key === 'Enter' || key === 'Tab') {
+        event.preventDefault();
+        event.stopPropagation();
+        const picked = this.linkItems[this.linkActive];
+        if (picked) this.acceptLink(picked);
+        return;
+      }
+      if (key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeLinkList();
+        return;
+      }
+    }
+
     if (key === 'Escape') {
       // 编辑态的 Esc 归输入框：不能再往上传，否则画布的状态机会把它当成"清空选区"
       event.stopPropagation();
@@ -418,6 +648,25 @@ export class MiniMarkdownEditor {
       event.preventDefault();
       this.finish();
       return;
+    }
+
+    /**
+     * 行内格式（`F5`，用户 2026-09-21："粗体斜体都要"）。
+     *
+     * ★ textarea 上浏览器**没有**这两个键的默认行为（那是 contenteditable 的福利），
+     *   所以必须自己包。CodeMirror 那种"选中就浮工具条"不做 —— 本项的范围是
+     *   "极简编辑器**增强版**"，两个键 + 两次按键脱掉标记就够了。
+     * ★ `stopPropagation`：编辑中这两个键归输入框，不该同时被画布的热键接走。
+     */
+    if ((metaKey || ctrlKey) && !altKey && !shiftKey) {
+      const lower = key.toLowerCase();
+      const marker = lower === 'b' ? '**' : lower === 'i' ? '*' : null;
+      if (marker !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.wrapSelection(marker);
+        return;
+      }
     }
 
     // ⌘Z / ⌘A / ⌘C 等一律交给浏览器原生行为，编辑器不参与
@@ -530,6 +779,46 @@ export class MiniMarkdownEditor {
   }
 
   /**
+   * 给选区包上**行内标记**（`F5`：⌘B 粗体 / ⌘I 斜体）。
+   *
+   * 三个细节都是"用户一按就会察觉"的那种：
+   *
+   * 1. **有选区**包住它，**没选区**插入一对标记并把光标放到**中间**（接着打字就是加粗的）；
+   * 2. 已经是 `**x**` 时再按一次**脱掉**标记 —— 两次 ⌘B 就是反悔，不必手动去删星号；
+   * 3. 选区**首尾的空白留在标记外**：`** 粗 **` 在部分渲染器里不成立，
+   *    而"选中了句尾那个空格"是极其常见的操作。
+   */
+  private wrapSelection(marker: string): void {
+    const el = this.textarea;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const value = el.value;
+    const len = marker.length;
+    const selected = value.slice(start, end);
+
+    // ② 已包住 → 脱掉（选区两侧各去掉一层标记）
+    if (
+      selected.length > 0 &&
+      value.slice(start - len, start) === marker &&
+      value.slice(end, end + len) === marker
+    ) {
+      this.replaceRange(start - len, end + len, selected);
+      el.setSelectionRange(start - len, end - len);
+      return;
+    }
+
+    // ③ 首尾空白留在标记外
+    const lead = selected.match(/^\s*/)?.[0] ?? '';
+    const tail = selected.match(/\s*$/)?.[0] ?? '';
+    const core = selected.slice(lead.length, selected.length - tail.length);
+    this.replaceRange(start, end, `${lead}${marker}${core}${marker}${tail}`);
+
+    // ① 有内容：保持对内容的选中（能接着套第二个标记）；空：光标落在两个标记中间
+    const innerStart = start + lead.length + len;
+    el.setSelectionRange(innerStart, innerStart + core.length);
+  }
+
+  /**
    * 走浏览器原生编辑流水线插入文本，保留撤销栈。
    *
    * 用"文本是否真的变了"作为成功判据：`execCommand` 在元素失焦等情况下会返回
@@ -552,6 +841,11 @@ export class MiniMarkdownEditor {
   private finish(): void {
     if (this.finished) return;
     this.finished = true;
+
+    // ★ 挂在 window 上的监听器必须自己摘：卡片被拆掉时没人会再调用 `finish()`，
+    //   而它不像 textarea 那样随内容槽一起消失（漏了就是"重载插件后监听器翻倍"）
+    this.windowRef?.removeEventListener('keydown', this.onWindowKeyDown, true);
+    this.windowRef = null;
 
     const value = this.textarea.value;
     // 没改就不写：否则每次点进点出都会递增 revision、把文件标脏

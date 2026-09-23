@@ -13,9 +13,16 @@
 
 import { describe, expect, it } from 'vitest';
 import { HISTORY_BYTES_BUDGET, HISTORY_LIMIT } from '../../constants';
-import { createBoardFile, createCard, createEdge, createGroup } from '../../model/factories';
+import {
+  createBoardFile,
+  createCard,
+  createEdge,
+  createGroup,
+  createMind,
+} from '../../model/factories';
+import { createMindFile } from '../../mind/model/factories';
 import { HistoryStack, restoreContent, serializeContent } from '../../model/history';
-import type { BoardFile } from '../../model/schema';
+import type { BoardFile, Mind } from '../../model/schema';
 
 /* ── 测试夹具 ───────────────────────────────────────────── */
 
@@ -34,6 +41,11 @@ function contentBoard(): BoardFile {
   return board;
 }
 
+/** 一棵内嵌脑图容器（`2.2.0` 起它也是"参与撤销的实体"之一） */
+function mindOf(id: string, title: string): Mind {
+  return { ...createMind({ path: '' }), id, mind: createMindFile({ title }) };
+}
+
 /** 定尺字符串：长度可控，方便按字节算预算 */
 const sized = (n: number, ch = 'a'): string => ch.repeat(n);
 
@@ -50,7 +62,7 @@ function stackOf(options: ConstructorParameters<typeof HistoryStack>[0] = {}): H
 /* ── 序列化 / 写回 ──────────────────────────────────────── */
 
 describe('serializeContent', () => {
-  it('只装四个数组，`meta` / `view` / `settings` 一个都不进快照', () => {
+  it('只装五类实体，`meta` / `view` / `settings` 一个都不进快照', () => {
     const board = contentBoard();
     const raw = serializeContent(board);
 
@@ -59,7 +71,14 @@ describe('serializeContent', () => {
       'columns',
       'edges',
       'groups',
+      'minds',
     ]);
+  });
+
+  it('★ 板子上没有脑图 ⇒ 快照里也**有这一格**（空数组），读回来才分得清"没有"与"老快照"', () => {
+    const board = contentBoard();
+    expect('minds' in board).toBe(false);
+    expect((JSON.parse(serializeContent(board)) as { minds: unknown }).minds).toEqual([]);
   });
 
   it('改动 `meta` / `view` / `settings` 不会让快照变样（否则撤销会回滚白板标题）', () => {
@@ -73,18 +92,61 @@ describe('serializeContent', () => {
     expect(serializeContent(board)).toBe(before);
   });
 
-  it('改动四个数组里的任何一个都会让快照变样', () => {
+  it('改动五个数组里的任何一个都会让快照变样', () => {
     const board = contentBoard();
     const before = serializeContent(board);
 
     board.cards = [...board.cards, createCard('note', { id: 'c2' })];
-
     expect(serializeContent(board)).not.toBe(before);
+    // 脑图同理（`2.2.0` 收尾：它从前根本不在快照里 ⇒ 加了一棵树照样"快照没变"）
+    const withMind = serializeContent(board);
+    board.minds = [mindOf('nm1', '树')];
+    expect(serializeContent(board)).not.toBe(withMind);
   });
 });
 
 describe('restoreContent', () => {
-  it('写回四个数组，并返回 true', () => {
+  it('★★ 删掉一棵脑图 ⇒ 撤销要把**整棵树**（连内嵌模型一起）还原回来', () => {
+    // 用户 2026-09-23 报的那一条：删除脑图卡撤不回来 —— 根因是快照里没有 `minds`，
+    // 恢复出来的白板里那棵树不在（"按了撤销，树还是没了"）
+    const board = contentBoard();
+    board.minds = [mindOf('nm1', '要救回来的树')];
+    const raw = serializeContent(board);
+
+    // 删掉它（`removeMinds` 走的就是这一步）
+    board.minds = [];
+    expect(restoreContent(board, raw)).toBe(true);
+
+    expect(board.minds).toHaveLength(1);
+    expect(board.minds?.[0]?.id).toBe('nm1');
+    // 内嵌那份模型也在（不是只剩一个空壳容器）
+    expect(board.minds?.[0]?.mind?.nodes.length).toBeGreaterThan(0);
+  });
+
+  it('★ 反过来也成立：加了一棵树之后撤销，它要**消失**（且不留下 `minds: []` 这个空壳键）', () => {
+    const board = contentBoard();
+    const raw = serializeContent(board); // 加树之前
+
+    board.minds = [mindOf('nm1', '新加的树')];
+    expect(restoreContent(board, raw)).toBe(true);
+
+    // "缺席 = 没有脑图"是仓库的一条纪律：撤销回"没有树"时必须**把键删掉**
+    expect('minds' in board).toBe(false);
+  });
+
+  it('老快照（没有 `minds` 这一格）⇒ 拒绝这次撤销，白板一个字节不动', () => {
+    const board = contentBoard();
+    board.minds = [mindOf('nm1', '现有的树')];
+    // 手工造一份"上一版记下的"快照（那时快照里没有 `minds`）
+    const legacy = JSON.stringify({ cards: [], columns: [], edges: [], groups: [] });
+    const before = serializeContent(board);
+
+    expect(restoreContent(board, legacy)).toBe(false);
+    expect(serializeContent(board)).toBe(before);
+    expect(board.minds).toHaveLength(1);
+  });
+
+  it('写回五个数组，并返回 true', () => {
     const board = contentBoard();
     const raw = serializeContent(board);
 
@@ -98,7 +160,7 @@ describe('restoreContent', () => {
     expect(board.groups).toHaveLength(1);
   });
 
-  it('**只**替换四个数组：`meta` / `view` / `settings` 一个都不碰', () => {
+  it('**只**替换五类实体：`meta` / `view` / `settings` 一个都不碰', () => {
     const board = contentBoard();
     const raw = serializeContent(board);
 

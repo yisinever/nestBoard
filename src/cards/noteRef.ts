@@ -98,6 +98,27 @@ export function excerptOf(markdown: string, lines: number): string {
   return out.join('\n');
 }
 
+/**
+ * 取前 `lines` 行正文当**预览**（`F5`）：**保留 Markdown 标记**，交给渲染器去画。
+ *
+ * ★ 与 {@link excerptOf} 的关键差别：那个是"降级成纯文本"（给极小字号 / 单行场景用，
+ *   它刻意剥掉标记）；这个**一个标记都不剥** —— 剥完再渲染等于白渲染：`## 标题` 变成
+ *   一行普通文字，用户看到的还是"一行一行的无差别文字"，那与"预览"是两件事。
+ * ★ frontmatter 仍然要剥：否则预览第一行永远是 `tags: [...]`，等于没有预览。
+ * ★ 空行跳过：按"行数"算行距不该被空行吃掉（与 `excerptOf` 同一条）。
+ */
+export function excerptMarkdownOf(markdown: string, lines: number): string {
+  if (lines <= 0) return '';
+  const body = stripFrontmatter(markdown);
+  const out: string[] = [];
+  for (const raw of body.split(/\r?\n/)) {
+    if (raw.trim().length === 0) continue;
+    out.push(raw);
+    if (out.length >= lines) break;
+  }
+  return out.join('\n');
+}
+
 /** 剥掉开头的 YAML frontmatter（`---` 到下一个 `---`） */
 export function stripFrontmatter(markdown: string): string {
   if (!markdown.startsWith('---')) return markdown;
@@ -732,14 +753,20 @@ async function renderInto(
     return;
   }
 
-  const text = excerptOf(slice.markdown, content.excerptLines);
+  const text = excerptMarkdownOf(slice.markdown, content.excerptLines);
+  box.appendChild(excerpt);
   if (text.length === 0) {
     excerpt.dataset.placeholder = 'true';
     excerpt.textContent = t('card.note.empty');
-  } else {
-    excerpt.textContent = text;
+    return;
   }
-  box.appendChild(excerpt);
+
+  // ★ 摘要档也走**渲染**（`F5`，用户 2026-09-21："`.md` 编辑内容后，md 在卡片中要能预览"）：
+  //   从前这里把 `excerptOf` 的结果直接写进 `textContent` —— 而那个函数是**刻意剥掉标记**
+  //   的（它的文档写着"降级成纯文本"），所以卡面上只有"一行一行的无差别文字"。
+  //   ★ 走得通的前提是**喂给渲染器的必须是带标记的原文**，因此这里用
+  //     `excerptMarkdownOf`（只去 frontmatter 与空行，一个标记都不剥）。
+  await ctx.renderMarkdown(text, excerpt);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -944,6 +971,9 @@ function renderEditor(
         void commit(card, notes, ctx, markdown, value);
       },
       onExit: () => ctx.setMode('display'),
+      // 文档节点同样支持截图直接粘进正文（`F5`），落盘后写回的是原 `.md`
+      pasteImage: ctx.pasteImage,
+      suggestLinks: ctx.suggestLinks,
     }).focus();
   };
 

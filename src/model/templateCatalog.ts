@@ -127,10 +127,19 @@ function userEntry(template: CatalogUserTemplate): CatalogEntry {
     source: 'user',
     ref: template.path,
     title: template.title,
-    detail: t('modal.template.summary', {
-      cards: String(template.summary.cards),
-      columns: String(template.summary.columns),
-    }),
+    // 有脑图才多那一段（`2.2.0` 收尾）：绝大多数模板一棵都没有，
+    // 让每一行都拖着"0 棵脑图"只是噪音
+    detail:
+      template.summary.minds > 0
+        ? t('modal.template.summaryMinds', {
+            cards: String(template.summary.cards),
+            columns: String(template.summary.columns),
+            minds: String(template.summary.minds),
+          })
+        : t('modal.template.summary', {
+            cards: String(template.summary.cards),
+            columns: String(template.summary.columns),
+          }),
     category: null,
     // 带上路径：不同文件夹里各有一份同名模板是常态，标题分不开它们
     haystack: `${template.title} ${template.path}`.toLowerCase(),

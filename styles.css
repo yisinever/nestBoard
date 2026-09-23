@@ -257,6 +257,37 @@
   transition: transform 90ms ease-out;
 }
 
+/* ── 树连线把手（`F7`，定稿 D6：把手在每张卡右上角）──────────
+ * ★ 与普通连线的锚点（`.nestboard-connect-anchor`）同一套做法：唯一一组常驻
+ *   DOM、hover 到哪张卡就挪到哪张卡（DOM 预算，`02 §8.1`）。
+ * ★ 形状是**小方块**（锚点是圆的）：两类把手在画布上一眼可分 ——
+ *   圆 = 拉普通线，方 = 建树父子。位置由 `TreeLinkController` 写（屏幕坐标）。 */
+.nestboard-tree-handle {
+  position: absolute;
+  z-index: 6;
+  /* ★ 放大一档（用户 2026-09-22："把手应该更明显一点"）：10px 压在卡片边上、
+     又是强调色实心，在一堆线里常被当成线的一部分。14px + 双层描边 + 悬停放大，
+     才像"可以拖的东西"。 */
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--background-primary);
+  border-radius: 4px;
+  background-color: var(--interactive-accent);
+  box-shadow:
+    0 0 0 1px var(--interactive-accent),
+    0 2px 6px rgb(0 0 0 / 18%);
+  transform: translate(-50%, -50%);
+  cursor: crosshair;
+  pointer-events: auto;
+  /* 与画布一致：触控手势自己处理（同锚点那条注释） */
+  touch-action: none;
+  transition: transform 90ms ease-out;
+}
+
+.nestboard-tree-handle:hover {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
 /* 放大做命中容错：11px 的圆点在 50% 缩放下只剩 5px 宽，很难对准 */
 .nestboard-connect-anchor:hover {
   transform: translate(-50%, -50%) scale(1.35);
@@ -388,6 +419,69 @@
   outline-offset: 2px;
 }
 
+/* ── 无框卡（`F3a` / `F4` 的脑图卡）────────────────────────────
+ *
+ * 用户 2026-09-21："脑图是作为一个组件出现的，其实不用底下那个框"。
+ * 于是边框 / 底色 / 圆角 / 阴影 / 内容内边距全部卸掉 —— 画面上就是那棵脑图本身。
+ * ★ 选择器排在 `.is-selected` **之后**（同特异性、源序决胜）：选中一张无框卡时
+ *   不该把阴影又带回来（描边是 `outline`，不受影响，仍然看得见）。
+ * ★ 只去视觉：卡片矩形 / 命中 / 手柄 / 右键菜单 / 拖动全照旧 ——
+ *   "拖整张脑图"的手势落在**根节点**上（同一天定的口径）。
+ * ★ 悬停也不换底色：无框卡上那层底色会把它又变回"一个盒子"。
+ */
+.nestboard-card.is-bare {
+  border: none;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.nestboard-card.is-bare > .nestboard-card-content {
+  padding: 0;
+}
+
+/* 卡内那棵脑图自己也不铺底（`.nestboard-mind-ref` 本来有一层 `--background-secondary`，
+   那是给"框里的卡片"用的；无框之后它会让脑图看起来还是被一块色块框着） */
+.nestboard-card.is-bare .nestboard-mind-ref {
+  background-color: transparent;
+}
+
+/* 左侧强调条同理：它是"卡片的边"，无框之后会变成一条浮在板上的色条。
+   ★ 选择器要带上 `has-accent`：显示那条规则（`.nestboard-card.has-accent …`）特异性更高、
+   而且**在文件更后面**，只写 `.is-bare > .nestboard-card-accent` 是压不住它的。 */
+.nestboard-card.is-bare.has-accent > .nestboard-card-accent {
+  display: none;
+}
+
+/* ── 无框卡不接"盒子上的把手"（`F4` 用户 2026-09-21）────────────────
+ *
+ * 原话："由于脑图不需要整个调整尺寸和旋转，也不会作为整体对外连线，因此外面那些隐形的框，
+ * 包含调整大小、连线、旋转的操作点都可以不需要。"
+ *
+ * 于是两件事：
+ *   1. **缩放手柄 / 旋转手柄**：这里按权重压掉（★ 不能只写 `.is-bare .nestboard-handle`：
+ *      显示那两条规则特异性更高（选中 + 单选），必须**同等条件 + 更高权重**才压得住 ——
+ *      这也是本文件通行的做法，不轻易动 `!important`）。手柄 `display: none` 之后
+ *      连命中都进不来：那两处判定是 `target.closest('[data-resize-handle]')`
+ *      （`BoardView` 里），藏起来的元素永远不可能是事件目标。
+ *   2. **四边连线锚点**：那不是 CSS 画的，由 `ConnectController.canAttach` 在**视图那一侧**
+ *      挡掉（见 `BoardView.cardAttachableAsWhole`）。
+ */
+.nestboard-card.is-bare.is-selected:not(.is-locked) .nestboard-handle {
+  display: none;
+}
+
+.nestboard-card.is-bare.is-selected.is-sole-selected:not(.is-locked) .nestboard-rotate-handle {
+  display: none;
+}
+
+/* 空态 / 文件没了的那句话：无框之后没有底色托着，给它一条虚线的"占位框"，
+   用户才知道这里该拖一份 `.nestmind` 进来 */
+.nestboard-card.is-bare .nestboard-mind-ref-empty {
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--nestboard-radius-lg);
+  background-color: var(--background-secondary);
+}
+
 .nestboard-card-header {
   flex: 0 0 auto;
   padding: var(--size-4-1, 4px) var(--size-4-2, 8px);
@@ -513,7 +607,8 @@
 }
 
 /* 收起态不给尺寸手柄：拖一下就会把它自己撑开，与 mini 卡同一条取舍 */
-.nestboard-card.is-collapsed .nestboard-handle {
+.nestboard-card.is-collapsed .nestboard-handle,
+.nestboard-column.is-collapsed > .nestboard-handle {
   display: none;
 }
 
@@ -560,75 +655,15 @@
   margin-bottom: 0;
 }
 
-/* 编辑态：内容槽自己不留内边距，整块交给编辑器 */
+/* 编辑态：内容槽自己不留内边距，整块交给编辑器。
+   ★ `F5`（用户 2026-09-21）起便签的编辑态**只有正文一格**（与引用卡——`.md` 文档节点
+     ——同款）：`.nestboard-mde-input` 是 `width/height: 100%` 的块级元素，直接吃满这一块；
+     从前那套"标题框 + 正文框两格"的布局（`.nestboard-note-title-input*` /
+     `.nestboard-note-body-edit` / `.is-editing-note-title`）连同标题框一起去掉了。
+     标题编辑走卡面那一行的就地输入（`.nestboard-card-title-input`，见本文件里那一节）。 */
 .nestboard-note-edit {
   padding: 0;
   overflow: hidden;
-}
-
-/* 编辑态两格（O22）：标题框 + 正文框，与待办卡同一套交互。
-   `:has` 只对"带标题框的编辑态"生效 —— `⌘`+双击的"只有正文一格"保持老布局 */
-.nestboard-note-edit:has(> .nestboard-note-title-input) {
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-4-1, 4px);
-}
-
-/* 标题框：与卡片标题行同一套字（否则双击进编辑会看到标题"跳"一下），
-   颜色走 `--text-normal`，深色便签翻变量后自动跟着变 */
-.nestboard-note-title-input {
-  flex: 0 0 auto;
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text-normal);
-  font: inherit;
-  /* ★ 字号与粗细跟着**卡片标题**那一组变量（原先这里又写了一遍脑图的变量名 ——
-     白板上没人写过它们，于是标题框与标题行的字不一样，进出编辑会"跳"一下） */
-  font-size: var(--nestboard-card-title-size, 14px);
-  font-weight: var(--nestboard-card-title-weight, normal);
-  font-style: var(--nestboard-card-title-style, normal);
-  text-decoration: var(--nestboard-card-title-decoration, none);
-}
-
-.nestboard-note-title-input::placeholder {
-  color: var(--text-faint);
-}
-
-/* 正文那格的宿主：`.nestboard-mde-input` 是 `height: 100%` 的块级元素，
-   套一层 flex 才能让它在"标题框占一行"之后老实吃掉剩下的高度 */
-.nestboard-note-body-edit {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.nestboard-note-body-edit .nestboard-mde-input {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* ── 编辑便签标题：输入框长在**标题栏里**（用户 2026-09-16 反馈）──
- *
- * ★ 原先的做法是把**整条标题栏藏掉**、两格都摞进内容槽 —— 于是"双击标题"看到的
- *   输入框出现在正文位置，看起来像在改正文（连右键「编辑内容」也像）。
- *   现在输入框进标题栏、只把标题那一段字藏起来。
- * ★ 只有**拿不到标题栏**的宿主（单测里的裸元素）才退回老样子：那时输入框是内容槽的
- *   第一个孩子，上面那条 `:has(> .nestboard-note-title-input)` 的 flex 布局接住它。
- * ─────────────────────────────────────────────────────── */
-.nestboard-card-header.is-editing-note-title .nestboard-card-title {
-  display: none;
-}
-
-.nestboard-card-header.is-editing-note-title .nestboard-note-title-input {
-  /* 标题栏是 flex（图标 + 标题）：让输入框吃掉剩下的宽度 */
-  flex: 1 1 auto;
-  width: auto;
-  color: inherit;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -1090,9 +1125,14 @@
  *   命中测试也永远落在同一个元素上（否则"刚按下就被重绘换掉"会丢指针捕获）。
  * ★ 方位名与 `RESIZE_HANDLES` / `RESIZE_HANDLE_ATTR` 共用同一份命名，
  *   新增方位时这里只需补一条定位。
+ * ★ 2026-09-22 修一个陈年漏洞：基础规则原先**只写了卡片**，分栏的 8 个手柄
+ *   什么样式都没拿到 —— 不是绝对定位（在 flex 流里把内容槽顶出栏外 10px，
+ *   原版档里栏体透明所以看不见，拟物档垫了底色就现形了），也没有尺寸
+ *   （基本点不中）。方位规则本来就是全局的，补上这半边即可。
  * ───────────────────────────────────────────────────────── */
 
-.nestboard-card .nestboard-handle {
+.nestboard-card .nestboard-handle,
+.nestboard-column > .nestboard-handle {
   display: none;
   position: absolute;
   z-index: 2;
@@ -1103,7 +1143,8 @@
   background-color: var(--interactive-accent);
 }
 
-.nestboard-card.is-selected:not(.is-locked) .nestboard-handle {
+.nestboard-card.is-selected:not(.is-locked) .nestboard-handle,
+.nestboard-column.is-selected > .nestboard-handle {
   display: block;
 }
 
@@ -1303,8 +1344,16 @@
   opacity: 0.7;
 }
 
-/* 全文内嵌：交回视图的 MarkdownRenderer，这里只管滚动与配色 */
+/* 全文内嵌：交回视图的 MarkdownRenderer，这里只管滚动与配色
+ *
+ * ★ `flex: 1 1 auto` + `min-height: 0` 是**按卡高滚动**的关键，缺一不可（`F5`）：
+ *   从前这里只写了 `overflow-y: auto`，而 flex 项默认 `min-height: auto` ⇒
+ *   它**不会收缩到内容高度以下**，于是整篇把卡片撑破、`overflow` 也永远不触发 ——
+ *   表现就是"整篇塞进去"。这与 `.nestboard-note-ref-excerpt`（摘要那档）是同一条，
+ *   两档现在尺寸规则一致。 */
 .nestboard-note-ref-embed {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   color: var(--text-normal);
   scrollbar-width: thin;
@@ -1965,9 +2014,7 @@
 .nestboard-card[data-card-type='image'] .nestboard-image-img,
 .nestboard-card[data-card-type='image'] .nestboard-image-clip,
 .nestboard-card[data-card-type='image'] .nestboard-image-frame {
-  border-radius: calc(
-    var(--nestboard-image-radius, 18px) - var(--nestboard-image-frame, 6px)
-  );
+  border-radius: calc(var(--nestboard-image-radius, 18px) - var(--nestboard-image-frame, 6px));
 }
 
 /* 「取消边框」（右键菜单那一项）= 底色、边框、阴影一起收掉，相框也归零 ——
@@ -2921,6 +2968,266 @@
 .nestboard-audio-volume {
   flex: 0 0 auto;
   width: 54px;
+}
+
+/* ── `.canvas` 预览卡（`F6`，用户 2026-09-21）──────────────────
+ * 卡面是**一张 SVG**：方块 + 连线按原样缩小画一遍（缩放交给 `viewBox`，见 `cards/canvas.ts`）。 */
+.nestboard-canvas-ref {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-color: var(--background-secondary);
+}
+
+.nestboard-canvas-ref-svg {
+  width: 100%;
+  height: 100%;
+  /* ★ 必须放行指针：卡面的第一交互永远是**拖**，而这层 SVG 铺满整张卡。
+     吃掉指针之后"按住卡面拖"会落空（要拖只能抓边角），手感就是"这张卡不好拖"。
+     只读预览没有任何可点的东西 —— 引导文字同理。与视频卡"概览态把播放器整个
+     设成 pointer-events: none"是同一条规矩（见本文件视频卡那段注释）。 */
+  pointer-events: none;
+}
+
+/* 方块按类型上色：认不出的类型退回中性灰（`.canvas` 允许我们没见过的 `type`） */
+.nestboard-canvas-ref-node {
+  fill: var(--background-primary);
+  stroke: var(--background-modifier-border);
+  stroke-width: 2;
+}
+
+.nestboard-canvas-ref-node--group {
+  fill: var(--background-modifier-hover);
+  stroke-dasharray: 8 6;
+}
+
+.nestboard-canvas-ref-node--link {
+  fill: var(--background-modifier-hover);
+}
+
+.nestboard-canvas-ref-label {
+  fill: var(--text-muted);
+  /* 由 `cards/canvas.ts` 按方块尺寸算好写进来（`font-size` 属性） */
+}
+
+.nestboard-canvas-ref-edge {
+  stroke: var(--text-faint);
+  stroke-width: 2;
+}
+
+/* 卡面上那句话（空 / 找不到 / 不是 canvas）。同样放行指针（理由见上面 SVG 那条） */
+.nestboard-canvas-ref-note {
+  padding: 0 12px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ── 脑图卡（`F3a`，用户 2026-09-21："把我们的 nestmind 拖进 nboard 白板……
+ * 在 nboard 依然可以对 nest 脑图进行操作"）──────────────────
+ *
+ * 卡面就是那份脑图本身（`mind/embed/EmbedMind.ts`），它复用脑图那套类：
+ * `.nestboard-mind-world`（1×1 锚点 + `transform-origin: 0 0`）、`.nestboard-mind-edges`、
+ * `.nestboard-mind-nodes`、`.nestboard-mind-handles` 与 `.nestboard-mind-node*` ——
+ * 于是"白板里的脑图"与标签页里的脑图逐像素同一套画法，改一处两边都跟着变。
+ * 这里只补三样它没有的东西：裁剪窗口、`+N` 角标、卡面那句话。 */
+.nestboard-mind-ref {
+  position: relative;
+  /* ★ 卡面比屏幕小得多 ⇒ 必须裁：超出卡片的部分会被卡片自己的圆角裁掉，
+     但"裁"这件事要显式写在容器上，否则世界容器里的节点会盖到相邻卡片上 */
+  overflow: hidden;
+  background-color: var(--background-secondary);
+}
+
+/* ── 白板级脑图（`2.2.0`）：一棵长在画布上的树，**没有边界** ──────────
+ *
+ * 容器是**零尺寸的锚点**：`left/top` 就是根节点的中心，宽高都是 0 ——
+ * 节点由内部那套脑图图层画（世界坐标里的绝对定位），往任意方向长都不受限制。
+ * ★ 不裁（`overflow: visible`）、不画底、不画框：这里没有"边界"这回事
+ *   （与卡片（`O38` 的"隐形的框"）形成对照 —— 脑图连那个隐形的框都不需要）。
+ * ★ 零尺寸 ⇒ 它自己在空白处点不到；手势全在**节点**上（拖动整棵看根节点）。
+ */
+.nestboard-mind-container {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: visible;
+}
+
+/* 读不到模型（文件脑图还没读到 / 文件没了）时那句话：贴在锚点上，不参与命中 */
+.nestboard-mind-container-note {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 6px 10px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: var(--nestboard-radius-lg);
+  background-color: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--nestboard-card-font-size, var(--font-ui-small));
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 整棵脑图被选中时那一圈框（`2.2.0` 批 5，见 `MindLayer.applySelectionBox`）。
+   ★ 为什么是"另画一个框"而不是给节点加描边：容器是一棵**没有边界**的树，
+     节点级的选中态已经有自己的样子（那是"选中了某个节点"），两者必须分得开。
+   ★ 配色与卡片 / 分栏的选中态同一条（`--interactive-accent` + 2px）：三类对象
+     在"我被选中了"这件事上必须长得一样，否则用户得为每种对象学一遍。
+   ★ 尺寸与位置由 JS 写（外接框 + 留白，世界单位 ⇒ 跟着白板缩放）。
+   ★ `pointer-events: none`：这圈框可能压住旁边的卡片，不能把点击抢走。 */
+.nestboard-mind-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--interactive-accent);
+  border-radius: var(--nestboard-radius-lg);
+  pointer-events: none;
+}
+
+/* 卡内选中的节点：与画布上那条同一套（`outline` 不占布局） */
+.nestboard-mind-ref .nestboard-mind-node.is-selected {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* `+N`：这一支下面还有没画出来的节点（深度截断 / 收起）。
+ * ★ 位置由 `EmbedMind` 按盒子右下角写 `left/top`（它挂在**手柄层**：节点自己是
+ *   `overflow: hidden`，挂在节点里会被裁掉）—— 这里不写 `right/bottom`。 */
+.nestboard-mind-embed-more {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 10px;
+  line-height: 18px;
+  text-align: center;
+  /* 角标只是"还有东西"的记号，不接手势（点它不该选中节点） */
+  pointer-events: none;
+}
+
+/* 卡面上那句话（空 / 文件没了 / 读不出来） */
+.nestboard-mind-ref-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nestboard-mind-ref-note {
+  padding: 0 12px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ── `[[` 链接补全浮层（`F5`）────────────────────────────────
+ * 卡内编辑时敲 `[[` 弹出的候选列表。
+ * ★ 贴卡片**下沿**而不是"跟着光标"：候选层挂在很小的内容槽里，而那些槽自己有
+ *   `overflow` 裁剪 —— 跟随光标要量文本尺寸，成本不值当，落点还更容易被裁掉。
+ * ★ 用 `position: absolute` + 四边偏移：留在最近的定位祖先（卡片）里，卡片怎么
+ *   缩放/拖动它都跟着。 */
+.nestboard-link-suggest {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  z-index: 8;
+  box-sizing: border-box;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  background-color: var(--background-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.nestboard-link-suggest.is-hidden {
+  display: none;
+}
+
+.nestboard-link-suggest-item {
+  padding: 2px 6px;
+  border-radius: var(--radius-s, 4px);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.nestboard-link-suggest-item.is-active {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* ── PDF 预览卡（`F8`，用户 2026-09-21）────────────────────────
+ * 卡面就是一页纸：`<embed>` 交给 Chromium 自带的 PDF 查看器，底下一条窄条给翻页。
+ * ★ 整张卡按"一页纸"排，所以不留卡片内边距（留了边缘就不像纸了）。 */
+.nestboard-pdf {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.nestboard-pdf-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  background-color: var(--background-primary);
+}
+
+.nestboard-pdf-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2, 8px);
+  height: 28px;
+  border-top: var(--nestboard-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+}
+
+/* 翻页按钮：`<span role="button">` —— 不是 `<button>`（主题的 button 规则会糊上一层底色） */
+.nestboard-pdf-button {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--nestboard-radius);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nestboard-pdf-button:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.nestboard-pdf-label {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nestboard-pdf-empty {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
 }
 
 .nestboard-media {
@@ -3969,6 +4276,31 @@
   opacity: 0.8;
 }
 
+/* 树折叠角标（`F7`）：折叠父卡标题行上的「+N」——画法与色板卡的
+   `.nestboard-swatch-more` 同一套（定稿原文）。它是个**按钮**（点 = 展开），
+   所以多一层按钮的复位：没有 N 的时候由 `is-empty` 收起来（与卡面标记同一套）。 */
+.nestboard-card-tree-more {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.nestboard-card-tree-more.is-empty {
+  display: none;
+}
+
+.nestboard-card-tree-more:hover {
+  color: var(--text-normal);
+  opacity: 1;
+}
+
 /* 复制反馈：占满剩下的一行、靠右。
    ★ 只出现 1.2 秒，所以宽度不许跟着内容蹦（否则每复制一次整列都在抖） */
 .nestboard-swatch-status {
@@ -4541,7 +4873,11 @@
 .nestboard-filter-bar {
   position: absolute;
   bottom: var(--size-4-2, 8px);
-  left: var(--size-4-2, 8px);
+  /* ★ 挪到**右下角**（用户 2026-09-22 · O3）：左下角是画布的操作区（拖动、框选都从那边
+     起手），而过滤条是"看着结果调条件"的工具 —— 贴着右下角与缩略图/状态信息一起，
+     不挡中间的内容。 */
+  right: var(--size-4-2, 8px);
+  left: auto;
   z-index: 5;
   display: flex;
   flex-direction: column;
@@ -4557,6 +4893,13 @@
 
 .nestboard-filter-bar.is-hidden {
   display: none;
+}
+/* 缩略图导航器也钉在右下角：两者同时在时把过滤条**叠在它上面**（约 132px = 缩略图
+   176×116 + 内边距/描边 + 一点缝）。
+   ★ `:has()` 的降级表现只是"可能压住缩略图"，不会坏功能 —— 与样式表里其它 `:has()`
+     用法同一条纪律（见 `.nestboard-card-header:has(...)` 那几条注释）。 */
+.nestboard-root:has(.nestboard-minimap:not(.is-hidden)) .nestboard-filter-bar {
+  bottom: 140px;
 }
 
 .nestboard-filter-bar-head {
@@ -5029,6 +5372,7 @@
  * 抢眼的红色会让人以为模板坏了，而实际上只是提前说清楚东西落在哪。
  */
 .nestboard-template__note {
+  flex: 0 0 auto;
   margin: var(--nestboard-gap) 0 0;
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
@@ -5045,13 +5389,36 @@
   width: min(880px, 92vw);
 }
 
+/*
+ * 弹窗自身的排布（`2.2.0` · O4，用户 2026-09-22："有些穿帮"）。
+ *
+ * 三处**结构性**隐患，一次收掉 —— 它们与"内容多少"无关，模板一多就必然撞上：
+ *
+ * 1. **两条滚动条**：`.modal-content` 自己会滚，而画廊也滚（`max-height` + `overflow-y`）
+ *    ⇒ 滚轮到底先滚画廊、再滚整窗，中间那截还会把标题/搜索框推走。
+ *    现在内容区**不滚**（`overflow: hidden`），只在画廊里滚 —— 搜索框与分类、以及
+ *    底下那行说明（`__note`）都留在原地。
+ * 2. **最后一行贴着边框**：内容区一滚，最后一行预览卡就会紧贴弹窗底边。现在
+ *    `__note` 是固定的一行（`flex: 0 0 auto`），画廊与它之间始终留着间距。
+ * 3. **窗口矮时弹窗超高**：`max-height` 钉在视口比例上（78vh，且不超过 720px），
+ *    矮屏上也不会把底部按钮/说明挤出屏幕。
+ */
+.nestboard-template-market .modal-content {
+  display: flex;
+  flex-direction: column;
+  max-height: min(78vh, 720px);
+  overflow: hidden;
+}
+
 .nestboard-template-market__search {
+  flex: 0 0 auto;
   width: 100%;
   margin-bottom: var(--nestboard-gap);
 }
 
 .nestboard-template-market__chips {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: var(--nestboard-gap);
@@ -5080,8 +5447,12 @@
   color: var(--text-on-accent);
 }
 
-/* 让画廊自己滚，搜索框与分类留在原地 —— 滚动时还能接着改筛选 */
+/* 让画廊自己滚，搜索框与分类留在原地 —— 滚动时还能接着改筛选。
+   ★ `min-height: 0` 是必要的：在 flex 列里，滚动容器的默认 `min-height: auto`
+     会让它**不肯缩**，于是内容一多就把内容区顶高（"弹窗比屏幕还高"那个观感）。 */
 .nestboard-template-market__gallery {
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: min(60vh, 520px);
   overflow-y: auto;
   padding-right: 4px;
@@ -5120,7 +5491,7 @@
 .nestboard-template-tile {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   height: auto;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
@@ -5151,15 +5522,27 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 120px;
+  height: 108px;
+  border: 1px solid var(--background-modifier-border);
   border-radius: var(--nestboard-radius);
+  /* ★ 点阵底 + 细描边（`2.2.0` · O4，用户 2026-09-22"有些穿帮"）：
+     真实缩略图是**按板子长宽比**画的（`boardThumb` 的 contain）—— 三栏那种很扁的板
+     缩到 180px 宽只剩 ~40px 高，从前躺在纯灰盒里，上下两条大灰边看着像"图没画满/坏了"。
+     现在盒子自带点阵（与画布同一种底），扁缩略图读起来是"一块小板上贴着张纸"，
+     而不是"一块坏掉的预览"。 */
   background-color: var(--background-secondary);
+  background-image: radial-gradient(var(--background-modifier-border) 0.6px, transparent 0.6px);
+  background-size: 8px 8px;
   overflow: hidden;
 }
 
 .nestboard-template-tile__canvas {
   max-width: 100%;
   max-height: 100%;
+  /* 缩略图自己是透明底的 canvas ⇒ 补一层"纸"与一点点投影，边界才清楚 */
+  border-radius: 3px;
+  background-color: var(--background-primary);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
 }
 
 .nestboard-template-tile__placeholder {
@@ -6448,16 +6831,41 @@
   color: var(--text-normal);
 }
 
-/* 正文预览：**一行**灰字（14px / 行高 22 / 灰 —— 都是幕布 `.note` 的原值）。
- * ★ "不折行 + 省略号"是我们自己的取舍：幕布那边折行全显，
- *   但大纲这半边的用途是"扫一眼结构"，一行更好扫 */
+/* 正文（`O2`，用户 2026-09-21："如果有内容，应该全展示，超过一定行，加个折叠"）：
+ * 从前是"**一行**灰字 + 省略号"（当时的取舍是"大纲用来扫结构，一行更好扫"），
+ * 现在**按内容折行显示**，收起时只留 6 行（`OUTLINE_NOTE_FOLD_LINES`）。
+ * ★ 用 `max-height`（= 6 × 行高）而不是 `-webkit-line-clamp`：后者会被社区审核的 CSS lint
+ *   记成"只部分支持的特性"；而 22px 的整数倍行高下两种写法的截断位置**完全一样**
+ *   （第 7 行正好落在边界之外，不会露半个字）。
+ * ★ 字号 / 行高 / 灰度仍是幕布 `.note` 的原值 */
 .nestboard-mind-outline-note {
   font-size: 14px;
   line-height: 22px;
   color: var(--text-muted);
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.nestboard-mind-outline-note:not(.is-expanded) {
+  max-height: 132px; /* = 6 行 × 22px（与 `OUTLINE_NOTE_FOLD_LINES` 同一个数） */
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* 那枚「展开 / 收起」：**只有正文真的超长时**才由 `outline.ts` 建出来，所以这里不管显隐 */
+.nestboard-mind-outline-note-more {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: var(--nestboard-radius);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller, 11px);
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.nestboard-mind-outline-note-more:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 /* ── 大纲里的就地编辑（`N3-b`）────────────────────────────── */
@@ -6548,6 +6956,22 @@
   position: absolute;
   display: flex;
   flex-direction: column;
+  /* ★★ 宽度 = **内容的最大内容宽**（`max-content`）—— 这一条**不能省**，
+     省掉的话节点会当场变成"一个字一行的竖排文字"（用户 2026-09-21 报的那个 bug）。
+     原因：节点是绝对定位、而世界容器是 `width: 0; height: 0` 的锚点（见 `.nestboard-mind-world`）
+     ⇒ 不给宽度时浏览器走 shrink-to-fit：`min(max(preferred-min, available), preferred)`，
+     而 `available` = 容器宽 − left ≤ 0 ⇒ 结果就是 **min-content**（最小内容宽）。
+     标题从前钉着 `nowrap`，最小内容宽 = 整行文字，所以一直看着是对的；
+     `O1`（29 个英文单位换行）把 `nowrap` 改成 `normal` + `overflow-wrap: anywhere` 之后，
+     最小内容宽就退化成**一个字** ⇒ 整块竖起来。
+     ★ 仍然**不写死数字**：`max-content` 由内容算（标题那一段的 `max-width` 负责收紧到
+       一行 29 个英文单位，正文块自己有 `max-width: 280px`），量测依旧读的是真值，
+       不会变成"自己写、自己量"的自证。
+     ★ 同层等宽的**下限**照旧由 `min-width` 兜（用户 2026-09-21："一个分支下同一层级的
+       节点长度，以同层级最长的那个节点为准，大家都对齐它"）—— 布局算出"这一层至少多宽"，
+       由 `applyNodeBox` 写成变量；`min-width` 压得住 `width`，两者不冲突。 */
+  width: max-content;
+  min-width: var(--nestboard-mind-node-min-width, 0);
   border-radius: var(--nestboard-radius);
   overflow: hidden;
   box-shadow: var(--nestboard-mind-shadow, var(--nestboard-shadow));
@@ -6574,7 +6998,10 @@
   font-style: var(--nestboard-mind-title-style, normal);
   text-decoration: var(--nestboard-mind-title-decoration, none);
   line-height: 1.35;
-  white-space: nowrap;
+  /* ★ 标题**允许换行**（用户 2026-09-21："一行 29 个英文字符，超出则在节点内自动换行"）：
+     从前这里钉着 `nowrap` + 省略号。换行的宽度上限由文字那一段上的 `max-width` 给
+     （`--nestboard-mind-title-max-width`，`render.ts` 按层级字号算好写下来）。 */
+  white-space: normal;
 }
 
 /* ── 四级及更深：**完全没有外框**（`D3` 二轮，用户 2026-09-18）──
@@ -6611,18 +7038,34 @@
   opacity: 0.5;
 }
 
+/* 画布过滤没命中的节点（T3.17 / `2.2.0` 批 4）——与卡片的 `.nestboard-card.is-dimmed`
+   是**同一种状态**（"被过滤掉了"），所以用同一个类名、同一个不透明度。
+   ★ 与卡片同一条：连指针事件一起禁掉 —— 用户在"只看待办"时点到一棵变淡的树里
+     某个节点上，会以为过滤坏了。变淡的节点此刻不参与交互，意图才是干净的
+     （模型里它还在：连线照样能指向它，`⌘Z` / 取消过滤之后原样回来）。
+   ★ 这条规则**必须排在 `.is-done` / `.is-done-dim` 之后**：三者的选择器权重一样
+     （都是"两个类"），而一个"完成了、又被过滤掉"的节点该显示的是**过滤**那一档
+     （更淡、更"此刻不相关"），靠的就是这里的先后顺序。 */
+.nestboard-mind-node.is-dimmed {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
 /* 标记（emoji）：标题最前面那一格。字号跟着标题走 ⇒ 层级越小它就越小 */
 .nestboard-mind-node-icon {
   flex: none;
   margin-right: 4px;
 }
 
-/* ★ 省略号只作用在**文字那一段**上：写在外层（`node-title`）会让省略号跑到回形针后面，
-   于是"标题太长"与"有附件"两件事搅在一起看不出来 */
+/* ★ 换行的宽度上限只作用在**文字那一段**上（不是外层 `node-title`）：外层还挂着回形针，
+   把上限写在外层会让"回形针占的那 20px"也算进 29 个字符里。
+   ★ 上限由 `render.ts` 按**层级字号**算好写成变量（根 30 / 一层 18 / 其余 14 各不一样），
+   与布局的估算读同一个函数 —— 两边各算一份的话，换行位置会漂。 */
 .nestboard-mind-node-title-text {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: var(--nestboard-mind-title-max-width, none);
+  /* 超长单词 / 长网址也要断行，否则一行还是会顶穿卡片 */
+  overflow-wrap: anywhere;
   /* 文字**高亮**（`N3-f`）：只铺在文字这一段背后（图标 / 回形针不跟着变色）——
    * 变量由 `applyNodePalette` 写在节点元素上；没设过时是 `transparent`。
    * ★ 不写 `padding`：一加内边距，进出"有高亮 / 没高亮"时文字会左右挪一点 */
@@ -6753,9 +7196,46 @@
   border-radius: 0;
 }
 
+/* 端点重拖手柄（`2.2.0` · O1）：单选一条线时，两端浮出可拖的小圆点。
+   ★ 与锚点（`.nestboard-connect-anchor`）的区别：锚点是"从这里拉一条**新**线"，
+     这个是"把**已有**这条线的这一端挪到别处" —— 手势相近但语义不同，
+     所以形状也分开：锚点是小方块，这里是小圆圈（"抓住线头"）。
+   ★ 白色描边 + 强调色填充：压在线与卡片上都看得见（用户 2026-09-22 说的"把手要明显"）。 */
+.nestboard-edge-endpoint {
+  position: absolute;
+  z-index: 7;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--background-primary);
+  border-radius: 50%;
+  background-color: var(--interactive-accent);
+  box-shadow:
+    0 0 0 1px var(--interactive-accent),
+    0 2px 6px rgb(0 0 0 / 18%);
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  transition: transform 90ms ease-out;
+}
+.nestboard-edge-endpoint:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
 /* 选中：用 `outline` 而不是 `border` —— 改边框会让节点尺寸变一下，
    而布局量到的就是"选中时才有的那个尺寸"（量测的坑，见 `MindView.sizeOf`） */
 .nestboard-mind-node.is-selected {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* 框选选中的节点（`2.2.0` 收尾 · 节点级框选）。
+   ★ 与上面那一档**分开**：`is-selected` 是"当前焦点节点"（底部快捷栏跟着它，全树只有一个），
+     而框选可以一次好几个、也不改焦点。
+   ★ 用 `outline` 的同一条理由（不改尺寸）；颜色也沿用同一支强调色 —— 两者在屏幕上是
+     "同一种选中"，只是粒度不同，各给一个颜色反而要多记一套。
+   ★ 同时命中两档（框中的那个恰好也是焦点）时后写的这条生效，视觉上一样干净。 */
+.nestboard-mind-node.is-marquee-selected {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
 }
@@ -8524,9 +9004,50 @@
   white-space: nowrap;
 }
 
+/* 「按标签」里"这个标签写在哪张卡上"（`F1` 追记）：缩进一级、比白板那一行轻，
+   读起来是"板下面挂着的那几张卡"。 */
+.nestboard-board-list__tag-hit {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1, 4px);
+  width: 100%;
+  padding: 2px 6px 2px 26px;
+  border: none;
+  border-radius: var(--nestboard-radius);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nestboard-board-list__tag-hit:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.nestboard-board-list__tag-hit-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--text-faint);
+}
+
+.nestboard-board-list__tag-hit-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.nestboard-board-list__tag-hit-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 移动端：44×44 是「手指能可靠点中」的下限（02 §6），与工具条同一条规矩 */
 .nestboard-board-list.nestboard-is-mobile .nestboard-board-list__row,
-.nestboard-board-list.nestboard-is-mobile .nestboard-board-list__folder-head {
+.nestboard-board-list.nestboard-is-mobile .nestboard-board-list__folder-head,
+.nestboard-board-list.nestboard-is-mobile .nestboard-board-list__tag-hit {
   min-height: 44px;
   align-items: center;
 }
@@ -8914,4 +9435,224 @@
 .nestboard-board-search.nestboard-is-mobile .nestboard-board-search__hit,
 .nestboard-board-search.nestboard-is-mobile .nestboard-board-search__board {
   min-height: 44px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   拟物档（`F2` / `11 §6`）
+
+   开关是 **`body` 上的 `.nestboard-neumorph`**（`view/themeVars.ts` 的
+   `applyBoardStyleClass` 写、`main.ts` 的 `applyStyleMode` 维护）。
+   写在 `body` 而不是某个视图容器上：拟物的作用面**跨容器** —— 白板视图、
+   嵌在笔记里的白板、右键菜单、设置面板都在 `body` 下不同的子树里。
+
+   ★ **原版档一个字节都不动**：整套规则都挂在这个类下面，不写类 = 全部不生效。
+     "原版观感与 2.1.3 逐像素一致"这条回归基线（`11 §7`）因此是**结构上**成立的，
+     而不是靠"我逐条对照过"。
+
+   参数按 §6 的 13a–13j：
+     13a(b) 保留卡片主色，只借光影         13b(b) 双阴影颜色跟随主色
+     13c(a) 深色主题同样开启、参数另调     13d(a) 作用面：
+            ✅ 卡片 / 分栏 / 工具栏一族 / 字段与进度轨道（本段）
+            ⏳ 右键菜单（Obsidian 的 Menu，越界嫌疑单独评估）· 侧栏内面板（无自有边框）
+     13e(a) 卡片 = 外壳凸起 + 内容区凹陷   13f(a) 选中 = 主色细环 + 轻微下沉
+     13g(a) 便签深色变体不拟物             13h(a) 每卡最多 2 段外阴影 + 1 段 inset
+     13i    正文仍 `--text-normal` / 键盘焦点环保留 / 选中不只靠阴影（细环）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 没有主色的面（分栏 / 工具栏…）用这一对**中性**光影；深色主题另调（13c）。
+   ★ **必须带 alpha**（2026-09-22 手工验收第 4 轮，用户截图 + 本地复现确认）：
+     不透明的白影子盖在点阵画布上是一块"白色搁板"、不透明的深影在栏底是一圈硬边 ——
+     阴影本来就该是"半透明的色"，让它与画布 / 压在下面的东西自然叠加。 */
+.nestboard-neumorph {
+  /* ★ alpha 再收一档（2026-09-22 第 5 轮验收，用户截图 + 像素探针）：0.4 的暗影在
+     栏底**接触边**是不透明度全开的（blur 只向外淡出，压边那一圈不淡），实测比画布深
+     36/255 —— 一圈实色沿栏底绕过来，看上去就是"凹陷漏出了底框"。0.24 + blur 16
+     把这一圈压到 17/255：影子还在（栏仍浮着），但不再像一道边框。 */
+  --nestboard-neu-light: rgba(255, 255, 255, 0.65);
+  --nestboard-neu-dark: rgba(85, 91, 100, 0.24);
+}
+
+/* ★ 注意选择器是 `body.theme-dark.nestboard-neumorph`（**同一个元素**）：
+   那个类就挂在 `body` 上，写成后代选择器永远匹配不到 —— 这一处错法的表现是
+   "深色主题下中性面（分栏）用的还是浅色参数"，很难一眼看出来。 */
+body.theme-dark.nestboard-neumorph {
+  --nestboard-neu-light: rgba(91, 100, 114, 0.35);
+  --nestboard-neu-dark: rgba(11, 13, 16, 0.42);
+}
+
+/* 13b：卡片的亮面 / 暗部由**这张卡自己的主色**混出来（主色缺席时按白卡算）。
+   ★ 写在卡片上而不是 `body` 上：`--nestboard-card-color` 是**逐卡**的（`CardLayer` 写的），
+     在那儿算一次全板通用是错的。 */
+.nestboard-neumorph .nestboard-card {
+  /* ★ 混完主色再与 transparent 混一次 ⇒ 给**结果**加 alpha（`color-mix` 加透明度的
+     标准写法）。与中性对同一条纪律：影子是半透明的，否则在点阵画布上就是一块实色板。 */
+  --nestboard-neu-light: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--nestboard-card-color, #ffffff) 15%, #ffffff) 80%,
+    transparent
+  );
+  --nestboard-neu-dark: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--nestboard-card-color, #ffffff) 35%, #555b64) 40%,
+    transparent
+  );
+}
+
+/* 13c：深色主题下高光弱、暗部深（Obsidian 自己在 `body` 上给 `theme-dark`） */
+body.theme-dark.nestboard-neumorph .nestboard-card {
+  --nestboard-neu-light: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--nestboard-card-color, #ffffff) 12%, #5b6472) 60%,
+    transparent
+  );
+  --nestboard-neu-dark: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--nestboard-card-color, #ffffff) 30%, #0b0d10) 70%,
+    transparent
+  );
+}
+
+/* 13a + 13e：整卡**凸起** —— 两段外阴影、无边框（描边走光影，不再走 `--nestboard-border`）。
+   ★ 参数按手工验收调过一轮（用户 2026-09-22）：初版的两段太轻，卡片在浅色画布上
+     几乎看不出"浮起来"。现在亮面更亮、暗部更散。 */
+.nestboard-neumorph .nestboard-card {
+  border-color: transparent;
+  box-shadow:
+    -6px -6px 14px var(--nestboard-neu-light),
+    6px 6px 16px var(--nestboard-neu-dark);
+}
+
+/* ★ 这条是**手工验收后删掉的一条**（用户 2026-09-22 反馈）：
+   "切换成拟物外观后，现在卡片都是凹陷的。有些卡片比如标题卡 / 音频卡 / 视频卡等
+    底下都有露出的方形角。"
+
+   原因有两层，都在"内容槽那一段 inset"上：
+   ① 内容槽几乎铺满整张卡 ⇒ 那圈内阴影把**整张卡**读成了"凹进去"的，
+      而外壳那两段外阴影只有 5px 出头，压不住它；
+   ② `.nestboard-card-content` **没有圆角**（它靠卡片的 `overflow: visible` 露在
+      圆角内侧）⇒ 内阴影按**直角**画，于是卡片底部（带标题带的那类卡尤其明显）
+      露出四个方形角。
+   所以把 13e 从"外壳凸起 + 内容区凹陷"退回 **(b) 整卡只做凸起** —— 至少这一轮
+   先用能站得住的那一档；要让内容区真的凹，得先给内容槽配上与卡片一致的圆角，
+   并且只对"标题带 + 内容区"这种结构成立的卡型开，另起一批。 */
+
+/* ── 13d 剩余（`b85`）：浮动面板一族凸起 ──────────────────────
+ *
+ * 这批面与卡片 / 分栏同一条语言：**描边退役，结构走光影**。参数用"中面"那一档
+ * （比卡片轻、比分栏轻）—— 它们悬在画布上，影子重了会像贴上去的另一张卡。
+ * ★ 只挑**自家画的浮动面板**：右键菜单走 Obsidian 的 `Menu`（`04 §13` 合规，
+ *   不自绘），给全 Obsidian 的 `.menu` 套拟物有越界嫌疑 —— 单独评估，这批不动。
+ * ★ 缩略图上的 dot / tag / hint、脑图标签页的 crumbs 属于更小的覆盖层，
+ *   影子只会糊成一团，刻意不碰。
+ */
+.nestboard-neumorph .nestboard-toolbar,
+.nestboard-neumorph .nestboard-filter-bar,
+.nestboard-neumorph .nestboard-present-bar,
+.nestboard-neumorph .nestboard-link-overview,
+.nestboard-neumorph .nestboard-breadcrumb,
+.nestboard-neumorph .nestboard-todo-overview {
+  border-color: transparent;
+  box-shadow:
+    -5px -5px 14px var(--nestboard-neu-light),
+    5px 5px 16px var(--nestboard-neu-dark);
+}
+
+/* ── 13i：字段与进度轨道**凹陷** ────────────────────────────────
+ * ★ 只凹"真的往里打字 / 走进度"的那条槽：卡片正文编辑区（`.nestboard-mde-input`）
+ *   **刻意不凹** —— 它铺满整张卡，正是 `8.10.1` 里"整卡读成凹陷"的那个教训。
+ * ★ 输入框**保留各自的边框**（评论框聚焦时还要靠边框变主色），只叠一道内阴影；
+ *   内阴影颜色取自所在面的那一对（评论框在卡上 ⇒ 跟卡的主色，13b 的老规矩）。
+ * ★ 音频进度轨道同理：底色向"所在卡的暗部"压一档，已播的亮条照旧浮在上面。 */
+.nestboard-neumorph .nestboard-board-search__input,
+.nestboard-neumorph .nestboard-filter-input,
+.nestboard-neumorph .nestboard-comment-input,
+.nestboard-neumorph .nestboard-board-list__filter {
+  box-shadow: inset 1px 2px 4px var(--nestboard-neu-dark);
+}
+
+/* ── 13d 的最后一面：**我们自己开的右键菜单**（`b91`）────────────
+ *
+ * ★ 为什么只认 `.nestboard-menu` 这个标记类、而不是直接写 `.menu`：
+ *   `.menu` 是全 Obsidian 的菜单（别的插件 / 文件浏览器 / 标签页），把"卡片外观档"
+ *   套到别人家的界面上属于越界。标记由 `ui/ContextMenus.ts` 在**我们创建菜单时**
+ *   打上（`Menu.dom` 是运行时探测的，拿不到就只是没换皮，不影响功能）。
+ * ★ 参数与其它浮动面板同一条"中面"档：菜单很小，影子重一点反而合适；但它贴在
+ *   光标旁边、可能靠近屏幕边缘，所以用中等 blur 而不是分栏那种大 blur。
+ */
+.nestboard-neumorph .menu.nestboard-menu {
+  border-color: transparent;
+  box-shadow:
+    -5px -5px 14px var(--nestboard-neu-light),
+    5px 5px 16px var(--nestboard-neu-dark);
+}
+
+.nestboard-neumorph .nestboard-audio-seek {
+  background-color: color-mix(
+    in srgb,
+    var(--nestboard-neu-dark) 35%,
+    var(--background-modifier-border)
+  );
+}
+
+/* 13g：便签的**深色变体**不拟物（保持扁平深色 —— 深底上的双阴影只会让对比度更糟） */
+.nestboard-neumorph .nestboard-card[data-card-type='note']:has(> .nestboard-card-content.is-dark) {
+  box-shadow: var(--nestboard-shadow);
+}
+
+.nestboard-neumorph
+  .nestboard-card[data-card-type='note']:has(> .nestboard-card-content.is-dark)
+  > .nestboard-card-content {
+  box-shadow: none;
+}
+
+/* 13f：选中 = **主色细环** + 轻微下沉（inset 加深）。
+   ★ 刻意保留那圈 1px 主色环：`13i` 的底线是"选中 / 未选中不能只靠阴影区分" */
+.nestboard-neumorph .nestboard-card.is-selected,
+.nestboard-neumorph .nestboard-column.is-selected {
+  outline: 1px solid var(--interactive-accent);
+  box-shadow:
+    -4px -4px 10px var(--nestboard-neu-light),
+    4px 4px 12px var(--nestboard-neu-dark),
+    inset 2px 2px 5px var(--nestboard-neu-dark);
+}
+
+/* 13d：分栏 —— 与卡片同一条光影（它没有主色 ⇒ 用中性那一对） */
+.nestboard-neumorph .nestboard-column {
+  border-color: transparent;
+  /* ★ 大面用小偏移 + 大 blur：栏是整块板上最大的面，影子跟着等比放大就会变成
+     一圈"厚度"（上面的接触边问题）；4px/16px 让浮起的感觉保住、厚度感消失。 */
+  box-shadow:
+    -4px -4px 16px var(--nestboard-neu-light),
+    4px 4px 16px var(--nestboard-neu-dark);
+}
+
+/* 栏头（`- 1px`：它坐在栏的**内容盒**里，圆角比外壳小一个描边宽度才对得上）。
+   ★ 为什么要给栏头补圆角（用户 2026-09-22："分栏上部还是会出现方形的角"）：
+     栏头是**方角**的（它原本靠栏那一圈 `--nestboard-border` 兜着），而栏自己是
+     `--nestboard-radius-lg` 的圆角、`overflow: visible` —— 拟物档里外壳没有描边之后，
+     栏头那两个方角就直接戳在圆角外面了。
+   ★ 底边那条 1px 硬线也摘掉（用户 2026-09-22："看一下这分栏的样式，还能不能改进"）：
+     拟物的语言是"结构靠光影、不靠线"，栏头与槽的分界由槽那道**上沿暗带**来画
+     （它正好落在栏头底下，同一件事不必画两遍）。 */
+.nestboard-neumorph .nestboard-column > .nestboard-column-header {
+  border-radius: calc(var(--nestboard-radius-lg) - 1px) calc(var(--nestboard-radius-lg) - 1px) 0 0;
+  border-bottom-color: transparent;
+}
+
+/* 栏体那一槽的**凹陷**（13e 在分栏这一侧的落法：栏头是"盖"，栏体是"槽"）。
+   ★ 手工验收走了三轮（用户 2026-09-22），最终口径是**槽底什么都不画**：
+     - 第一轮四个角都圆 + 底沿补一道"亮唇" ⇒ 白底上那条亮唇/暗边自己成了能看见的一条，
+       怎么调都像穿帮（"底槽还是漏了一小截"）；
+     - 凹陷感其实**全部**来自"光从上面进来"的那一道暗带 —— 那就只画它：
+       负的 `spread`（-2px）把影子从槽的**左右下三边**往里拉，槽底物理上没有任何笔触，
+       想漏都没有东西可漏。 */
+.nestboard-neumorph .nestboard-column > .nestboard-column-body {
+  margin: 0 1px 1px;
+  border-radius: calc(var(--nestboard-radius-lg) - 1px);
+  box-shadow: inset 1px 3px 5px -2px var(--nestboard-neu-dark);
+  /* ★ 槽垫一层**极淡的底色**（同轮验收：默认白栏头 + 白栏体 + 白槽，
+     凹陷全靠那道上沿暗带，"槽"读不出来）。12% 的中性暗 ⇒ 实测只比栏面深 ~7/255，
+     浅浅一层；**背景色天然跟随圆角**，永远不会有"边"（内阴影画不出 trustworthy 的
+     侧壁 —— 8.10.2/8.10.3 的教训）。深浅主题各自动跟（颜色取自主题那对中性暗）。 */
+  background: color-mix(in srgb, var(--nestboard-neu-dark) 12%, transparent);
 }

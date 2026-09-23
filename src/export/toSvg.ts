@@ -37,6 +37,11 @@ import {
 } from '../model/edges';
 import { isThemeColor } from '../model/schema';
 import type { BoardBackground, BoardFile, Card, CardColor } from '../model/schema';
+import { mindNodeRects, mindPlacement } from '../mind/embed/boardGeometry';
+import { childSideOf, edgePathOf, edgeTrunkPathOf } from '../mind/layout/edges';
+import { MIND_DEEP_DEPTH, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
+import type { MindFile } from '../mind/model/schema';
+import { nodeEndpointKey } from '../model/schema';
 import { normalizeHex } from '../util/color';
 import { textToArrayBuffer } from '../util/encoding';
 import { rectCenter, type Rect } from '../util/geometry';
@@ -77,6 +82,8 @@ export interface SvgExportOptions {
   range?: PngRange;
   /** 四周留白（世界坐标 px），默认 `DEFAULT_PNG_PADDING` */
   padding?: number;
+  /** **文件脑图**的模型（`2.2.0` 批 4），键是脑图 id —— 取景要用（与 PNG 同一个字段） */
+  mindModels?: ReadonlyMap<string, MindFile>;
 }
 
 export interface SvgPlan {
@@ -188,6 +195,13 @@ export interface SvgRenderOptions {
   palette: PngPalette;
   /** 卡片正文最多画几行，默认 6（与 PNG 一致） */
   maxLines?: number;
+  /**
+   * **文件脑图**的模型（`2.2.0` 批 4），键是脑图 id —— 与 PNG 那一份同一个含义。
+   *
+   * ★ 内嵌脑图的模型就在 `board.minds[].mind` 里（`mindElements` 自己会读）；
+   *   指向 `.nestmind` 的那些只有视图拿得到 ⇒ 不给就是**那一棵不画**。
+   */
+  mindModels?: ReadonlyMap<string, MindFile>;
 }
 
 /** 卡片标题字号（世界 px）—— 与 `toPng` 同值，两种导出才对得上 */
@@ -349,7 +363,11 @@ function arrowHead(
   return `<polygon points="${points}" fill="${color}"/>`;
 }
 
-function edgeElements(board: BoardFile, palette: PngPalette): string[] {
+function edgeElements(
+  board: BoardFile,
+  palette: PngPalette,
+  mindModels?: ReadonlyMap<string, MindFile>,
+): string[] {
   if (board.edges.length === 0) return [];
 
   const rects = new Map<string, Rect>();
@@ -360,6 +378,16 @@ function edgeElements(board: BoardFile, palette: PngPalette): string[] {
   }
   // ★ 分栏也是端点（`O21`）：与画布、PNG 导出同一份判据
   for (const column of board.columns) rects.set(column.id, rectOfColumn(column));
+  // ★ **脑图的节点也是端点**（`2.2.0` 批 3 / 批 4）：键与画布上的端点表同形，
+  //   少这一笔，指着节点的线在 SVG 里会**整条消失**
+  for (const mind of [...(board.minds ?? [])]) {
+    const model = mind.path.length === 0 ? (mind.mind ?? null) : (mindModels?.get(mind.id) ?? null);
+    const place = mindPlacement({ x: mind.x, y: mind.y }, model ?? null);
+    if (!place) continue;
+    for (const [nodeId, rect] of mindNodeRects(place)) {
+      rects.set(nodeEndpointKey(mind.id, nodeId), rect);
+    }
+  }
   const lookup = (cardId: string): Rect | null => rects.get(cardId) ?? null;
   // 锚点跟着卡片旋转走（T7.06）：与 PNG 同一个理由 —— 不喂角度，连线会插进转过的卡片里
   const angleOf: AngleLookup = (cardId) => angles.get(cardId) ?? 0;
@@ -583,6 +611,112 @@ function cardElement(card: Card, maxLines: number, palette: PngPalette): string[
 }
 
 /**
+ * 白板级脑图（`2.2.0` 批 4）。
+ *
+ * ★ SVG 这一侧有个**天然优势**：脑图那边算出来的连线路劲**本来就是 `d` 字符串**
+ *   （`mind/layout/edges`），所以这里画的是与屏幕上**逐字相同**的曲线 ——
+ *   不像 PNG 那样还要解析一遍（见 `toPng.tracePath`）。
+ * ★ 观感层（字号 / 留白 / 深层不画盒子）与 PNG 那一版同值，两种导出才对得上。
+ * ★ 同样**不画**折叠手柄、`+N` 角标、节点里的图片与备注：它们是操作入口 / 富内容。
+ */
+function mindElements(
+  board: BoardFile,
+  palette: PngPalette,
+  mindModels?: ReadonlyMap<string, MindFile>,
+): string[] {
+  if ((board.minds?.length ?? 0) === 0) return [];
+  const out: string[] = [];
+  const stroke = escapeXml(palette.mutedText);
+  const widthAttr = ' stroke-width="1.5" stroke-opacity="0.6" fill="none"';
+
+  for (const mind of [...(board.minds ?? [])].sort((a, b) => a.z - b.z)) {
+    const model = mind.path.length === 0 ? (mind.mind ?? null) : (mindModels?.get(mind.id) ?? null);
+    const place = mindPlacement({ x: mind.x, y: mind.y }, model ?? null);
+    if (!place) continue;
+
+    out.push(`<g transform="translate(${num(place.dx)} ${num(place.dy)})">`);
+
+    // ① 父子连线：延长线（同一侧共用一条）+ 分支线
+    const trunks = new Set<string>();
+    for (const node of place.file.nodes) {
+      if (node.parentId === null) continue;
+      const parent = place.layout.boxes.get(node.parentId);
+      const child = place.layout.boxes.get(node.id);
+      if (!parent || !child) continue;
+      const direction = childSideOf(parent, child);
+      const key = `${parent.id}:${direction}`;
+      if (!trunks.has(key)) {
+        trunks.add(key);
+        out.push(
+          `<path d="${edgeTrunkPathOf(parent, direction)}" stroke="${stroke}"${widthAttr}/>`,
+        );
+      }
+      const style = place.file.view.edge ?? 'curve';
+      out.push(`<path d="${edgePathOf(parent, child, style)}" stroke="${stroke}"${widthAttr}/>`);
+    }
+
+    // ② 节点盒子 + 标题
+    for (const [id, box] of place.layout.boxes) {
+      const node = place.file.nodes.find((item) => item.id === id);
+      if (!node) continue;
+      const depth = box.depth;
+      const size = titleSizeOf(depth);
+      const deep = depth >= MIND_DEEP_DEPTH;
+      const colors = mindPaletteOf(node.style, {
+        depth,
+        resolveTheme: (color) => resolveColor(color, palette),
+      });
+      const bandHeight = Math.min(box.height, size + MIND_BAND_PADDING_Y * 2);
+      if (!deep) {
+        out.push(rectTag(box, MIND_NODE_RADIUS, colors.body));
+        out.push(
+          rectTag(
+            { x: box.x, y: box.y, width: box.width, height: bandHeight },
+            MIND_NODE_RADIUS,
+            colors.title,
+          ),
+        );
+      }
+      const text = node.text.trim();
+      if (text.length > 0) {
+        // ★ **不截断**：节点宽度是**估算**出来的（`estimateNodeSize`），短标题会落在
+        //   最小宽度上（比如 2 个汉字 + 30px 字号：盒子只有 76 宽而字宽 74+留白）——
+        //   屏幕上第二遍会按真尺寸把盒子撑开，而导出这一侧量不到真尺寸。
+        //   截断成"中…"是**导出独有**的错误，比"文字略微探出盒子"糟得多，
+        //   所以这里居中画一整行（探出去的那点与屏幕上的观感一致）。
+        out.push(
+          textTag(
+            text,
+            box.x + box.width / 2,
+            box.y + bandHeight / 2,
+            size,
+            titleBoldOf(depth) ? 600 : 400,
+            deep ? palette.cardText : colors.titleInk,
+            BASELINE_MIDDLE,
+            ' text-anchor="middle"',
+          ),
+        );
+      }
+      if (deep) {
+        // 四层及以上：不画盒子，留一条托底的线（`D3`）
+        out.push(
+          `<path d="M ${num(box.x)} ${num(box.y + box.height)} H ${num(
+            box.x + box.width,
+          )}" stroke="${escapeXml(palette.pattern)}" stroke-width="1" fill="none"/>`,
+        );
+      }
+    }
+
+    out.push('</g>');
+  }
+  return out;
+}
+
+/** 脑图节点圆角 / 标题带留白（世界 px）—— 与 `toPng` 同值 */
+const MIND_NODE_RADIUS = 4;
+const MIND_BAND_PADDING_Y = 6;
+
+/**
  * 整块板 → 一份完整的 SVG 文档。
  *
  * 元素顺序与 `renderTile` 一样是**背景 → 分栏 → 连线 → 卡片**：
@@ -612,7 +746,9 @@ export function renderBoardSvg(board: BoardFile, plan: SvgPlan, options: SvgRend
 
   parts.push(...backgroundElements(plan, options, defs !== null));
   parts.push(...columnElements(board, palette));
-  parts.push(...edgeElements(board, palette));
+  // 与 `renderTile` 同一个次序：背景 → 分栏 → 脑图 → 连线 → 卡片
+  parts.push(...mindElements(board, palette, options.mindModels));
+  parts.push(...edgeElements(board, palette, options.mindModels));
 
   const maxLines = options.maxLines ?? 6;
   for (const card of [...board.cards].sort((a, b) => a.z - b.z)) {
