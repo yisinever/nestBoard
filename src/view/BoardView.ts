@@ -398,6 +398,12 @@ import {
   movePresentStep,
   presentStepOf,
   removeFromPresentation,
+  presentRows,
+  reorderPresentStep,
+  fillPresentFromReadingOrder,
+  presentationOrder,
+  findPresentTarget,
+  type PresentTarget,
 } from '../model/presentation';
 import { describeError } from '../util/errors';
 import { normalizeIcon } from '../util/emoji';
@@ -426,9 +432,10 @@ import { appendMenuItems, pickColor, showMenuAtMouse, showMenuAtPoint } from '..
 // 几何命中（`B2`）：搬进白板卡时要判"松手那一刻压在哪张卡上"（带旋转反算、z 最大者胜）
 import { hitTest } from './interact/HitTest';
 // 卡片 DOM 的 id 属性名：目标高亮要按它找那张卡的 DOM 外壳（与 `HitTest` 的委托同一个属性）
-import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR } from '../constants';
+import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR, VIEW_TYPE_PRESENT_PATH } from '../constants';
 // 卡片属性面板（`B1`）：住在右侧边栏，本视图负责把它打开并代它写回
 import { CardInspectorPanelView } from '../ui/CardInspectorPanel';
+import { PresentPathPanelView, type PresentPathHost } from '../ui/PresentPathPanel';
 import { InkBar } from '../ui/InkBar';
 import { CardFilterBar } from '../ui/CardFilterBar';
 import { openHomeBoard } from '../ui/homeActions';
@@ -11890,6 +11897,94 @@ export class BoardView extends FileView {
         console.warn('[nestboard] 打开卡片属性面板失败', error);
       });
     this.focusCanvas();
+  }
+
+  // ── 侧栏「演示路径」（用户 2026-09-28："演示路径的查看编辑做成可视化"）──────
+  // 与「卡片属性」同一套分工：面板只画，判定在模型层（`model/presentation.ts`），
+  // 改动走本视图的 `commit` ⇒ 挪一步 / 删一行都是**一步撤销**。
+
+  /** 打开侧栏「演示路径」并绑到当前这块板（面板单例，与卡片属性同一条路）。 */
+  openPresentPathPanel(): void {
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    void leaf
+      .setViewState({ type: VIEW_TYPE_PRESENT_PATH, active: true })
+      .then(() => {
+        const view = leaf.view;
+        if (!(view instanceof PresentPathPanelView)) return;
+        view.bind(this.presentPathHost());
+      })
+      .catch((error: unknown) => {
+        console.warn('[nestboard] 打开演示路径面板失败', error);
+      });
+    this.focusCanvas();
+  }
+
+  /** 面板的窄接口：路径现在长什么样、怎么改（全部走 `commit`，一步撤销） */
+  private presentPathHost(): PresentPathHost {
+    return {
+      rows: () => {
+        const board = this.board;
+        if (!board) return { rows: [], mode: 'reading' as const };
+        return {
+          rows: presentRows(board, (target) => this.presentTitleOf(target)),
+          mode: explicitPresentSteps(board).length > 0 ? 'explicit' : 'reading',
+        };
+      },
+      currentStep: () => (this.presentation?.active ? this.presentation.index : null),
+      reorder: (from, to) => {
+        this.commit(t('history.presentOrder'), (board) => reorderPresentStep(board, from, to));
+      },
+      move: (id, delta) => {
+        this.commit(t('history.presentOrder'), (board) => movePresentStep(board, id, delta));
+      },
+      remove: (id) => {
+        this.commit(t('history.presentRemove'), (board) => removeFromPresentation(board, [id]));
+      },
+      clear: () => {
+        this.commit(t('history.presentClear'), (board) => clearPresentSteps(board));
+      },
+      fillFromReadingOrder: () => {
+        this.commit(t('history.presentOrder'), (board) => fillPresentFromReadingOrder(board));
+      },
+      activate: (id) => this.activatePresentRow(id),
+      // ★ 板子变了就重画：走仓库事件（与 `applyBoard` 同一个源头，改名后也跟着走 ——
+      //   那两条订阅读的是 `currentPath`，见 `openBoard`）。演示**步进**不经过仓库 ⇒
+      //   面板上的"当前步"高亮在演示中点行 / 步进后要等下一次重画才跟上（可接受：
+      //   高亮是锦上添花，顺序与操作才是这一块的正事）。
+      watch: (listener) => this.plugin.repository.on('changed', () => listener()),
+    };
+  }
+
+  /** 面板一行的名字：卡片标题 / 内嵌脑图的根节点文字 / 文件脑图的文件名；都没有 = 空 */
+  private presentTitleOf(target: PresentTarget): string {
+    if (target.kind === 'card') return target.card.title.trim();
+    const root = target.mind.mind?.nodes.find((node) => node.parentId === null);
+    if (root && root.text.trim().length > 0) return root.text.trim();
+    if (target.mind.path.length > 0) {
+      const base = target.mind.path.split('/').pop() ?? target.mind.path;
+      return base.replace(/\.nestmind$/, '');
+    }
+    return '';
+  }
+
+  /** 点了一行：演示中 = 跳到那一步；否则 = 飞到那个对象（卡用定位，树飞到根节点） */
+  private activatePresentRow(id: string): void {
+    const board = this.board;
+    if (!board) return;
+    if (this.presentation?.active) {
+      const index = presentationOrder(board).findIndex((item) => item.id === id);
+      if (index >= 0) this.presentation.goto(index);
+      return;
+    }
+    const target = findPresentTarget(board, id);
+    if (!target) return;
+    if (target.kind === 'card') {
+      this.revealCard(id);
+      return;
+    }
+    const rootId = target.mind.mind?.nodes.find((node) => node.parentId === null)?.id;
+    if (rootId) this.revealMindNode(id, rootId);
   }
 
   /** 面板的窄接口：这张卡现在什么样（被删掉了给 `null`，面板会显示空白态） */

@@ -33,6 +33,7 @@ import {
   VIEW_TYPE_BOARD_LIST,
   VIEW_TYPE_BOARD_SEARCH,
   VIEW_TYPE_CARD_INSPECTOR,
+  VIEW_TYPE_PRESENT_PATH,
   VIEW_TYPE_MIND,
 } from './constants';
 import { AttachmentManager, resolveAttachmentFolder } from './io/AttachmentManager';
@@ -69,6 +70,7 @@ import { addFileToBoard } from './ui/AddToBoard';
 import { BoardListPanelView } from './ui/BoardListPanel';
 import { BoardSearchPanelView } from './ui/BoardSearchPanel';
 import { CardInspectorPanelView } from './ui/CardInspectorPanel';
+import { PresentPathPanelView } from './ui/PresentPathPanel';
 import { addFileToUnsorted } from './ui/homeActions';
 import { deleteBoardWithConfirm } from './ui/boardActions';
 import { importCanvasAtPath } from './ui/canvasActions';
@@ -173,7 +175,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-28 b110';
+  readonly buildStamp = '2026-09-28 b111';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;
@@ -456,6 +458,7 @@ export default class NestboardPlugin extends Plugin {
     // 侧栏「卡片属性」（`B1`，用户 2026-09-18）：单例，跟随当前选中的卡片。
     // 同 `VIEW_TYPE_BOARD_LIST`：没有对应文件类型，所以只 `registerView`、不绑扩展名
     this.registerView(VIEW_TYPE_CARD_INSPECTOR, (leaf) => new CardInspectorPanelView(leaf));
+    this.registerView(VIEW_TYPE_PRESENT_PATH, (leaf) => new PresentPathPanelView(leaf));
 
     // 脑图（`.nestmind`，`06 §2`）：**第二个文档类型**，与白板平级各占一个视图。
     // ★ 与 `VIEW_TYPE_BOARD` 那两行逐条同理：先把视图注册上，再把扩展名绑过去 ——

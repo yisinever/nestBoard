@@ -19,9 +19,12 @@ import {
   explicitPresentSteps as explicitStepsForTest,
   findPresentTarget,
   movePresentStep,
+  fillPresentFromReadingOrder,
   nextPresentStep,
   nextStepIndex,
+  presentRows,
   presentStepOf,
+  reorderPresentStep,
   presentationOrder,
   previousStepIndex,
   readingOrder,
@@ -442,5 +445,85 @@ describe('步骤导航', () => {
     expect(clampStepIndex(5, 3)).toBe(2);
     expect(clampStepIndex(-1, 3)).toBe(0);
     expect(clampStepIndex(1, 0)).toBe(0);
+  });
+});
+
+// ── 侧栏「演示路径」面板的模型层（用户 2026-09-28："演示路径的查看编辑做成可视化"）──
+
+describe('presentRows', () => {
+  it('按步骤号升序给行，步骤号从 1 连续', () => {
+    const board = boardWithCards();
+    const a = board.cards[0]!;
+    const c = board.cards.find((card) => card.title === 'C')!;
+    setPresentStep(board, c.id, 1);
+    setPresentStep(board, a.id, 2);
+
+    expect(presentRows(board, (target) => titles([target])[0] ?? '')).toEqual([
+      { id: c.id, kind: 'card', title: 'C', step: 1 },
+      { id: a.id, kind: 'card', title: 'A', step: 2 },
+    ]);
+  });
+
+  it('★ 悬空的步骤号不会出现在面板里（对象被删了，行跟着消失）', () => {
+    const board = boardWithCards();
+    const card = board.cards[0]!;
+    setPresentStep(board, card.id, 1);
+    board.cards = board.cards.filter((item) => item.id !== card.id);
+    expect(presentRows(board, (target) => titles([target])[0] ?? '')).toEqual([]);
+  });
+});
+
+describe('reorderPresentStep', () => {
+  function plannedBoard(): BoardFile {
+    const board = boardWithCards();
+    board.cards.forEach((card, index) => setPresentStep(board, card.id, index + 1));
+    return board;
+  }
+
+  it('★ 把一步挪到别处之后整体重编号成 1..n（空洞 / 重复号不会被越换越乱）', () => {
+    const board = plannedBoard();
+    const ids = board.cards.map((card) => card.id);
+    expect(reorderPresentStep(board, 0, 2)).toBe(true);
+    expect(explicitPresentSteps(board).map((item) => item.id)).toEqual([
+      ids[1],
+      ids[2],
+      ids[0],
+      ids[3],
+    ]);
+    expect(
+      explicitPresentSteps(board).map((item) =>
+        presentStepOf(item.kind === 'card' ? item.card : item.mind),
+      ),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  it('原地放下与越界的 from 都是无变化 / false；to 越界夹回两端', () => {
+    const board = plannedBoard();
+    const ids = board.cards.map((card) => card.id);
+    expect(reorderPresentStep(board, 1, 1)).toBe(false);
+    expect(reorderPresentStep(board, 9, 0)).toBe(false);
+    expect(reorderPresentStep(board, 0, 99)).toBe(true);
+    expect(explicitPresentSteps(board)[0]?.id).toBe(ids[1]);
+  });
+});
+
+describe('fillPresentFromReadingOrder', () => {
+  it('★ 覆盖式：卡与脑图混排时按阅读顺序整体重编（分栏是一块）', () => {
+    const board = boardWithCards();
+    board.minds = [createMind({ path: '', x: 0, y: 600 })];
+    const mind = board.minds[0]!;
+    const first = board.cards[0]!;
+    setPresentStep(board, mind.id, 1);
+    setPresentStep(board, first.id, 2);
+
+    expect(fillPresentFromReadingOrder(board)).toBe(true);
+    // 阅读顺序 = A, B, C, D, 树（树在最后）
+    expect(explicitPresentSteps(board).map((item) => item.id)).toEqual(
+      readingTargets(board).map((target) => target.id),
+    );
+  });
+
+  it('空板返回 false（没东西可填）', () => {
+    expect(fillPresentFromReadingOrder(createBoardFile())).toBe(false);
   });
 });

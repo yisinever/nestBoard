@@ -26,6 +26,7 @@ export const VIEW_TYPE_BACKLINK = 'nestboard-backlinks';
  * ★ 它**没有**对应的文件扩展名 ⇒ 不 `registerExtensions`（只有 `registerView`）。
  */
 export const VIEW_TYPE_CARD_INSPECTOR = 'nestboard-card-inspector';
+export const VIEW_TYPE_PRESENT_PATH = 'nestboard-present-path';
 
 /**
  * 侧栏「白板列表」视图类型（T5.08）。
@@ -401,6 +402,7 @@ export const RECENT_BOARDS_LIMIT = 20;
  */
 export const COMMAND_IDS = {
   createBoard: 'create-new-board',
+  presentPath: 'present-path',
   zoomIn: 'zoom-in',
   zoomOut: 'zoom-out',
   zoomReset: 'zoom-reset',

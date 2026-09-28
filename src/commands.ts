@@ -46,6 +46,13 @@ export function registerCommands(plugin: NestboardPlugin): void {
     },
   });
 
+  // 演示路径（用户 2026-09-28："演示路径的查看编辑做成可视化"）：开侧栏面板
+  registerViewCommand(plugin, {
+    id: COMMAND_IDS.presentPath,
+    nameKey: 'command.presentPath.name',
+    run: (view) => view.openPresentPathPanel(),
+  });
+
   // 画布导航（F1-03 / F1-04；默认键位见 02 §4.3）
   registerViewCommand(plugin, {
     id: COMMAND_IDS.zoomIn,

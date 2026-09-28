@@ -283,6 +283,75 @@ export function movePresentStep(board: BoardFile, id: string, delta: -1 | 1): bo
   return true;
 }
 
+/** `PresentTarget` → 它身上那个实体（卡或脑图）。模块内多处要用，收成一个 */
+function entityOfTarget(target: PresentTarget): Card | Mind {
+  return target.kind === 'card' ? target.card : target.mind;
+}
+
+/** 「演示路径」面板的一行（纯数据：UI 只管画，判定都在模型层，可在 node 下单测） */
+export interface PresentRow {
+  id: string;
+  kind: 'card' | 'mind';
+  /** 显示名；空串 = 没有名字（UI 显示"未命名"） */
+  title: string;
+  /** 1 起的步骤号 */
+  step: number;
+}
+
+/**
+ * 显式路径 → 面板行（按步骤号升序；悬空 id 已被 `explicitPresentSteps` 滤掉）。
+ *
+ * ★ 名字由**宿主**翻（卡片标题 / 脑图根节点文字），模型层不做界面文案。
+ */
+export function presentRows(
+  board: BoardFile,
+  titleOf: (target: PresentTarget) => string,
+): PresentRow[] {
+  return explicitPresentSteps(board).map((target, index) => ({
+    id: target.id,
+    kind: target.kind,
+    title: titleOf(target),
+    step: index + 1,
+  }));
+}
+
+/**
+ * 把第 `from` 步（0 起）挪到第 `to` 步（0 起）—— 拖动 / 上下移共用的模型层。
+ *
+ * ★ 与 `movePresentStep` 同一条理由：步骤号允许空洞或重复（手改过文件、中间删过对象），
+ *   直接交换两个原值会让重复号越换越乱 ⇒ **整体重编号成 1..n** 再写回。
+ * ★ `to` 越界就夹回两端（拖过头了 = 放到头），`from === to` = 原地放下（无变化）。
+ */
+export function reorderPresentStep(board: BoardFile, from: number, to: number): boolean {
+  const ordered = explicitPresentSteps(board);
+  if (from < 0 || from >= ordered.length) return false;
+  const target = clampStepIndex(Math.trunc(to), ordered.length);
+  if (target === from) return false;
+  const moved = ordered.splice(from, 1)[0];
+  if (!moved) return false;
+  ordered.splice(target, 0, moved);
+  ordered.forEach((item, index) => {
+    entityOfTarget(item).presentStep = index + 1;
+  });
+  return true;
+}
+
+/**
+ * 按**阅读顺序**把全部对象填进显式路径（面板上的「按阅读顺序填入」）。
+ *
+ * ★ 覆盖式：已经编过的也一起重排 —— 用户按这个按钮的意图就是"以阅读顺序为准"，
+ *   保留旧号反而让两种口径混在一条路径里。
+ * ★ 空板返回 `false`（没东西可填，UI 不必为一句话跑一次提交）。
+ */
+export function fillPresentFromReadingOrder(board: BoardFile): boolean {
+  const ordered = readingTargets(board);
+  if (ordered.length === 0) return false;
+  ordered.forEach((target, index) => {
+    entityOfTarget(target).presentStep = index + 1;
+  });
+  return true;
+}
+
 /**
  * 下一步的下标（到头**停住**，不循环）。
  *
