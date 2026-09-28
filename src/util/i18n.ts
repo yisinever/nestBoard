@@ -677,6 +677,8 @@ const en = {
   'findReplace.hits': '{n} match(es)',
   'findReplace.none': 'No matches',
   'findReplace.done': 'Replaced.',
+  'notice.replaceFailed':
+    'Nothing was replaced — this occurrence sits in a field the card does not show.',
   'presentPath.title': 'Presentation path',
   'presentPath.count': '{n} step(s)',
   'presentPath.mode.explicit': 'planned',
@@ -2352,6 +2354,7 @@ const zhCn: Record<MessageKey, string> = {
   'findReplace.hits': '命中 {n} 处',
   'findReplace.none': '没有命中',
   'findReplace.done': '替换完成。',
+  'notice.replaceFailed': '这一处没能替换：它落在卡片不显示的那个字段上。',
   'presentPath.title': '演示路径',
   'presentPath.count': '共 {n} 步',
   'presentPath.mode.explicit': '已编排',

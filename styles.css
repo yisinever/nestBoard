@@ -2724,7 +2724,10 @@
   color: #ffffff;
   /* ★ 字体调大（用户 2026-09-18："标题卡，字体太小了，要大一些"）：标签卡本来就是
      一行大字当招牌，原先 `--font-ui-small` 在 200×56 的卡里显得空且小 */
-  font-size: var(--font-ui-medium, 15px);
+  /* ★ 跟随设置里的「卡片标题字号」（用户 2026-09-28："让标题卡中的字体也要同步被修改"）：
+     标题卡的正文本来就是一行"大标题"，与卡片标题行同一个用途 ⇒ 共用同一个变量
+     （`view/themeVars.ts` 写在视图根容器上）。兜底保持原来的 `--font-ui-medium`。 */
+  font-size: var(--nestboard-card-title-size, var(--font-ui-medium, 15px));
   font-weight: var(--font-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7816,6 +7819,17 @@ body.nestboard-mind-box-all-depths {
 
 .nestboard-mind-toolbar__popover.is-open {
   display: flex;
+}
+
+/* 标记弹层里的两"页"（传统 emoji / 复古游戏机，用户 2026-09-28）：
+ * ★ 为什么必须写这一条：`.is-hidden` 在本仓是**逐构件**定义的（各弹层各写一条），
+ *   这个弹层从前只有一页、没有这个概念 ⇒ 补上两页之后两页会**一起**显示，
+ *   看起来就是"两个标签页变成了上下结构"。
+ * ★ 只对**直接子元素**生效：`groups` 与像素页都是 `__panels` 的子元素，
+ *   不会误伤页内自己的元素。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-mind-toolbar__panels > .is-hidden {
+  display: none;
 }
 
 .nestboard-mind-toolbar__group {

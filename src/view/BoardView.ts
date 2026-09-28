@@ -438,7 +438,7 @@ import { hitTest } from './interact/HitTest';
 import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR, VIEW_TYPE_PRESENT_PATH } from '../constants';
 // 卡片属性面板（`B1`）：住在右侧边栏，本视图负责把它打开并代它写回
 import { CardInspectorPanelView } from '../ui/CardInspectorPanel';
-import { PresentPathPanelView, type PresentPathHost } from '../ui/PresentPathPanel';
+import type { PresentPathHost } from '../ui/PresentPathPanel';
 import { FindBar } from '../ui/FindBar';
 import { applyFindHighlight, clearFindHighlight, selectMatchInTextarea } from '../ui/findHighlight';
 import { InkBar } from '../ui/InkBar';
@@ -10569,6 +10569,14 @@ export class BoardView extends FileView {
   private onCanvasKeyDown(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.isComposing) return;
 
+    // ★ 焦点在**输入类元素**上时一个键都不接（用户 2026-09-28："替换输入框目前无法退格"）：
+    //   查找 / 替换浮条就挂在 canvas 里面（`canvas.appendChild(bar.element)`），
+    //   它的按键会冒泡到这里 —— 一旦被本函数 `preventDefault`，输入框自己就再也收不到
+    //   `Backspace`（表现是"退格删不掉字"），而画布这边还顺手做了删卡片之类的事。
+    // ★ 判据与"点在输入框上"那一路**同一个 helper**（`isInteractiveKeyTarget`），
+    //   于是"输入框 / 按钮 / 可编辑块"三类的口径只有一处。
+    if (isInteractiveKeyTarget(event.target)) return;
+
     // 演示模式（J-06）：键盘先归它挑一遍 —— `→/←/1~9/O/Esc/⌘⇧P` 都在里面。
     // ★ 带 `⌘/⌥` 的组合键它会放行（缩放、切标签页、命令面板都得能用）
     if (this.presentation?.handleKey(event)) return;
@@ -11951,9 +11959,13 @@ export class BoardView extends FileView {
     void leaf
       .setViewState({ type: VIEW_TYPE_PRESENT_PATH, active: true })
       .then(() => {
-        const view = leaf.view;
-        if (!(view instanceof PresentPathPanelView)) return;
-        view.bind(this.presentPathHost());
+        // ★ 绑定交给插件层（面板先开 / 板子后开、以及 Obsidian 的"延迟视图"都归它管）：
+        //   从前这里直接 `view.bind(...)`，而 `leaf.view` 那一刻可能还**不是**
+        //   `PresentPathPanelView`（延迟创建）⇒ 这一句静默落空，面板永远停在"未绑定"
+        //   的空态上（用户 2026-09-28："右键，加入演示路径。在右侧面板中，依然没有任何显示"）。
+        this.plugin.bindPresentPathPanels();
+        // 再补一拍：`setViewState` 的 resolve 早于视图真正 `onOpen` 的情形
+        window.setTimeout(() => this.plugin.bindPresentPathPanels(), 60);
       })
       .catch((error: unknown) => {
         console.warn('[nestboard] 打开演示路径面板失败', error);
@@ -12024,8 +12036,25 @@ export class BoardView extends FileView {
     //   仓库事件那条路本来也会重画，但它是"下一帧"的事：用户在浮条上盯着看，
     //   这一帧的延迟就会被读成"没生效" —— 替换是一次明确的动作，值得同步补一次。
     if (changed) {
+      // ★★ 先把**内容指纹全部作废**再重画：卡面内容按指纹决定要不要重建
+      //    （`CardLayer.renderContent` 的 `entry.stamp`）—— 走"下一帧的仓库事件"那条路时
+      //    偶尔会与这一帧的指纹记账错开，表现就是"模型改了、卡面停在旧文字上"。
+      //    查找替换是低频动作，这里宁可让可见卡片**无条件**重建一次，换"改了必然看得见"。
+      this.cardLayer?.invalidateContents();
       this.refreshCards();
       this.frameQueue.schedule(this.applyFindHighlight);
+    } else {
+      // ★ 没能替换时必须说话：从前这条路上是**静默**返回，用户只看到"点了没反应"。
+      //   落到哪一处替换不到也写进控制台（`field` 是模型里的字段名，一眼看出问题在哪一格）。
+      const failed = this.findMatches[index];
+      console.warn('[nestboard] 查找替换：这一处没能替换', {
+        index,
+        targetId: failed?.targetId,
+        field: failed?.field,
+        start: failed?.start,
+        end: failed?.end,
+      });
+      new Notice(t('notice.replaceFailed'));
     }
     return changed;
   }
@@ -12084,7 +12113,24 @@ export class BoardView extends FileView {
   };
 
   /** 面板的窄接口：路径现在长什么样、怎么改（全部走 `commit`，一步撤销） */
-  private presentPathHost(): PresentPathHost {
+  private presentPathHostCache: PresentPathHost | null = null;
+
+  /**
+   * 侧栏「演示路径」面板的宿主（**公开 + 缓存**）。
+   *
+   * ★ 公开：面板的绑定由插件层统一做（`main.ts` 的 `bindPresentPathPanels`）——
+   *   面板视图与白板视图互不 import（谁也不认识谁），插件是唯一的中间人。
+   * ★ 缓存：面板靠**对象相等**判断"这次绑定是不是同一块板"；每次新建一个宿主对象
+   *   会让它每响一次 `layout-change` 就重订一次（纯属浪费）。里面的 `rows()` /
+   *   `currentStep()` 都是**现取**（读 `this.board`），缓存不影响正确性。
+   */
+  presentPathHost(): PresentPathHost {
+    this.presentPathHostCache ??= this.buildPresentPathHost();
+    return this.presentPathHostCache;
+  }
+
+  /** 真正造宿主的那个（内容全是**现取**：`rows()` / `currentStep()` 每次都读 `this.board`） */
+  private buildPresentPathHost(): PresentPathHost {
     return {
       rows: () => {
         const board = this.board;

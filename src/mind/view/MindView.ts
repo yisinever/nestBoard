@@ -1616,6 +1616,16 @@ export class MindView extends FileView {
     // 不挡的话"在内容里换行"会变成"加一个兄弟节点"。
     // ★ 改标签时整段不接（与改标题同理）：`Enter` / `Esc` 归那个输入框自己
     if (this.editing || this.noteEdit || this.linkEdit) return;
+    // ★ 焦点在**输入类元素**上时整段不接（用户 2026-09-28："替换输入框目前无法退格"）：
+    //   查找 / 替换浮条挂在画布里面，它的 `Backspace` 会冒泡到这里。
+    //   判据与白板那边同一条口径（输入框 / 按钮 / 可编辑块）。
+    const keyTarget = event.target;
+    if (
+      keyTarget instanceof HTMLElement &&
+      keyTarget.closest('input, textarea, select, button, [contenteditable="true"]')
+    ) {
+      return;
+    }
     // ★ 大纲视图的键位（`N3-b`）：整套归 `outlineKeys` 那张表（主口径对齐幕布），
     //   而动作落到与画布**同一批**方法上 —— 于是"大纲里按 `Tab`"与"画布上按 `Tab`"
     //   不可能出现两套结果（`09 §3.3` 那张表就是这条）

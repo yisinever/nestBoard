@@ -72,12 +72,30 @@ export class PresentPathPanelView extends ItemView {
     this.contentEl.empty();
   }
 
-  /** 绑到当前白板（每次打开都调；面板是单例，换板只是换一份数据源） */
-  bind(host: PresentPathHost): void {
+  /**
+   * 绑到当前白板（由插件层调，见 `main.ts` 的 `bindPresentPathPanels`）。
+   *
+   * ★ 参数可以是 `null`（此刻没有任何白板视图在）—— 那时画空态，**但订阅要摘掉**，
+   *   否则旧板的改动还会来重画一个已经换了对象的视图。
+   * ★ **同一个宿主对象重复绑 = 只重画、不重订**：`layout-change` 一响调一次，
+   *   每次都重订等于把订阅表越滚越长。宿主由 `BoardView.presentPathHost()` 缓存 ⇒
+   *   对象相等就是"还是那块板"。
+   */
+  bindHost(host: PresentPathHost | null): void {
+    if (host === this.host) {
+      this.render();
+      return;
+    }
     this.unwatch?.();
+    this.unwatch = null;
     this.host = host;
-    this.unwatch = host.watch(() => this.render());
+    this.unwatch = host ? host.watch(() => this.render()) : null;
     this.render();
+  }
+
+  /** 绑到当前白板（老的调用口，等价于 `bindHost(host)`） */
+  bind(host: PresentPathHost): void {
+    this.bindHost(host);
   }
 
   /** 没绑到任何板（面板先开、板后开）时由 `main.ts` 补一次绑定 */

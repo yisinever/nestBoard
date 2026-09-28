@@ -71,6 +71,7 @@ import { BoardListPanelView } from './ui/BoardListPanel';
 import { BoardSearchPanelView } from './ui/BoardSearchPanel';
 import { CardInspectorPanelView } from './ui/CardInspectorPanel';
 import { PresentPathPanelView } from './ui/PresentPathPanel';
+import type { PresentPathHost } from './ui/PresentPathPanel';
 import { addFileToUnsorted } from './ui/homeActions';
 import { deleteBoardWithConfirm } from './ui/boardActions';
 import { importCanvasAtPath } from './ui/canvasActions';
@@ -175,7 +176,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-28 b119';
+  readonly buildStamp = '2026-09-28 b120';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;
@@ -496,6 +497,15 @@ export default class NestboardPlugin extends Plugin {
     // 解析成"未解析"（退回按文件名匹配）。`resolved` 是 Obsidian 明确给出的
     // "缓存已就绪 / 批量变更后"的信号，用它把解析结果纠正一次（见 `reresolve`）。
     this.registerEvent(this.app.metadataCache.on('resolved', () => this.linkIndex.reresolve()));
+    // ★ 侧栏「演示路径」的绑定（用户 2026-09-28："右键，加入演示路径，右侧面板依然没有任何显示"）：
+    //   面板与白板视图互不 import（谁也不认识谁），本插件是唯一的中间人。
+    //   `layout-change` 是**关键的一条**：Obsidian 会"延迟创建"侧栏视图 ——
+    //   `setViewState(...).then()` 那一刻 `leaf.view` 可能还不是面板实例，
+    //   等它真的建出来（布局变化）再绑一次，才不会永远停在空态上。
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.bindPresentPathPanels()));
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', () => this.bindPresentPathPanels()),
+    );
 
     // 索引笔记 / 标签枢纽（`F1`）在**启动时也补一遍**：等 `LinkIndex` 扫完（卡内标签
     //   在它那儿）再跑，否则第一轮会写出"没有卡内标签"的旧 frontmatter。幂等
@@ -535,6 +545,38 @@ export default class NestboardPlugin extends Plugin {
       // 而那种情况下侧栏自己会说"正在索引"，不该被当成功能坏了
       boardSearch: () => this.boardSearch.stats(),
     };
+  }
+
+  /**
+   * 把"当前这块白板"的演示路径宿主交给**每一个**面板视图。
+   *
+   * ★ 什么时候调：面板刚打开、侧栏布局变了、活动叶子换了、白板视图重新载入文件 ——
+   *   都算"给谁显示路径"这件事可能变了。幂等（同一个宿主只重画，见 `PresentPathPanelView.bindHost`）。
+   * ★ 拿不到宿主（此刻没有任何白板视图）就传 `null`：面板画空态并摘掉订阅，
+   *   而不是留着上一块板的订阅继续重画。
+   */
+  bindPresentPathPanels(): void {
+    const host = this.resolvePresentPathHost();
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_PRESENT_PATH)) {
+      const view = leaf.view;
+      if (view instanceof PresentPathPanelView) view.bindHost(host);
+    }
+  }
+
+  /**
+   * 此刻该给面板显示哪块板的路径：**活动叶子上的那块板**，没有就退回最近用的那块。
+   *
+   * ★ 为什么允许"退回"：用户可能刚点开侧栏面板（焦点过去了，活动叶子变成面板自己），
+   *   这时"活动叶子上不是白板"不等于"没有板在看" —— 用 `getLeavesOfType` 的最后一个
+   *   兜住这类情形，比让面板突然空掉合理。
+   */
+  private resolvePresentPathHost(): PresentPathHost | null {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BOARD);
+    if (leaves.length === 0) return null;
+    const active = this.app.workspace.activeLeaf;
+    const leaf = leaves.find((item) => item === active) ?? leaves[leaves.length - 1];
+    const view = leaf?.view;
+    return view instanceof BoardView ? view.presentPathHost() : null;
   }
 
   override onunload(): void {
