@@ -366,23 +366,36 @@ export class ConnectController {
     //     上一版用 `debug` 于是控制台一片空白（用户 2026-09-28 的截图）。
     if (edge.id !== this.diagnosedEdgeId) {
       this.diagnosedEdgeId = edge.id;
-      const world = {
-        from: this.endpointWorldPointOf(edge, 'from'),
-        to: this.endpointWorldPointOf(edge, 'to'),
+      const round = (value: number): number => Math.round(value * 10) / 10;
+      const point = (value: Point | null): string =>
+        value ? `${round(value.x)},${round(value.y)}` : 'null';
+      const rectOf = (id: string): string => {
+        const rect = this.rectOfKey(this.hoveredOf(id));
+        return rect
+          ? `${round(rect.x)},${round(rect.y)} ${round(rect.width)}x${round(rect.height)}`
+          : 'null';
       };
-      console.warn('[nestboard] 端点把手几何', {
-        edge,
-        bounds: { left: bounds.left, top: bounds.top },
-        world,
-        screen: {
-          from: this.endpointScreenPointOf(edge, 'from'),
-          to: this.endpointScreenPointOf(edge, 'to'),
-        },
-        sizes: {
-          from: this.hostBoundsSizeOf(edge.from),
-          to: this.hostBoundsSizeOf(edge.to),
-        },
-      });
+      const describe = (target: EdgeEndpoint): string =>
+        isFreeEndpoint(target)
+          ? `free@${point(target.point ?? null)}`
+          : `${target.key} side=${target.side ?? 'auto'} rect=${rectOf(endpointAnchorKey(target))}`;
+      // ★★ 打成**一行纯文本**（控制台默认把对象折叠成 `{…}`，用户复制不到内容）：
+      //   整行复制发出来即可 —— `JSON.stringify` 之后是一个字符串，不带折叠。
+      console.warn(
+        '[nestboard] 端点把手几何 ' +
+          JSON.stringify({
+            edge: edge.id,
+            from: describe(edge.from),
+            to: describe(edge.to),
+            worldFrom: point(this.endpointWorldPointOf(edge, 'from')),
+            worldTo: point(this.endpointWorldPointOf(edge, 'to')),
+            screenFrom: point(this.endpointScreenPointOf(edge, 'from')),
+            screenTo: point(this.endpointScreenPointOf(edge, 'to')),
+            hostLeftTop: `${round(bounds.left)},${round(bounds.top)}`,
+            zoom: round(this.viewport.zoom),
+          }),
+      );
+    }
     }
     for (const end of ['from', 'to'] as const) {
       const handle = this.endHandles.get(end);
