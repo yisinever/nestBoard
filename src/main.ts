@@ -59,7 +59,7 @@ import {
 import type { UriRejection } from './integration/ProtocolHandler';
 import { RenameWatcher } from './integration/RenameWatcher';
 import { isNotePath } from './model/drop';
-import { INDEX_NOTE_BOARD_KEY } from './model/indexNote';
+import { INDEX_NOTE_BOARD_KEY, boardExcerpts } from './model/indexNote';
 import { TAG_HUB_FOLDER, TAG_HUB_KEY } from './model/tagHub';
 import { NestboardSettingTab } from './settings/SettingTab';
 import { pushRecentBoards, renameRecentBoards } from './settings/recentBoards';
@@ -85,6 +85,7 @@ import { BoardView } from './view/BoardView';
 import { allBoardViews, getActiveBoardView, openBoardView } from './view/BoardViewHost';
 // 外观档（原版 / 拟物，`F2`）：一个类切换整套光影规则，写在 `document.body` 上
 import { applyBoardStyleClass } from './view/themeVars';
+import { CARD_TYPE_LABEL_KEY } from './cards/registry';
 import { fileMenuItems } from './view/interact/fileMenu';
 import type { FileMenuAction, FileMenuTarget } from './view/interact/fileMenu';
 
@@ -172,7 +173,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-28 b109';
+  readonly buildStamp = '2026-09-28 b110';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;
@@ -413,6 +414,19 @@ export default class NestboardPlugin extends Plugin {
         return found;
       },
       boardUri: (path) => buildNestboardUri(path),
+      // ★ 收录文字（用户 2026-09-28）：`⌘⇧F` 只索引 `.md`，白板里写了什么它永远
+      //   看不见 —— 索引笔记把内容搬进去，这一条就是"搬什么"。异步是因为这块板
+      //   可能还没打开（缓存里没有就现读一次；与计数 / 缩略图读的是同一份模型）。
+      excerptsOf: async (path) => {
+        if (!this.settings.indexNoteIncludeText) return [];
+        const board = this.repository.get(path) ?? (await this.repository.open(path));
+        if (!board) return [];
+        return boardExcerpts(board, {
+          limit: this.settings.indexNoteExcerptLimit,
+          labelOf: (type) => t(CARD_TYPE_LABEL_KEY[type]),
+          uriOf: (cardId) => buildNestboardUri(path, cardId),
+        });
+      },
     });
     // 目录迁移防抖（T7.01）：见字段说明。目标目录从端口"现取"，所以回调里只说"从哪搬"
     this.scheduleIndexRelocate = debounce(() => {

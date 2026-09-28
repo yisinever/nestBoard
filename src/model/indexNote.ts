@@ -41,6 +41,7 @@
  */
 
 import { t } from '../util/i18n';
+import type { BoardFile, Card } from './schema';
 
 /**
  * 生成物标记。
@@ -75,6 +76,42 @@ export interface IndexNoteLink {
   target: string;
   /** 解析出的库内路径；`null` = 没对上任何文件 */
   resolved: string | null;
+}
+
+/**
+ * 「卡片内容」一节里的**一段**（一张卡，或一棵白板上的脑图）。
+ *
+ * ★ 为什么要把白板里的文字搬进索引笔记：`.nboard` 不是 Markdown，Obsidian 的
+ *   全局搜索（`⌘⇧F`）**只索引 `.md`** ⇒ 白板里写了什么，搜索永远看不见
+ *   （用户 2026-09-28："白板和脑图中写的内容，用 ob 的搜索，搜索不到，
+ *   以后白板脑图多了，不好查找"）。索引笔记是唯一合规的承载物
+ *   （不碰 Obsidian 内部 API，图谱 / Dataview 顺带全生效）。
+ */
+export interface IndexNoteExcerpt {
+  /** 段标题（不含 `###`）：`便签 · 项目里程碑` —— 类型名由宿主翻好再给 */
+  heading: string;
+  /**
+   * 飞到那张卡的 `obsidian://` 链接；空串 = 不带链接。
+   *
+   * ★ 搜到只是第一步，**点一下能到那张卡**才算"能查"（协议侧 `card` 参数现成，
+   *   `ProtocolHandler.buildNestboardUri(path, cardId)`）。白板上的**脑图**暂时
+   *   不带链接（协议的 `card` 参数只认卡片 id），空串即可。
+   */
+  uri: string;
+  /** 摘录正文（已折叠空白并按设置截断）；空串 = 只有标题行 */
+  text: string;
+}
+
+/** {@link boardExcerpts} 的可调项（全部可选） */
+export interface ExcerptOptions {
+  /** 每张卡最多收多少字（折叠空白之后算）；`0` = 不限。缺席 = 300 */
+  limit?: number;
+  /** 全部摘录加起来最多多少字（大板兜底，超出就停）；`0` = 不限。缺席 = 64Ki 字 */
+  totalLimit?: number;
+  /** 卡片类型 → 界面名。缺席 = 直接用类型名（测试够用；宿主传 `t(CARD_TYPE_LABEL_KEY[type])`） */
+  labelOf?: (type: Card['type']) => string;
+  /** 卡片 id → `obsidian://` 链接。缺席 = 不带链接 */
+  uriOf?: (cardId: string) => string;
 }
 
 /** 渲染一份索引笔记所需的全部输入 */
@@ -112,6 +149,15 @@ export interface IndexNoteInput {
   links: readonly IndexNoteLink[];
   /** `obsidian://nestboard?file=…`；空串 = 不写这一行 */
   boardUri: string;
+  /**
+   * 卡片 / 脑图里**写过的文字**（用户 2026-09-28）。
+   *
+   * ★ 可选：缺席 / 空数组 ⇒ **整节不写**，索引笔记与从前一字不差
+   *   （老宿主 / 测试 / 用户关掉"收录文字"都是这条路）。
+   * ★ 顺序 = 宿主给来的顺序（板内数组序），渲染不再排序 —— "同一份输入永远得到
+   *   同一份文本"这条纪律靠的是**别在这里自作主张**。
+   */
+  excerpts?: readonly IndexNoteExcerpt[];
 }
 
 /** 目录收敛：去掉首尾斜杠与空白，`\` 换成 `/`（与设置面板同一套规则） */
@@ -213,6 +259,29 @@ export function renderIndexNote(input: IndexNoteInput): string {
   if (input.boardUri.length > 0) {
     lines.push('');
     lines.push(`[${t('indexNote.openBoard')}](${input.boardUri})`);
+  }
+
+  const excerpts = input.excerpts ?? [];
+  if (excerpts.length > 0) {
+    lines.push('');
+    lines.push(`## ${t('indexNote.section.cards')}`);
+    lines.push('');
+    for (const excerpt of excerpts) {
+      // 标题行本身是"飞到那张卡"的链接：搜到 ⇒ 点一下就到（没有 uri 就退回纯文字）
+      lines.push(
+        excerpt.uri.length > 0
+          ? `### [${excerpt.heading}](${excerpt.uri})`
+          : `### ${excerpt.heading}`,
+      );
+      lines.push('');
+      // ★ 正文走**列表项**而不是裸段落：摘录里什么都有（用户便签的第一行写成
+      //   `# 大标题` 是常有的事），裸段落会被 Markdown 当成标题把整份笔记的结构打乱；
+      //   列表项里不会。`[[` 转义交给 `boardExcerpts`（那边折叠空白时一并做）。
+      if (excerpt.text.length > 0) {
+        lines.push(`- ${excerpt.text}`);
+        lines.push('');
+      }
+    }
   }
 
   const resolved = resolvedLinksOf(input.links);
@@ -350,4 +419,106 @@ function baseNameOf(path: string): string {
 /** `path` 以 `prefix` 开头时返回去掉前缀的部分，否则 `null` */
 function stripPrefix(path: string, prefix: string): string | null {
   return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 卡片 / 脑图文字的摘录（用户 2026-09-28："白板和脑图中写的内容，用 ob 的搜索搜不到"）
+// ─────────────────────────────────────────────────────────────
+
+/** 每张卡默认摘多少字；全部摘录默认最多 65536 字（≈ 一本小册子，Obsidian 缓存毫无压力） */
+export const DEFAULT_EXCERPT_LIMIT = 300;
+export const DEFAULT_EXCERPT_TOTAL_LIMIT = 65_536;
+
+/**
+ * 把一块白板里**写过的文字**摘成「卡片内容」那几段（纯函数，可在 node 下单测）。
+ *
+ * ★ 收什么：**写给人看的文字** —— 便签正文（`md`）、待办标题与条目、评论、
+ *   内嵌脑图的节点文字、标题卡 / 引用卡的名字；图片 / 音视频那类"指针卡"
+ *   只有写了标题才收（一张没名字的图没有可搜的东西）。
+ * ★ 不收什么：坐标 / 颜色 / 尺寸这些模型字段（那是数据，不是内容）。
+ * ★ 两条卫生纪律：
+ *   ① **折叠全部空白成一个空格** —— 摘录在笔记里是**一行**，用户便签里写成
+ *      `# 大标题` / `- [ ] 待办` 都不会把索引笔记自己的 Markdown 结构打乱；
+ *   ② `[[` 转义掉 —— 便签里写的双链已经由「链接」一节如实收录了，
+ *      摘录里再长出一条真链接，图谱里同一条边就出现两次。
+ */
+export function boardExcerpts(board: BoardFile, options: ExcerptOptions = {}): IndexNoteExcerpt[] {
+  const limit = Math.max(0, Math.trunc(options.limit ?? DEFAULT_EXCERPT_LIMIT));
+  const totalLimit = Math.max(0, Math.trunc(options.totalLimit ?? DEFAULT_EXCERPT_TOTAL_LIMIT));
+  const labelOf = options.labelOf ?? ((type: Card['type']) => type);
+  const uriOf = options.uriOf;
+
+  const out: IndexNoteExcerpt[] = [];
+  let total = 0;
+  // 触到总量上限之后就**停**：与其每张卡都塞一句"已截断"，不如只说一次
+  let truncated = false;
+
+  const push = (label: string, title: string, uri: string, raw: string): void => {
+    if (truncated) return;
+    const text = foldExcerptText(raw, limit);
+    // 没名字也没内容的卡（没起名的图片 / 空便签 / 空树）不值得一段标题
+    if (title.length === 0 && text.length === 0) return;
+    if (totalLimit > 0 && total + text.length > totalLimit) {
+      truncated = true;
+      out.push({ heading: t('indexNote.excerpt.truncated'), uri: '', text: '' });
+      return;
+    }
+    total += text.length;
+    out.push({ heading: title.length > 0 ? `${label} · ${title}` : label, uri, text });
+  };
+
+  for (const card of board.cards) {
+    push(
+      labelOf(card.type),
+      (card.title ?? '').trim(),
+      uriOf?.(card.id) ?? '',
+      cardRawTextOf(card),
+    );
+  }
+
+  // 白板上的**脑图**（`2.2.0`）：一棵树一段 —— 根节点文字进标题，节点文字进正文。
+  // 暂不带链接：协议的 `card` 参数只认卡片 id，"飞到某个节点"还没有 URI 口径。
+  for (const mind of board.minds ?? []) {
+    const nodes = mind.mind?.nodes ?? [];
+    const root = nodes.find((node) => node.parentId === null);
+    push(
+      labelOf('mind'),
+      (root?.text ?? '').trim(),
+      '',
+      nodes.map((node) => node.text).join(' / '),
+    );
+  }
+
+  return out;
+}
+
+/** 一张卡的**全部文字**（类型各取各的；指针卡只取名字）。空串 = 没有可搜的文字 */
+function cardRawTextOf(card: Card): string {
+  switch (card.type) {
+    case 'note':
+      return card.content.md;
+    case 'todo':
+      return [card.content.title, ...card.content.items.map((item) => item.text)]
+        .filter((part) => part.trim().length > 0)
+        .join(' / ');
+    case 'comment':
+      return card.content.entries.map((entry) => entry.text).join(' / ');
+    case 'mind':
+      return (card.content.mind?.nodes ?? []).map((node) => node.text).join(' / ');
+    case 'noteRef':
+    case 'boardRef':
+      return card.content.path;
+    case 'link':
+      return [card.content.title, card.content.url].join(' / ');
+    default:
+      // titleCard / image / file / video / audio / pdf / canvas：能搜的只有名字
+      return card.title ?? '';
+  }
+}
+
+/** 折叠全部空白成一个空格（摘录永远是单行，见 {@link boardExcerpts} 的纪律②）并截断 */
+function foldExcerptText(raw: string, limit: number): string {
+  const folded = raw.replace(/\[\[/g, '[').replace(/\s+/g, ' ').trim();
+  if (limit > 0 && folded.length > limit) return `${folded.slice(0, limit)}…`;
+  return folded;
 }

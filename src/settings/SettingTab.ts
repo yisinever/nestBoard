@@ -199,6 +199,41 @@ export class NestboardSettingTab extends PluginSettingTab {
           .setValue(this.settings.indexNoteFolder)
           .onChange((value) => this.patch({ indexNoteFolder: value })),
       );
+
+    // ★ 收录文字（用户 2026-09-28）：全局搜索能搜到白板里写了什么，靠的就是它。
+    //   改完要**立刻重同步** —— 否则已有的索引笔记要等下次保存白板才会长出 /
+    //   收回「卡片内容」一节，用户拨完开关看到的还是旧样子（与上面那个开关同一条理由）。
+    new Setting(this.containerEl)
+      .setName(t('settings.indexNote.includeText.name'))
+      .setDesc(t('settings.indexNote.includeText.desc'))
+      .addToggle((toggle) =>
+        toggle.setValue(this.settings.indexNoteIncludeText).onChange((value) => {
+          void this.plugin.updateSettings({ indexNoteIncludeText: value }).then(() => {
+            void this.plugin.indexNotes.syncAll();
+            // 字数上限那一行只在收录时才有意义 ⇒ 重画面板
+            this.display();
+          });
+        }),
+      );
+
+    if (this.settings.indexNoteIncludeText) {
+      new Setting(this.containerEl)
+        .setName(t('settings.indexNote.excerptLimit.name'))
+        .setDesc(t('settings.indexNote.excerptLimit.desc'))
+        .addText((text) =>
+          text
+            .setPlaceholder(String(DEFAULT_SETTINGS.indexNoteExcerptLimit))
+            .setValue(String(this.settings.indexNoteExcerptLimit))
+            .onChange((value) => {
+              const parsed = Number.parseInt(value, 10);
+              this.patch({
+                indexNoteExcerptLimit: Number.isFinite(parsed)
+                  ? parsed
+                  : DEFAULT_SETTINGS.indexNoteExcerptLimit,
+              });
+            }),
+        );
+    }
   }
 
   /** 新建白板的默认背景（T3.25 / `F11-04`） */

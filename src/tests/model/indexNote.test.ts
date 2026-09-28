@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   INDEX_NOTE_MARKER,
   INDEX_NOTE_TAG,
+  boardExcerpts,
   indexNoteBoardOf,
   indexNotePathOf,
   isIndexNote,
   normalizeIndexFolder,
   renderIndexNote,
 } from '../../model/indexNote';
+import { createBoardFile, createCard } from '../../model/factories';
 import type { IndexNoteInput } from '../../model/indexNote';
 import { setLocale } from '../../util/i18n';
 
@@ -329,5 +331,123 @@ describe('renderIndexNote × 卡内标签（F1 ①）', () => {
 
   it('省掉 `cardTags` = 与 `F1` 之前一字不差（老宿主 / 测试不受影响）', () => {
     expect(render({ tags: ['甲'] })).toBe(render({ tags: ['甲'], cardTags: [] }));
+  });
+});
+
+// ── 「卡片内容」（用户 2026-09-28：白板里写的东西要能被全局搜索搜到） ──
+
+describe('boardExcerpts', () => {
+  /** 一块板：一张有内容的便签 + 一棵脑图 + 一张没名字的图片卡 */
+  function boardWithContents() {
+    const board = createBoardFile();
+    board.cards = [
+      createCard('note', {
+        id: 'c_note',
+        title: '项目里程碑',
+        content: { md: '第一行  记录\n\n第三行', editorMode: 'markdown' },
+      }),
+      createCard('image', { id: 'c_img' }),
+    ];
+    board.minds = [
+      {
+        id: 'nm_1',
+        x: 0,
+        y: 0,
+        z: 0,
+        path: '',
+        mind: {
+          id: 'nm_1',
+          revision: 1,
+          view: {},
+          nodes: [
+            { id: 'n_root', parentId: null, text: '研究问题树' },
+            { id: 'n_a', parentId: 'n_root', text: '怎么收费' },
+          ],
+        },
+      } as never,
+    ];
+    return board;
+  }
+
+  it('便签正文进摘录；空白折叠成一行、`[[` 被拆掉（摘录里不该长出真链接）', () => {
+    const board = boardWithContents();
+    const note = board.cards[0];
+    if (note && note.type === 'note') note.content.md = '第一行  记录\n\n看 [[某篇笔记]] 去';
+    const excerpts = boardExcerpts(board, { labelOf: (type) => type });
+    const first = excerpts.find((item) => item.heading.includes('项目里程碑'));
+    expect(first?.text).toContain('第一行 记录');
+    expect(first?.text).not.toContain('[[');
+    expect(first?.uri).toBe(''); // 没给 uriOf ⇒ 不带链接
+  });
+
+  it('★ 每卡截断：超出的部分收成一行加省略号', () => {
+    const board = createBoardFile();
+    board.cards = [
+      createCard('note', { id: 'c1', content: { md: '字'.repeat(500), editorMode: 'markdown' } }),
+    ];
+    const excerpts = boardExcerpts(board, { limit: 10 });
+    expect(excerpts[0]?.text).toBe('字'.repeat(10) + '…');
+  });
+
+  it('没名字也没内容的指针卡不占一段（一张图没有可搜的东西）', () => {
+    const board = boardWithContents();
+    const excerpts = boardExcerpts(board, { labelOf: (type) => type });
+    expect(excerpts.some((item) => item.heading.startsWith('image'))).toBe(false);
+  });
+
+  it('白板上的脑图：根节点文字进标题、节点文字进正文、暂不带链接', () => {
+    const board = boardWithContents();
+    const excerpts = boardExcerpts(board, { labelOf: (type) => type });
+    const mind = excerpts.find((item) => item.heading.includes('研究问题树'));
+    expect(mind?.heading).toContain('研究问题树');
+    expect(mind?.text).toContain('怎么收费');
+    expect(mind?.uri).toBe('');
+  });
+
+  it('★ 总量兜底：触线就停，只留一句"已截断"，后面的一张都不收', () => {
+    const board = createBoardFile();
+    board.cards = [0, 1, 2, 3].map((index) =>
+      createCard('note', {
+        id: `c${index}`,
+        title: `卡${index}`,
+        content: { md: '字'.repeat(60), editorMode: 'markdown' },
+      }),
+    );
+    const excerpts = boardExcerpts(board, { totalLimit: 100 });
+    expect(excerpts.length).toBeLessThan(4);
+    expect(excerpts[excerpts.length - 1]?.text).toBe('');
+    expect(excerpts[excerpts.length - 1]?.heading).toContain('只收录了前面一部分');
+  });
+
+  it('uriOf 给了就带链接（搜到 ⇒ 点一下飞到那张卡）', () => {
+    const board = boardWithContents();
+    const excerpts = boardExcerpts(board, {
+      uriOf: (cardId) => `obsidian://nestboard?x=${cardId}`,
+    });
+    const note = excerpts.find((item) => item.heading.includes('项目里程碑'));
+    expect(note?.uri).toContain('c_note');
+  });
+});
+
+describe('renderIndexNote · 卡片内容', () => {
+  it('摘录进「卡片内容」一节：标题行带链接、正文是列表项', () => {
+    const text = render({
+      excerpts: [
+        { heading: '便签 · 甲', uri: 'obsidian://nestboard?file=x&card=c1', text: '一句话' },
+      ],
+    });
+    expect(text).toContain('## 卡片内容');
+    expect(text).toContain('### [便签 · 甲](obsidian://nestboard?file=x&card=c1)');
+    expect(text).toContain('- 一句话');
+  });
+
+  it('缺省 / 空数组 ⇒ 整节不写（老宿主与"关掉收录"同一条路）', () => {
+    expect(render({})).not.toContain('## 卡片内容');
+    expect(render({ excerpts: [] })).not.toContain('## 卡片内容');
+  });
+
+  it('同一份输入得到逐字节相同的输出（"没变就不写盘"靠它）', () => {
+    const excerpts = [{ heading: '便签 · 甲', uri: '', text: '一句话' }];
+    expect(render({ excerpts })).toBe(render({ excerpts }));
   });
 });

@@ -21,6 +21,7 @@ import {
 } from '../constants';
 import { BOARD_BACKGROUNDS } from '../model/schema';
 import type { BoardBackground, CardColor } from '../model/schema';
+import { DEFAULT_EXCERPT_LIMIT } from '../model/indexNote';
 import { normalizeBoardPath } from '../util/boardPath';
 import { normalizeLinkBlocklist } from '../util/linkPreview';
 import { MAP_TILE_PROVIDERS } from '../util/mapUrl';
@@ -229,6 +230,22 @@ export interface NestboardSettings {
    */
   indexNoteFolder: string;
   /**
+   * 索引笔记**收录卡片 / 脑图里写过的文字**（用户 2026-09-28）。
+   *
+   * ★ 默认**开**：索引笔记本来就是"让库里的工具看得见白板"的承载物，
+   *   而全局搜索能搜到**内容**才是它最大的收益（`⌘⇧F` 只索引 `.md`，
+   *   不收录文字的话搜到的只有链接与标签）。每张卡有截断上限（下一项）兜底。
+   * ★ 摘录写进「卡片内容」一节，每段标题本身就是"飞到那张卡"的链接。
+   */
+  indexNoteIncludeText: boolean;
+  /**
+   * 每张卡 / 每棵脑图最多收录多少字（`0` = 不限，仍有总量上限兜底）。
+   *
+   * ★ 默认 300：搜索命中靠的是**有这几个字**，不是全文 —— 摘得越长，
+   *   索引笔记越像白板的复印件，Obsidian 的索引与用户的大纲都要跟着付钱。
+   */
+  indexNoteExcerptLimit: number;
+  /**
    * 图片卡**始终使用原图**（`A5`，用户 2026-09-18："图片卡清晰度应该保持原图清晰度"）。
    *
    * ★ 默认**开**：图片糊是"一眼就看见"的问题，而显存是"看不见"的问题 ——
@@ -298,6 +315,8 @@ export const DEFAULT_SETTINGS: NestboardSettings = {
   recentBoards: [],
   enableIndexNote: false,
   indexNoteFolder: DEFAULT_INDEX_NOTE_FOLDER,
+  indexNoteIncludeText: true,
+  indexNoteExcerptLimit: DEFAULT_EXCERPT_LIMIT,
 };
 
 /**
@@ -320,6 +339,15 @@ export const CARD_FONT_SIZE_RANGE = { min: 10, max: 24, step: 1 } as const;
 
 const MIN_DEBOUNCE_MS = 50;
 const MAX_DEBOUNCE_MS = 60_000;
+
+/** 摘录字数上限的区间（0 = 每卡不限；总量另有 64Ki 的兜底） */
+const EXCERPT_LIMIT_RANGE = { min: 0, max: 2000 } as const;
+
+function clampExcerptLimit(raw: unknown): number {
+  const value =
+    typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_EXCERPT_LIMIT;
+  return Math.min(EXCERPT_LIMIT_RANGE.max, Math.max(EXCERPT_LIMIT_RANGE.min, value));
+}
 
 /** 把任意来源的数据收敛成一份可用的设置（未知字段丢弃、坏字段回落默认值） */
 export function normalizeSettings(raw: unknown): NestboardSettings {
@@ -387,6 +415,9 @@ export function normalizeSettings(raw: unknown): NestboardSettings {
     //   `''` 本来就等价于"库根"，`normalizeFolder` 天然认它；字段缺失（`undefined`）
     //   才回落到默认目录。两种意图被自然分开，不需要额外的分支
     indexNoteFolder: normalizeFolder(source.indexNoteFolder, DEFAULT_SETTINGS.indexNoteFolder),
+    indexNoteIncludeText: source.indexNoteIncludeText !== false,
+    // 手改 `.data.json` 塞进来的越界值夹回区间；非数字回落默认
+    indexNoteExcerptLimit: clampExcerptLimit(source.indexNoteExcerptLimit),
   };
 }
 

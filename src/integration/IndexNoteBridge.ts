@@ -57,7 +57,7 @@ import {
   isIndexNote,
   renderIndexNote,
 } from '../model/indexNote';
-import type { IndexNoteLink } from '../model/indexNote';
+import type { IndexNoteExcerpt, IndexNoteLink } from '../model/indexNote';
 import { isTagHubNote, renderTagHubNote, tagHubPathOf } from '../model/tagHub';
 import type { TagHubBoard } from '../model/tagHub';
 import { debounce } from '../util/debounce';
@@ -132,6 +132,15 @@ export interface IndexNotePorts {
    * ★ 缺省 = 没有卡内标签（老宿主 / 测试）⇒ 索引笔记与 `F1` 之前一字不差。
    */
   cardTagsOf?: (boardPath: string) => readonly string[];
+  /**
+   * 这块板里**写过的文字**（用户 2026-09-28："白板和脑图中写的内容，用 ob 的搜索
+   * 搜不到"）。每张卡 / 每棵脑图摘成一段（截断与折叠都在 `boardExcerpts` 里做）。
+   *
+   * ★ **缺省 = 不收录**：老宿主 / 测试不接这条线，索引笔记与从前一字不差。
+   * ★ 异步是因为这块板可能还没打开 —— 宿主要么拿缓存、要么现读一次完整模型，
+   *   那是它自己的事；桥只管"给什么写什么"。
+   */
+  excerptsOf?: (boardPath: string) => Promise<readonly IndexNoteExcerpt[]>;
   /**
    * 列出 `folder/_tags` 之下**由本插件生成的**标签枢纽笔记（`F1` ②）。
    *
@@ -229,6 +238,8 @@ export class IndexNoteBridge {
       updatedAt: entry.updatedAt,
       links: this.ports.linksOf(boardPath),
       boardUri: this.ports.boardUri?.(boardPath) ?? '',
+      // 「卡片内容」（用户 2026-09-28）：端口缺席 / 关着 ⇒ 空数组 ⇒ 整节不写
+      excerpts: (await this.ports.excerptsOf?.(boardPath)) ?? [],
     });
 
     return this.writeGenerated(notePath, content, isIndexNote, '索引笔记');
