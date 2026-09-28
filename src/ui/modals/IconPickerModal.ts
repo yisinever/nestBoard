@@ -67,7 +67,10 @@ export class IconPickerModal extends Modal {
       this.grid?.filter(this.query);
     });
 
-    const container = contentEl.createDiv();
+    // ★ 这个类名是**切换标签页时的锚点**（`renderGrid` 靠它找宿主重建网格）——
+    //   少了它，点另一个标签页时 `querySelector` 返回 null，于是"切换不顶用"
+    //   （用户 2026-09-28 报的正是这一条）。
+    const container = contentEl.createDiv({ cls: 'nestboard-icon-grid-host' });
     this.renderGridInto(container);
 
     search.focus();
@@ -75,9 +78,9 @@ export class IconPickerModal extends Modal {
 
   /** 按当前标签页重造网格（切换标签页时整块换掉；搜索词保留并立即生效） */
   private renderGrid(): void {
-    const container = this.contentEl.querySelector('.nestboard-icon-grid-host');
-    if (container) container.empty();
-    this.renderGridInto(container as HTMLElement);
+    const container = this.contentEl.querySelector<HTMLElement>('.nestboard-icon-grid-host');
+    if (!container) return;
+    this.renderGridInto(container);
   }
 
   private renderGridInto(container: HTMLElement): void {

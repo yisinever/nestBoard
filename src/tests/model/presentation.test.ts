@@ -19,6 +19,7 @@ import {
   explicitPresentSteps as explicitStepsForTest,
   findPresentTarget,
   movePresentStep,
+  ensureExplicitOrder,
   fillPresentFromReadingOrder,
   nextPresentStep,
   nextStepIndex,
@@ -466,10 +467,19 @@ describe('presentRows', () => {
 
   it('★ 悬空的步骤号不会出现在面板里（对象被删了，行跟着消失）', () => {
     const board = boardWithCards();
-    const card = board.cards[0]!;
-    setPresentStep(board, card.id, 1);
-    board.cards = board.cards.filter((item) => item.id !== card.id);
+    for (const card of board.cards) setPresentStep(board, card.id, 1);
+    // 把**全部**对象删掉 ⇒ 显式路径全落空、阅读顺序也空 ⇒ 面板才是空的
+    board.cards = [];
     expect(presentRows(board, (target) => titles([target])[0] ?? '')).toEqual([]);
+  });
+
+  it('★ 没编排过时列的是**阅读顺序**（面板显示的 = 演示真正会走的顺序）', () => {
+    // 用户 2026-09-28："演示路径的内容都没了" —— 从前只列显式步骤，
+    // 没编过的板子上面板一片空白，而按开始演示其实会按阅读顺序讲整块板
+    const board = boardWithCards();
+    const rows = presentRows(board, (target) => titles([target])[0] ?? '');
+    expect(rows.map((row) => row.title)).toEqual(['A', 'B', 'C', 'D']);
+    expect(rows.map((row) => row.step)).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -525,5 +535,25 @@ describe('fillPresentFromReadingOrder', () => {
 
   it('空板返回 false（没东西可填）', () => {
     expect(fillPresentFromReadingOrder(createBoardFile())).toBe(false);
+  });
+});
+
+describe('ensureExplicitOrder（面板上"编辑即实体化"）', () => {
+  it('★ 没编排过 ⇒ 先把阅读顺序写成显式步骤（返回 true 表示"写了"）', () => {
+    const board = boardWithCards();
+    expect(ensureExplicitOrder(board)).toBe(true);
+    // 写完之后再调就是无变化（幂等）
+    expect(ensureExplicitOrder(board)).toBe(false);
+    expect(explicitPresentSteps(board).map((item) => item.id)).toEqual(
+      readingTargets(board).map((target) => target.id),
+    );
+  });
+
+  it('已经编排过 ⇒ 一个字节都不动', () => {
+    const board = boardWithCards();
+    const first = board.cards[0]!;
+    setPresentStep(board, first.id, 1);
+    expect(ensureExplicitOrder(board)).toBe(false);
+    expect(explicitPresentSteps(board)).toHaveLength(1);
   });
 });

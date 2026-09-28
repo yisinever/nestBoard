@@ -503,12 +503,12 @@ function paintSummary(
 function createMiniMark(doc: Document, icon: string | undefined): HTMLElement {
   const el = doc.createElement('span');
   el.className = 'nestboard-board-ref-mini-icon';
-  renderIconInto(el, normalizeIcon(icon));
-  const emoji = normalizeIcon(icon);
-  if (emoji.length > 0) {
-    el.classList.add('is-emoji');
-    el.textContent = emoji;
-  }
+  // ★ 只走 `renderIconInto`（emoji → 文本、像素图标 → 一行 SVG）。
+  //   从前这里是 `el.textContent = emoji`：像素图标（`nb:0101`）于是被画成**代码本身**
+  //   （用户 2026-09-28："选了复古游戏机的图标后，在脑图和卡片上只显示代码"）。
+  const value = normalizeIcon(icon);
+  renderIconInto(el, value);
+  if (value.length > 0) el.classList.add('is-emoji');
   return el;
 }
 

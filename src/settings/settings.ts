@@ -138,6 +138,19 @@ export interface NestboardSettings {
   cardCornerRadius: number;
   /** 卡片正文基础字号（px，T3.24） */
   cardFontSize: number;
+  /**
+   * **卡片标题**的字号（px，用户 2026-09-28："在设置中加一个配置，可控制白板卡片标题的
+   * 字体大小。目前有标题的卡片字体均纳入控制"）。
+   *
+   * ★ 与 `cardFontSize`（**正文**字号）分开两格：标题与正文是两种用途 ——
+   *   标题要"一眼认出这是哪张卡"，正文要"读起来不累"，一个值同时管两处
+   *   必然有一处不合适。
+   * ★ 落到 CSS 变量 `--nestboard-card-title-size`（见 `view/themeVars.ts`）⇒
+   *   所有卡片的标题行（卡片外壳那一行）一起跟随，包括此刻屏外的与对象池里的。
+   * ★ 默认 {@link DEFAULT_CARD_TITLE_FONT_SIZE} = 样式表里那条 `var(..., 14px)` 的
+   *   兜底值 ⇒ **默认档与 `2.1.4` 逐像素一致**。
+   */
+  cardTitleFontSize: number;
   /** 卡片正文字体（CSS `font-family`，T3.24）。`''` = 跟随主题 */
   cardFontFamily: string;
   /**
@@ -287,6 +300,12 @@ export const DEFAULT_CARD_CORNER_RADIUS = 10;
 /** 与 `.nestboard-card` 原本继承的 `--font-ui-small`（≈13px）最接近的整数值 */
 export const DEFAULT_CARD_FONT_SIZE = 13;
 
+/**
+ * 卡片**标题**的默认字号：与 `styles.css` 里 `--nestboard-card-title-size` 的兜底
+ * （14px）一致 —— 于是"没设过"与"设成默认值"是同一份观感（默认档与 `2.1.4` 逐像素一致）。
+ */
+export const DEFAULT_CARD_TITLE_FONT_SIZE = 14;
+
 export const DEFAULT_SETTINGS: NestboardSettings = {
   newBoardFolder: DEFAULT_BOARD_FOLDER,
   templateFolder: DEFAULT_TEMPLATE_FOLDER,
@@ -303,6 +322,7 @@ export const DEFAULT_SETTINGS: NestboardSettings = {
   defaultCardColor: '1',
   cardCornerRadius: DEFAULT_CARD_CORNER_RADIUS,
   cardFontSize: DEFAULT_CARD_FONT_SIZE,
+  cardTitleFontSize: DEFAULT_CARD_TITLE_FONT_SIZE,
   cardFontFamily: '',
   cardStyle: 'classic',
   defaultBackground: 'dots',
@@ -336,6 +356,9 @@ export const AUTOSAVE_CHOICES: readonly number[] = [200, 400, 800, 2000];
  */
 export const CARD_CORNER_RADIUS_RANGE = { min: 0, max: 32, step: 2 } as const;
 export const CARD_FONT_SIZE_RANGE = { min: 10, max: 24, step: 1 } as const;
+
+/** 卡片标题字号的取值区间（与正文字号同一条口径；见 `cardTitleFontSize` 的说明） */
+export const CARD_TITLE_FONT_SIZE_RANGE = { min: 8, max: 64, step: 1 } as const;
 
 const MIN_DEBOUNCE_MS = 50;
 const MAX_DEBOUNCE_MS = 60_000;
@@ -387,6 +410,11 @@ export function normalizeSettings(raw: unknown): NestboardSettings {
       source.cardCornerRadius,
       CARD_CORNER_RADIUS_RANGE,
       DEFAULT_SETTINGS.cardCornerRadius,
+    ),
+    cardTitleFontSize: normalizeRange(
+      source.cardTitleFontSize,
+      CARD_TITLE_FONT_SIZE_RANGE,
+      DEFAULT_SETTINGS.cardTitleFontSize,
     ),
     cardFontSize: normalizeRange(
       source.cardFontSize,

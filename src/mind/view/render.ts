@@ -26,6 +26,7 @@ import {
 } from '../layout/links';
 import type { NodeBox } from '../layout/tree';
 import type { Size } from '../../util/geometry';
+import { renderIconInto } from '../../util/iconValue';
 import type { MindEdgeStyle } from '../model/schema';
 import { OUTLINE_VIEW_ICON, TREE_VIEW_ICON } from './viewToggleIcons';
 
@@ -226,7 +227,9 @@ export function buildNodeElement(
   if (node.icon !== undefined && node.icon.length > 0) {
     const icon = doc.createElement('span');
     icon.className = 'nestboard-mind-node-icon';
-    icon.textContent = node.icon;
+    // ★ 同一个解析口（emoji → 文本、像素图标 → SVG）—— 从前写 textContent，
+    //   像素图标会显示成 `nb:0101` 这串代码（用户 2026-09-28）
+    renderIconInto(icon, node.icon);
     icon.setAttribute('aria-hidden', 'true');
     title.appendChild(icon);
   }

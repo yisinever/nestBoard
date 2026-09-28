@@ -307,12 +307,30 @@ export function presentRows(
   board: BoardFile,
   titleOf: (target: PresentTarget) => string,
 ): PresentRow[] {
-  return explicitPresentSteps(board).map((target, index) => ({
+  // ★ 用 `presentationOrder`（显式路径为空时退回**阅读顺序**）而不是只取显式路径：
+  //   面板要回答的是"按开始演示会怎么讲"，未编排时那也是一条真实会走的路径。
+  //   从前只列显式路径 ⇒ 没编过的板子上面板是**空的**（用户 2026-09-28：
+  //   "演示路径的内容都没了"）。模式徽标仍按"有没有显式步骤"给（见宿主）。
+  return presentationOrder(board).map((target, index) => ({
     id: target.id,
     kind: target.kind,
     title: titleOf(target),
     step: index + 1,
   }));
+}
+
+/**
+ * 面板上的任何一次**编辑动作**之前都先调它：还没有显式路径就先把**阅读顺序实体化**。
+ *
+ * ★ 为什么必须实体化：面板未编排时列的是"阅读顺序会怎么讲"（见 `presentRows`），
+ *   而用户此刻点"上移"的意图是"**就按现在看到的这条顺序，改这一处**" ——
+ *   不实体化的话 `movePresentStep` 面对空路径只会返回 `false`，表现是"点了没反应"。
+ * ★ 返回**是否真的写过步骤号**（调用方据此把"实体化 + 本次动作"合成**一次**提交，
+ *   于是整件事是一步撤销，而不是"先莫名多出一步编排、再挪一格"）。
+ */
+export function ensureExplicitOrder(board: BoardFile): boolean {
+  if (explicitPresentSteps(board).length > 0) return false;
+  return fillPresentFromReadingOrder(board);
 }
 
 /**

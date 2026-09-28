@@ -693,7 +693,11 @@ const en = {
   'history.mindImportXmind': 'Import .xmind',
   'command.mindImportXmind.name': 'Import .xmind…',
   'notice.xmindImported': 'Imported {count} topics.',
-  'notice.xmindNoContent': 'No content.json in that .xmind — XMind 8 files are not supported yet.',
+  'notice.xmindNoContent':
+    'That file does not look like an .xmind we can read (no content.json / content.xml inside).',
+  'notice.xmindEmpty': 'The .xmind has no topic tree to import.',
+  'notice.xmindImportBlocked':
+    'Cannot import right now: the mind map is read-only or has an unresolved conflict.',
   'notice.xmindBadFile': 'That .xmind has no topic tree to import.',
   'notice.xmindImportFailed': 'Import failed: {error}',
   'history.presentAdd': 'Add to presentation',
@@ -1385,6 +1389,8 @@ const en = {
   'settings.cardRadius.value': '{px} px',
   'settings.cardFontSize.name': 'Card font size',
   'settings.cardFontSize.desc': 'Base font size for card text in pixels.',
+  'settings.cardTitleFontSize.name': 'Card title size',
+  'settings.cardTitleFontSize.desc': 'Font size of the title row on every card that has one.',
   'settings.alwaysFullImage.name': 'Always use original image quality',
   'settings.alwaysFullImage.desc':
     'Image cards load the full-resolution file instead of a small thumbnail, so pictures stay sharp at any zoom level. Turn this off to save memory on very large boards — thumbnails are then used whenever a picture is drawn smaller than one.',
@@ -2362,7 +2368,10 @@ const zhCn: Record<MessageKey, string> = {
   'history.mindImportXmind': '导入 .xmind',
   'command.mindImportXmind.name': '导入 .xmind…',
   'notice.xmindImported': '已导入 {count} 个主题。',
-  'notice.xmindNoContent': '这份 .xmind 里没有 content.json（XMind 8 的老格式暂不支持）。',
+  'notice.xmindNoContent':
+    '这份文件不是能读的 .xmind（包里既没有 content.json 也没有 content.xml）。',
+  'notice.xmindEmpty': '这份 .xmind 里没有可导入的主题树。',
+  'notice.xmindImportBlocked': '现在改不了这份脑图（只读或冲突未决），导入没有生效。',
   'notice.xmindBadFile': '这份 .xmind 里没有可导入的主题树。',
   'notice.xmindImportFailed': '导入失败：{error}',
   'history.presentAdd': '加入演示路径',
@@ -2979,6 +2988,8 @@ const zhCn: Record<MessageKey, string> = {
   'settings.cardRadius.value': '{px} 像素',
   'settings.cardFontSize.name': '卡片字号',
   'settings.cardFontSize.desc': '卡片正文的基础字号（像素）。',
+  'settings.cardTitleFontSize.name': '卡片标题字号',
+  'settings.cardTitleFontSize.desc': '所有带标题的卡片，标题行用这个字号（像素）。',
   'settings.alwaysFullImage.name': '图片卡始终使用原图',
   'settings.alwaysFullImage.desc':
     '图片卡直接加载原图，不因为缩小而换成缩略图 —— 放大看细节时不会糊。关掉它可以在超大白板上省显存：图在屏幕上画得比缩略图还小时，改用缩略图。',

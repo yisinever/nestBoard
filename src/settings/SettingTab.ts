@@ -27,6 +27,7 @@ import {
   BACKGROUND_LABEL_KEY,
   CARD_CORNER_RADIUS_RANGE,
   CARD_FONT_SIZE_RANGE,
+  CARD_TITLE_FONT_SIZE_RANGE,
   DEFAULT_SETTINGS,
   MAP_TILE_LABEL_KEY,
   normalizeMapTileProvider,
@@ -361,6 +362,24 @@ export class NestboardSettingTab extends PluginSettingTab {
           .setValue(this.settings.cardFontSize)
           .setDynamicTooltip()
           .onChange((value) => this.patch({ cardFontSize: value })),
+      );
+
+    // 卡片**标题**字号（用户 2026-09-28）：与正文字号分开两格 —— 标题要"一眼认出是哪张卡"、
+    // 正文要"读起来不累"，一个值同时管两处必然有一处不合适。落到
+    // `--nestboard-card-title-size`（见 `view/themeVars.ts`）⇒ 所有卡片的标题行一起跟随。
+    new Setting(this.containerEl)
+      .setName(t('settings.cardTitleFontSize.name'))
+      .setDesc(t('settings.cardTitleFontSize.desc'))
+      .addSlider((slider) =>
+        slider
+          .setLimits(
+            CARD_TITLE_FONT_SIZE_RANGE.min,
+            CARD_TITLE_FONT_SIZE_RANGE.max,
+            CARD_TITLE_FONT_SIZE_RANGE.step,
+          )
+          .setValue(this.settings.cardTitleFontSize)
+          .setDynamicTooltip()
+          .onChange((value) => this.patch({ cardTitleFontSize: value })),
       );
 
     new Setting(this.containerEl)

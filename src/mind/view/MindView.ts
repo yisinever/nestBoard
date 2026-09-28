@@ -225,7 +225,6 @@ import { mindMenuItems } from './mindMenu';
 import type { MindMenuActions, MindMenuItemSpec } from './mindMenu';
 import type NestboardPlugin from '../../main';
 import { mindBoxAllDepthsOf } from '../../util/mindBox';
-import { ImportXmindModal } from './ImportXmindModal';
 import { unzipTextEntries } from '../io/unzip';
 import { importXmindEntries } from '../io/fromXmind';
 
@@ -931,20 +930,30 @@ export class MindView extends FileView {
    *   老格式（`content.xml`）与坏文件都给**明确的提示**，不猜着解析。
    */
   private importXmind(): void {
-    new ImportXmindModal(this.app, (file) => {
+    // ★ 从**电脑的文件目录**里选（用户 2026-09-28："建议改成从电脑文件目录中选择文件导入"）：
+    //   从前列的是"库里已有的 .xmind"，而用户的 .xmind 通常在库外（下载目录 / 桌面）
+    //   ⇒ 列表是空的、点了没反应，看起来像功能没做。原生文件框没有这个前提，
+    //   库外的文件也照样能导入。
+    const input = this.containerEl.ownerDocument.createElement('input');
+    input.type = 'file';
+    input.accept = '.xmind';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
       if (file) void this.applyXmindFile(file);
-    }).open();
+    });
+    input.click();
   }
 
-  private async applyXmindFile(file: TFile): Promise<void> {
+  /** 读一个用户选中的 `.xmind`（**在库外**，所以走 File API 而不是 vault） */
+  private async applyXmindFile(file: File): Promise<void> {
     try {
-      const buffer = await this.app.vault.readBinary(file);
+      const buffer = await file.arrayBuffer();
       const entries = await unzipTextEntries(buffer);
       const result = importXmindEntries(entries);
       if (!result.ok) {
-        new Notice(
-          result.reason === 'no-content' ? t('notice.xmindNoContent') : t('notice.xmindBadFile'),
-        );
+        // ★ 说清是哪一种"不行"（用户 2026-09-28："导入无效果，无反馈"）：
+        //   从前失败也提示，但只有两句泛泛的话，用户分不清"文件不对"还是"功能坏了"
+        new Notice(t(XMIND_FAILURE_KEY[result.reason]));
         return;
       }
       const applied = this.edit(t('history.mindImportXmind'), (draft) => {
@@ -956,6 +965,9 @@ export class MindView extends FileView {
         // 导入之后旧选中已经不存在（节点表整体换了）⇒ 选中新的中心主题
         this.selectNode(result.rootId);
         new Notice(t('notice.xmindImported', { count: result.nodes.length }));
+      } else {
+        // 只读 / 冲突未决时 `edit` 不给改：必须说一声，否则"点了没反应"
+        new Notice(t('notice.xmindImportBlocked'));
       }
     } catch (error) {
       new Notice(t('notice.xmindImportFailed', { error: describeError(error) }));
@@ -3667,15 +3679,21 @@ export class MindView extends FileView {
 
   /** 浮条：替换第 `index` 处（在 mutate 里重扫，索引不会因为前一处被替换而错位） */
   private replaceFindMatch(index: number, replacement: string): boolean {
-    return (
+    const changed =
       this.edit(t('history.findReplace'), (draft) => {
         const matches = findMindMatches(draft.nodes, this.findQuery, {
           matchCase: this.findMatchCase,
         });
         const match = matches[index];
         return match ? replaceMindMatch(draft.nodes, match, replacement) : false;
-      }) === true
-    );
+      }) === true;
+    // ★ 与白板同一条（用户 2026-09-28："替换成功没有直接刷新"）：改完立刻重排重画，
+    //   不等下一帧的仓库事件 —— 浮条开着的时候，延迟一帧就会被读成"没生效"。
+    if (changed) {
+      this.relayout();
+      this.applyFindHighlightNow();
+    }
+    return changed;
   }
 
   /** 关掉浮条：清高亮、摘元素、忘掉条件 */
@@ -6381,3 +6399,11 @@ function boxIntersects(
 ): boolean {
   return rectsIntersect(box, rect);
 }
+
+/** `.xmind` 导入失败的原因 → 提示文案（用户 2026-09-28：要"说清是哪一种不行"） */
+const XMIND_FAILURE_KEY = {
+  'no-content': 'notice.xmindNoContent',
+  'bad-json': 'notice.xmindBadFile',
+  'bad-xml': 'notice.xmindBadFile',
+  empty: 'notice.xmindEmpty',
+} as const;

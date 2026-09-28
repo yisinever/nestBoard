@@ -19,6 +19,7 @@ import type { NestboardSettings } from '../settings/settings';
 export const CARD_STYLE_VAR = {
   radius: '--nestboard-card-radius',
   fontSize: '--nestboard-card-font-size',
+  titleSize: '--nestboard-card-title-size',
   fontFamily: '--nestboard-card-font',
 } as const;
 
@@ -26,6 +27,7 @@ export const CARD_STYLE_VAR = {
 export const CARD_STYLE_VARS: readonly string[] = [
   CARD_STYLE_VAR.radius,
   CARD_STYLE_VAR.fontSize,
+  CARD_STYLE_VAR.titleSize,
   CARD_STYLE_VAR.fontFamily,
 ];
 
@@ -46,6 +48,7 @@ export function cardStyleVariables(settings: NestboardSettings): Record<string, 
   return {
     [CARD_STYLE_VAR.radius]: `${settings.cardCornerRadius}px`,
     [CARD_STYLE_VAR.fontSize]: `${settings.cardFontSize}px`,
+    [CARD_STYLE_VAR.titleSize]: `${settings.cardTitleFontSize}px`,
     [CARD_STYLE_VAR.fontFamily]: settings.cardFontFamily,
   };
 }

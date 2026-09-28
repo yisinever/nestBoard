@@ -400,6 +400,7 @@ import {
   removeFromPresentation,
   presentRows,
   reorderPresentStep,
+  ensureExplicitOrder,
   fillPresentFromReadingOrder,
   presentationOrder,
   findPresentTarget,
@@ -12014,11 +12015,19 @@ export class BoardView extends FileView {
 
   /** 浮条：替换第 `index` 处（在 mutate 里**重扫**，索引不会因为前一处被替换而错位） */
   private replaceFindMatch(index: number, replacement: string): boolean {
-    return this.commit(t('history.findReplace'), (draft) => {
+    const changed = this.commit(t('history.findReplace'), (draft) => {
       const matches = findBoardMatches(draft, this.findQuery, { matchCase: this.findMatchCase });
       const match = matches[index];
       return match ? replaceBoardMatch(draft, match, replacement) : false;
     });
+    // ★ 改完**立刻重画**（用户 2026-09-28："替换成功没有直接刷新"）。
+    //   仓库事件那条路本来也会重画，但它是"下一帧"的事：用户在浮条上盯着看，
+    //   这一帧的延迟就会被读成"没生效" —— 替换是一次明确的动作，值得同步补一次。
+    if (changed) {
+      this.refreshCards();
+      this.frameQueue.schedule(this.applyFindHighlight);
+    }
+    return changed;
   }
 
   /** 关掉浮条：清高亮、摘元素、忘掉条件 */
@@ -12087,13 +12096,24 @@ export class BoardView extends FileView {
       },
       currentStep: () => (this.presentation?.active ? this.presentation.index : null),
       reorder: (from, to) => {
-        this.commit(t('history.presentOrder'), (board) => reorderPresentStep(board, from, to));
+        this.commit(t('history.presentOrder'), (board) => {
+          const materialized = ensureExplicitOrder(board);
+          return materialized || reorderPresentStep(board, from, to);
+        });
       },
       move: (id, delta) => {
-        this.commit(t('history.presentOrder'), (board) => movePresentStep(board, id, delta));
+        this.commit(t('history.presentOrder'), (board) => {
+          // ★ 未编排时先把"面板上看到的那条阅读顺序"实体化（见 `ensureExplicitOrder`）：
+          //   两件事合成**一次**提交 ⇒ 一步撤销就能回到"还没编排"的样子。
+          const materialized = ensureExplicitOrder(board);
+          return materialized || movePresentStep(board, id, delta);
+        });
       },
       remove: (id) => {
-        this.commit(t('history.presentRemove'), (board) => removeFromPresentation(board, [id]));
+        this.commit(t('history.presentRemove'), (board) => {
+          const materialized = ensureExplicitOrder(board);
+          return materialized || removeFromPresentation(board, [id]);
+        });
       },
       clear: () => {
         this.commit(t('history.presentClear'), (board) => clearPresentSteps(board));

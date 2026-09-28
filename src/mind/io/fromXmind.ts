@@ -28,7 +28,7 @@ export interface XmindEntryLike {
 /** 导入结果：节点表 + 根节点 id；失败时 `reason` 说清为什么 */
 export type XmindImportResult =
   | { ok: true; nodes: MindNode[]; rootId: string }
-  | { ok: false; reason: 'no-content' | 'bad-json' | 'empty' };
+  | { ok: false; reason: 'no-content' | 'bad-json' | 'bad-xml' | 'empty' };
 
 /** XMind 主题里我们认得的字段（其余一律忽略 —— 别人的格式，别越权解释） */
 interface XmindTopic {
@@ -65,7 +65,12 @@ function nodeOf(topic: XmindTopic, parentId: string | null, order: number): Mind
  */
 export function importXmindEntries(entries: readonly XmindEntryLike[]): XmindImportResult {
   const content = entries.find((entry) => entry.path.endsWith('content.json'));
-  if (!content) return { ok: false, reason: 'no-content' };
+  if (!content) {
+    // XMind 8 的老格式（见 `importXml`）：没有 json 就试 xml
+    const xml = entries.find((entry) => entry.path.endsWith('content.xml'));
+    if (!xml) return { ok: false, reason: 'no-content' };
+    return importXml(xml.content);
+  }
 
   let parsed: unknown;
   try {
@@ -83,4 +88,49 @@ export function importXmindEntries(entries: readonly XmindEntryLike[]): XmindImp
   const root = nodes[0];
   if (!root) return { ok: false, reason: 'empty' };
   return { ok: true, nodes, rootId: root.id };
+}
+
+/**
+ * **XMind 8 的老格式**（`content.xml`）：`<topic>` 树 + `<title>`。
+ *
+ * ★ 为什么要支持它：`.xmind` 有两种世代的包 —— 2018 之前（XMind 8 / Zen）写的是
+ *   `content.xml`，之后的写 `content.json`。用户导入自己的旧文件时撞上"没有
+ *   content.json"会以为功能坏了（用户 2026-09-28："导入无效果"），而它其实只是
+ *   另一个世代。两种都认，才叫"支持 .xmind"。
+ * ★ `DOMParser` 是运行时（Electron / 浏览器）自带的；单测环境没有 ⇒ 明确返回
+ *   `bad-xml` 而不是抛异常（本文件其余部分仍是纯逻辑）。
+ */
+function importXml(content: string): XmindImportResult {
+  if (typeof DOMParser === 'undefined') return { ok: false, reason: 'bad-xml' };
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(content, 'application/xml');
+  } catch {
+    return { ok: false, reason: 'bad-xml' };
+  }
+  if (doc.querySelector('parsererror')) return { ok: false, reason: 'bad-xml' };
+  const rootTopic = doc.querySelector('sheet > topic') ?? doc.querySelector('topic');
+  if (!rootTopic) return { ok: false, reason: 'empty' };
+  const nodes = xmlTopicNodes(rootTopic, null, 0);
+  const root = nodes[0];
+  if (!root) return { ok: false, reason: 'empty' };
+  return { ok: true, nodes, rootId: root.id };
+}
+
+/** 一个 `<topic>` 元素 → 节点（递归它的 `<children><topics><topic>`） */
+function xmlTopicNodes(topic: Element, parentId: string | null, order: number): MindNode[] {
+  const id = createId(ID_PREFIX.mindNode);
+  const node: MindNode = {
+    id,
+    text: topic.querySelector(':scope > title')?.textContent ?? '',
+    // XMind 8 的备注在 `<notes><plain>`；没有就是没有（不编一个空串进去）
+    note: topic.querySelector(':scope > notes > plain')?.textContent ?? '',
+    parentId,
+    order,
+  };
+  const children = Array.from(
+    topic.querySelectorAll(':scope > children > topics > topic'),
+  ) as Element[];
+  const rest = children.flatMap((child, index) => xmlTopicNodes(child, id, index));
+  return [node, ...rest];
 }

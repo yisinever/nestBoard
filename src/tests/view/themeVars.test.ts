@@ -69,7 +69,13 @@ describe('cardStyleVariables', () => {
   it('变量名清单与映射表一一对应', () => {
     // 清理用的清单漏一个名字，表现是"切走视图后上一个用户的字体还留着"
     expect([...CARD_STYLE_VARS].sort()).toEqual(
-      [CARD_STYLE_VAR.radius, CARD_STYLE_VAR.fontSize, CARD_STYLE_VAR.fontFamily].sort(),
+      [
+        CARD_STYLE_VAR.radius,
+        CARD_STYLE_VAR.fontSize,
+        // 卡片**标题**字号（用户 2026-09-28）：与正文分开两格 ⇒ 清单里也各占一位
+        CARD_STYLE_VAR.titleSize,
+        CARD_STYLE_VAR.fontFamily,
+      ].sort(),
     );
   });
 });
@@ -113,7 +119,7 @@ describe('applyCardStyleVariables', () => {
     applyCardStyleVariables(el, { ...target, cardCornerRadius: 20 });
 
     // 拖滑块时会连续调用很多次；不幂等的话这里会攒出一堆垃圾
-    expect(vars.size).toBe(3);
+    expect(vars.size).toBe(4);
     expect(vars.get(CARD_STYLE_VAR.radius)).toBe('20px');
   });
 });

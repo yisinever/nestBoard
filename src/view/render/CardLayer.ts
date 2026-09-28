@@ -39,6 +39,7 @@ import {
   type CardViewMode,
 } from '../../cards/registry';
 import type { CardRect } from '../../model/ops';
+import { renderIconInto } from '../../util/iconValue';
 import type { BoardFile, Card, CardColor, CardType, HexColor } from '../../model/schema';
 import {
   clipPathValue,
@@ -822,7 +823,10 @@ export class CardLayer {
     const mark = card.icon ?? '';
     const iconEl = element.querySelector<HTMLElement>('.nestboard-card-icon');
     if (iconEl) {
-      iconEl.textContent = mark;
+      // ★ 走同一个解析口（emoji → 文本、像素图标 → 一行 SVG）：直接写 textContent
+      //   会把 `nb:0101` 画成代码（用户 2026-09-28）。`renderIconInto` 认不出时会清空，
+      //   与"没设图标"同一个下场。
+      renderIconInto(iconEl, mark);
       iconEl.classList.toggle('is-empty', mark.length === 0);
     }
 
