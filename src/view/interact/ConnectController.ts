@@ -368,8 +368,12 @@ export class ConnectController {
       },
       active: () => this.session !== null,
       panByScreen: (dx: number, dy: number) => {
-        const zoom = this.viewport.zoom > 0 ? this.viewport.zoom : 1;
-        this.viewport.panBy(dx / zoom, dy / zoom);
+        // ★ **取反**（用户 2026-09-28："滚屏方向反了……核心是让线跟着鼠标走"）：
+        //   `viewport.panBy` 增减的是 offset（世界原点在屏幕上的位置）—— 指针贴右边时，
+        //   要让"更右边的内容"进来，就得把世界**往左**推 ⇒ `-dx`。
+        //   `panBy` 收的本来就是**屏幕像素**（见 `canvas/Viewport.panBy` 的注释），
+        //   所以这里不再除 zoom（从前那一版既反了向、又多除了一次 zoom）。
+        this.viewport.panBy(-dx, -dy);
       },
     };
   }

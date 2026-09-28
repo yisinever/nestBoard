@@ -16,7 +16,7 @@
  *    `model/presentation.ts`（可单测）；这里只画。
  */
 
-import { ItemView } from 'obsidian';
+import { ItemView, setIcon } from 'obsidian';
 import type { WorkspaceLeaf } from 'obsidian';
 
 import { VIEW_TYPE_PRESENT_PATH } from '../constants';
@@ -107,8 +107,10 @@ export class PresentPathPanelView extends ItemView {
       }`,
     );
     const actions = header.createDiv({ cls: 'nestboard-present-path-actions' });
-    this.actionButton(actions, t('presentPath.fill'), () => host.fillFromReadingOrder());
-    this.actionButton(actions, t('presentPath.clear'), () => host.clear());
+    this.actionButton(actions, 'list-plus', t('presentPath.fill'), () =>
+      host.fillFromReadingOrder(),
+    );
+    this.actionButton(actions, 'trash-2', t('presentPath.clear'), () => host.clear());
 
     if (rows.length === 0) {
       el.createDiv({ cls: 'nestboard-present-path-empty', text: t('presentPath.empty') });
@@ -144,15 +146,22 @@ export class PresentPathPanelView extends ItemView {
         () => host.move(row.id, 1),
         index === rows.length - 1,
       );
-      this.iconButton(buttons, 'cross', t('presentPath.remove'), () => host.remove(row.id));
+      this.iconButton(buttons, 'trash-2', t('presentPath.remove'), () => host.remove(row.id));
     });
   }
 
-  /** 头部的小按钮（全局动作，没有禁用态） */
-  private actionButton(parent: HTMLElement, label: string, run: () => void): void {
-    parent
-      .createEl('button', { cls: 'nestboard-present-path-action', text: label })
-      .addEventListener('click', run);
+  /**
+   * 头部的小按钮（全局动作，没有禁用态）。
+   *
+   * ★ 图标 + 文字（用户 2026-09-28："界面需要优化一下，按钮上加图标"）：
+   *   纯文字按钮一眼分不出"填入"和"清空"，加了图标才扫得动。
+   */
+  private actionButton(parent: HTMLElement, icon: string, label: string, run: () => void): void {
+    const button = parent.createEl('button', { cls: 'nestboard-present-path-action' });
+    const glyph = button.createSpan({ cls: 'nestboard-present-path-action-icon' });
+    setIcon(glyph, icon);
+    button.createSpan({ text: label });
+    button.addEventListener('click', run);
   }
 
   /** 行内的图标按钮；`disabled` = 到头了（第一行不能上移） */
@@ -167,7 +176,7 @@ export class PresentPathPanelView extends ItemView {
       cls: 'nestboard-present-path-icon',
       attr: { 'aria-label': label },
     });
-    button.setText(icon);
+    setIcon(button, icon);
     button.disabled = disabled;
     button.addEventListener('click', run);
   }

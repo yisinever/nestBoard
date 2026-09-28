@@ -405,7 +405,8 @@ import {
   findPresentTarget,
   type PresentTarget,
 } from '../model/presentation';
-import { countBoardMatches, replaceInBoard } from '../model/findReplace';
+import { findBoardMatches, replaceBoardMatch, replaceInBoard } from '../model/findReplace';
+import type { FindMatch } from '../model/findReplace';
 import { describeError } from '../util/errors';
 import { normalizeIcon } from '../util/emoji';
 import { joinPath, sanitizeFileName, splitName, uniquePath } from '../util/fileName';
@@ -437,7 +438,8 @@ import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR, VIEW_TYPE_PRESENT_PATH } from '
 // 卡片属性面板（`B1`）：住在右侧边栏，本视图负责把它打开并代它写回
 import { CardInspectorPanelView } from '../ui/CardInspectorPanel';
 import { PresentPathPanelView, type PresentPathHost } from '../ui/PresentPathPanel';
-import { FindReplaceModal } from '../ui/modals/FindReplaceModal';
+import { FindBar } from '../ui/FindBar';
+import { applyFindHighlight, clearFindHighlight, selectMatchInTextarea } from '../ui/findHighlight';
 import { InkBar } from '../ui/InkBar';
 import { CardFilterBar } from '../ui/CardFilterBar';
 import { openHomeBoard } from '../ui/homeActions';
@@ -710,6 +712,15 @@ export class BoardView extends FileView {
   private connectController: ConnectController | null = null;
   /** 树连线手势（`F7`）：与普通连线同构、目标是"父→子"的树关系 */
   private treeLinkController: TreeLinkController | null = null;
+  /** 查找 / 替换浮条（用户 2026-09-28；`null` = 没开） */
+  private findBar: FindBar | null = null;
+  /** 当前扫描出的全部命中（模型层给的"逐处"） */
+  private findMatches: FindMatch[] = [];
+  /** 当前那一处在 `findMatches` 里的下标 */
+  private findIndex = -1;
+  /** 浮条此刻的查找条件（重扫 / 重画之后重新高亮都要用） */
+  private findQuery = '';
+  private findMatchCase = false;
   /**
    * 连线弧度手柄（T7.12 / `F3-07`）：单选一条 Free 线时在中点浮出一个小圆点。
    *
@@ -5098,6 +5109,8 @@ export class BoardView extends FileView {
     // 偏移可能已经越界 —— 顺手钳一次（便宜：没有滚动时立刻返回）
     this.syncColumnScroll();
     this.syncCanvas();
+    // ★ 卡片 DOM 刚重建过 ⇒ 查找高亮要重画一次（浮条没开时一眼就返回，见那边）
+    this.frameQueue.schedule(this.applyFindHighlight);
   }
 
   private applyBoard(board: BoardFile): void {
@@ -11951,20 +11964,115 @@ export class BoardView extends FileView {
   // 判定全在 `model/findReplace.ts`（纯函数、可单测）；这里只喂宿主。
   // 走 `commit` ⇒ **全部替换也是一步撤销**。
 
-  /** 打开「查找与替换」弹窗（当前块板为范围；白板上的脑图节点一并参与）。 */
+  /**
+   * 打开**画布上的查找 / 替换浮条**（用户 2026-09-28："参考 obsidian 原生的 md 的
+   * 查找替换功能……在画布上出现一个查找框"）。范围 = 当前块板（白板上的脑图一并参与）。
+   *
+   * ★ 命中**高亮**在已挂载的卡片 / 节点上（屏外的飞过去时再亮）；计数来自模型（全板）。
+   * ★ 当前那一处用"飞进视野 + 卡片描边 + 编辑态里选中该片段"标出 ——
+   *   Markdown 渲染下的逐字符"当前环"不可靠，这一档与原生的表现同档。
+   */
   openFindReplace(): void {
-    new FindReplaceModal(this.app, {
-      count: (query, matchCase) =>
-        this.board ? countBoardMatches(this.board, query, { matchCase }) : 0,
-      replaceAll: (query, replacement, matchCase) => {
-        const board = this.board;
-        if (!board) return false;
-        return this.commit(t('history.findReplace'), (draft) =>
+    if (this.findBar) {
+      this.findBar.focus();
+      return;
+    }
+    const canvas = this.canvasEl;
+    if (!canvas) return;
+    const bar = new FindBar(canvas.ownerDocument, {
+      scan: (query, matchCase) => this.scanFind(query, matchCase),
+      focusMatch: (index) => this.focusFindMatch(index),
+      replaceAt: (index, replacement) => this.replaceFindMatch(index, replacement),
+      replaceAll: (query, replacement, matchCase) =>
+        this.commit(t('history.findReplace'), (draft) =>
           replaceInBoard(draft, query, replacement, { matchCase }),
-        );
-      },
+        ),
+      onClose: () => this.closeFindBar(),
+    });
+    canvas.appendChild(bar.element);
+    this.findBar = bar;
+    bar.focus();
+  }
+
+  /** 浮条：重新扫描（把命中列表与条件记在视图上，供飞视野 / 高亮 / 替换共用） */
+  private scanFind(query: string, matchCase: boolean): number {
+    this.findQuery = query;
+    this.findMatchCase = matchCase;
+    const board = this.board;
+    this.findMatches = board ? findBoardMatches(board, query, { matchCase }) : [];
+    return this.findMatches.length;
+  }
+
+  /** 浮条：切到第 `index` 处 —— 飞进视野 + 重画高亮 + 编辑态里选中那一段 */
+  private focusFindMatch(index: number): void {
+    this.findIndex = index;
+    const match = this.findMatches[index];
+    if (match) this.revealFindTarget(match.targetId);
+    // 高亮要等这一帧的 DOM 落地（飞视野会改视口 ⇒ 卡片可能刚挂载）
+    this.frameQueue.schedule(this.applyFindHighlight);
+  }
+
+  /** 浮条：替换第 `index` 处（在 mutate 里**重扫**，索引不会因为前一处被替换而错位） */
+  private replaceFindMatch(index: number, replacement: string): boolean {
+    return this.commit(t('history.findReplace'), (draft) => {
+      const matches = findBoardMatches(draft, this.findQuery, { matchCase: this.findMatchCase });
+      const match = matches[index];
+      return match ? replaceBoardMatch(draft, match, replacement) : false;
     });
   }
+
+  /** 关掉浮条：清高亮、摘元素、忘掉条件 */
+  private closeFindBar(): void {
+    const canvas = this.canvasEl;
+    if (canvas) {
+      clearFindHighlight(canvas);
+      for (const el of Array.from(canvas.querySelectorAll('.nestboard-find-target'))) {
+        el.classList.remove('nestboard-find-target');
+      }
+    }
+    this.findBar?.element.remove();
+    this.findBar = null;
+    this.findMatches = [];
+    this.findIndex = -1;
+    this.findQuery = '';
+  }
+
+  /** 把 `targetId`（卡片 / 白板上的脑图）飞进视野 */
+  private revealFindTarget(targetId: string): void {
+    const board = this.board;
+    if (!board) return;
+    if (board.cards.some((card) => card.id === targetId)) {
+      this.revealCard(targetId);
+      return;
+    }
+    const mind = (board.minds ?? []).find((item) => item.id === targetId);
+    const rootId = mind?.mind?.nodes.find((node) => node.parentId === null)?.id;
+    if (mind && rootId) this.revealMindNode(mind.id, rootId);
+  }
+
+  /**
+   * 重画高亮（浮条开着时，每次 DOM 重建之后都要来一次）。
+   *
+   * ★ 只在**已挂载**的 DOM 上包 mark（屏外的卡片没有 DOM），当前那一处再给目标
+   *   加一圈描边类；`findQuery` 为空时什么也不做（浮条没开 / 输入框还空着）。
+   */
+  private readonly applyFindHighlight = (): void => {
+    const canvas = this.canvasEl;
+    if (!canvas || !this.findBar || this.findQuery.length === 0) return;
+    applyFindHighlight(canvas, this.findQuery, { matchCase: this.findMatchCase });
+    for (const el of Array.from(canvas.querySelectorAll('.nestboard-find-target'))) {
+      el.classList.remove('nestboard-find-target');
+    }
+    const match = this.findMatches[this.findIndex];
+    if (!match) return;
+    const target =
+      this.cardLayer?.contentElementOf(match.targetId) ??
+      canvas.querySelector<HTMLElement>(`[${MIND_CONTAINER_ID_ATTR}="${match.targetId}"]`);
+    target?.classList.add('nestboard-find-target');
+    // 编辑态（便签正在编辑）：把那一处**选中**出来（原生在源码模式下也是这么做的）
+    const textarea = target?.querySelector<HTMLTextAreaElement>('textarea');
+    if (textarea) selectMatchInTextarea(textarea, this.findQuery, this.findMatchCase);
+  };
 
   /** 面板的窄接口：路径现在长什么样、怎么改（全部走 `commit`，一步撤销） */
   private presentPathHost(): PresentPathHost {

@@ -13,6 +13,10 @@ import type { BoardFile } from '../../model/schema';
 import {
   countBoardMatches,
   countMindMatches,
+  findBoardMatches,
+  findMindMatches,
+  replaceBoardMatch,
+  replaceMindMatch,
   replaceInBoard,
   replaceInMind,
 } from '../../model/findReplace';
@@ -112,10 +116,46 @@ describe('replaceInBoard', () => {
 
 describe('replaceInMind（.nestmind 视图同一份口径）', () => {
   it('节点文字替换；空查询不动', () => {
-    const nodes = [{ text: '旧词' }, { text: '别的' }];
+    const nodes = [
+      { id: 'n1', text: '旧词' },
+      { id: 'n2', text: '别的' },
+    ];
     expect(replaceInMind(nodes, '旧', '新')).toBe(true);
     expect(nodes[0]?.text).toBe('新词');
     expect(replaceInMind(nodes, '', 'x')).toBe(false);
     expect(countMindMatches(nodes, '新')).toBe(1);
+  });
+});
+
+describe('逐处命中（浮条高亮 / 逐个替换用）', () => {
+  it('★ findBoardMatches 给出"哪个对象 / 哪个字段 / 第几到第几"', () => {
+    const board = boardWithContents();
+    const matches = findBoardMatches(board, 'Alpha');
+    expect(matches.length).toBe(5);
+    // 第 1 处：便签正文里的第一个 Alpha（md 字段、下标 5 起）
+    expect(matches[0]).toEqual({ targetId: 'c1', field: 'md', start: 5, end: 10 });
+    // 同一字段里第二处也各占一条（不是合并成"这个字段有命中"）
+    expect(matches[1]?.field).toBe('md');
+    expect(matches[1]?.start).toBeGreaterThan(matches[0]?.start ?? 0);
+  });
+
+  it('★ replaceBoardMatch 只改那一处，别的命中原地不动', () => {
+    const board = boardWithContents();
+    const first = findBoardMatches(board, 'Alpha')[0]!;
+    expect(replaceBoardMatch(board, first, 'Beta')).toBe(true);
+    expect(findBoardMatches(board, 'Alpha').length).toBe(4);
+    const note = board.cards[0]!;
+    if (note.type === 'note') expect(note.content.md).toBe('本周完成 Beta\n下周 Alpha 复盘');
+  });
+
+  it('脑图同一套：findMindMatches / replaceMindMatch', () => {
+    const nodes = [
+      { id: 'n1', text: '甲 乙 甲' },
+      { id: 'n2', text: '甲' },
+    ];
+    const matches = findMindMatches(nodes, '甲');
+    expect(matches.map((match) => match.targetId)).toEqual(['n1', 'n1', 'n2']);
+    expect(replaceMindMatch(nodes, matches[1]!, '丙')).toBe(true);
+    expect(nodes[0]?.text).toBe('甲 乙 丙');
   });
 });

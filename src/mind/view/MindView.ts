@@ -225,8 +225,10 @@ import { mindMenuItems } from './mindMenu';
 import type { MindMenuActions, MindMenuItemSpec } from './mindMenu';
 import type NestboardPlugin from '../../main';
 import { mindBoxAllDepthsOf } from '../../util/mindBox';
-import { FindReplaceModal } from '../../ui/modals/FindReplaceModal';
-import { countMindMatches, replaceInMind } from '../../model/findReplace';
+import { FindBar } from '../../ui/FindBar';
+import { applyFindHighlight, clearFindHighlight } from '../../ui/findHighlight';
+import { findMindMatches, replaceInMind, replaceMindMatch } from '../../model/findReplace';
+import type { FindMatch } from '../../model/findReplace';
 
 /**
  * **多选**时快捷栏上画哪几件（`N2`，用户 2026-09-16）。
@@ -725,6 +727,12 @@ export class MindView extends FileView {
   private cameraFrame: number | null = null;
   /** 打字时的"只重排"帧任务（见 `scheduleRelayout`） */
   private relayoutFrame: number | null = null;
+  /** 查找 / 替换浮条（用户 2026-09-28；`null` = 没开） */
+  private findBar: FindBar | null = null;
+  private findMatches: FindMatch[] = [];
+  private findIndex = -1;
+  private findQuery = '';
+  private findMatchCase = false;
   private viewportSave: Debounced | null = null;
   private messageEl: HTMLElement | null = null;
   private disposers: Array<() => void> = [];
@@ -3571,14 +3579,89 @@ export class MindView extends FileView {
   // 这里走 `edit()` ⇒ **全部替换也是一步撤销**（与白板的 commit 同一条纪律）。
 
   /** 打开「查找与替换」弹窗（范围 = 这份 `.nestmind` 的全部节点文字）。 */
+  /**
+   * 打开**画布上的查找 / 替换浮条**（用户 2026-09-28："参考 obsidian 原生的 md 的
+   * 查找替换功能"）。范围 = 这份 `.nestmind` 的全部节点文字；与白板共用同一个浮条构件。
+   */
   openFindReplace(): void {
-    new FindReplaceModal(this.app, {
-      count: (query, matchCase) => countMindMatches(this.mind?.nodes ?? [], query, { matchCase }),
+    if (this.findBar) {
+      this.findBar.focus();
+      return;
+    }
+    const canvas = this.canvasEl;
+    if (!canvas) return;
+    const bar = new FindBar(canvas.ownerDocument, {
+      scan: (query, matchCase) => this.scanFind(query, matchCase),
+      focusMatch: (index) => this.focusFindMatch(index),
+      replaceAt: (index, replacement) => this.replaceFindMatch(index, replacement),
       replaceAll: (query, replacement, matchCase) =>
         this.edit(t('history.findReplace'), (draft) =>
           replaceInMind(draft.nodes, query, replacement, { matchCase }),
         ) === true,
+      onClose: () => this.closeFindBar(),
     });
+    canvas.appendChild(bar.element);
+    this.findBar = bar;
+    bar.focus();
+  }
+
+  /** 浮条：重新扫描（命中列表与条件记在视图上，供定位 / 高亮 / 替换共用） */
+  private scanFind(query: string, matchCase: boolean): number {
+    this.findQuery = query;
+    this.findMatchCase = matchCase;
+    this.findMatches = findMindMatches(this.mind?.nodes ?? [], query, { matchCase });
+    return this.findMatches.length;
+  }
+
+  /** 浮条：切到第 `index` 处 —— 把那个节点飞进视野（现成的 `revealNodeById`）+ 重画高亮 */
+  private focusFindMatch(index: number): void {
+    this.findIndex = index;
+    const match = this.findMatches[index];
+    if (match && match.field === 'node') this.revealNodeById(match.targetId);
+    this.applyFindHighlightNow();
+  }
+
+  /** 浮条：替换第 `index` 处（在 mutate 里重扫，索引不会因为前一处被替换而错位） */
+  private replaceFindMatch(index: number, replacement: string): boolean {
+    return (
+      this.edit(t('history.findReplace'), (draft) => {
+        const matches = findMindMatches(draft.nodes, this.findQuery, {
+          matchCase: this.findMatchCase,
+        });
+        const match = matches[index];
+        return match ? replaceMindMatch(draft.nodes, match, replacement) : false;
+      }) === true
+    );
+  }
+
+  /** 关掉浮条：清高亮、摘元素、忘掉条件 */
+  private closeFindBar(): void {
+    const canvas = this.canvasEl;
+    if (canvas) clearFindHighlight(canvas);
+    this.findBar?.element.remove();
+    this.findBar = null;
+    this.findMatches = [];
+    this.findIndex = -1;
+    this.findQuery = '';
+  }
+
+  /**
+   * 重画高亮（节点 DOM 每次重建之后都要来一次；浮条没开时一眼返回）。
+   *
+   * ★ 当前那一处：先由浮条调 `revealNodeById` 飞过去，这里再给它所在节点加一圈标记类。
+   */
+  private applyFindHighlightNow(): void {
+    const canvas = this.canvasEl;
+    if (!canvas || !this.findBar || this.findQuery.length === 0) return;
+    applyFindHighlight(canvas, this.findQuery, { matchCase: this.findMatchCase });
+    for (const el of Array.from(canvas.querySelectorAll('.nestboard-find-target'))) {
+      el.classList.remove('nestboard-find-target');
+    }
+    const match = this.findMatches[this.findIndex];
+    if (!match) return;
+    canvas
+      .querySelector<HTMLElement>(`[${MIND_NODE_ID_ATTR}="${match.targetId}"]`)
+      ?.classList.add('nestboard-find-target');
   }
 
   /**
@@ -5566,6 +5649,8 @@ export class MindView extends FileView {
     const layout = this.layoutOf(mind);
     this.paint(layout);
     this.layout = layout;
+    // ★ 节点 DOM 刚重建 ⇒ 查找高亮要重画一次（浮条没开时一眼就返回，见那边）
+    this.applyFindHighlightNow();
   }
 
   /**

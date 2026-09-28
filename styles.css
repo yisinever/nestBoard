@@ -9727,3 +9727,99 @@ body.theme-dark.nestboard-neumorph .nestboard-card {
   border-color: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+
+/* ── 查找 / 替换浮条 + 命中高亮（用户 2026-09-28："参考 obsidian 原生"）─────
+ * 浮条挂在画布上（屏幕坐标的浮层，与过滤条 / 面包屑同一手法）；两行：查找 +（可展开的）替换。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-findbar {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nestboard-radius);
+  background-color: var(--background-primary);
+  box-shadow: var(--nestboard-shadow);
+  /* ★ 浮条自己必须吃指针（它挂在画布上，而画布那层默认是拖动 / 框选的地盘） */
+  pointer-events: auto;
+}
+
+.nestboard-findbar__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nestboard-findbar__row.is-hidden {
+  display: none;
+}
+
+.nestboard-findbar__input {
+  width: 180px;
+  padding: 2px 6px;
+  font-size: var(--font-ui-smaller, 11px);
+}
+
+.nestboard-findbar__counter {
+  min-width: 42px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
+  font-variant-numeric: tabular-nums;
+}
+
+.nestboard-findbar__counter.is-empty {
+  color: var(--text-faint);
+}
+
+.nestboard-findbar__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.nestboard-findbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--nestboard-radius);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.nestboard-findbar__button:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.nestboard-findbar__button.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* 命中片段：其余淡黄、当前那一段橙（与原生同一个观感；`is-current` 由渲染层给） */
+mark.nestboard-find-hit {
+  padding: 0;
+  border-radius: 2px;
+  background-color: rgba(250, 204, 21, 0.45);
+  color: inherit;
+}
+
+mark.nestboard-find-hit.is-current {
+  background-color: rgba(249, 115, 22, 0.6);
+  outline: 1px solid var(--interactive-accent);
+}
+
+/* 当前命中所在的对象（卡片 / 脑图节点）：一圈描边，一眼看出"就是它" */
+.nestboard-find-target {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+  border-radius: var(--nestboard-radius);
+}

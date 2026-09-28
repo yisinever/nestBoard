@@ -16,6 +16,11 @@ export interface PixelIconGridOptions {
   /** 当前已选的值（`nb:0101` 这种；空 = 没选） */
   current?: string;
   onPick: (value: string) => void;
+  /**
+   * 每建一格登记一次（`QuickBar` 用它记"当前值"的照表，不查 DOM）——
+   * 与 emoji 那侧的 `register` 同一条口径。
+   */
+  register?: (cell: HTMLElement, value: string) => void;
 }
 
 export interface PixelIconGridHandle {
@@ -49,6 +54,7 @@ export function buildPixelIconGrid(
     renderIconInto(cell, value);
     cell.classList.toggle('is-current', value === options.current);
     cell.title = icon.name;
+    options.register?.(cell, value);
     cell.addEventListener('pointerdown', (event: Event) => event.stopPropagation());
     cell.addEventListener('click', (event: Event) => {
       event.stopPropagation();
