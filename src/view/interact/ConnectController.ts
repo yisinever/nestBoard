@@ -359,6 +359,29 @@ export class ConnectController {
       return;
     }
     const bounds = this.hostBounds();
+    // ★ 临时诊断（定位"把手离端点远"这条，2026-09-28）：每次**换一条选中的线**打一行，
+    //   把两端的世界 / 屏幕坐标与宿主原点都写出来 —— 一眼能分出是"端点算错"还是
+    //   "往屏幕换算错"。定位完就删。
+    if (edge.id !== this.diagnosedEdgeId) {
+      this.diagnosedEdgeId = edge.id;
+      const world = {
+        from: this.endpointWorldPointOf(edge, 'from'),
+        to: this.endpointWorldPointOf(edge, 'to'),
+      };
+      console.debug('[nestboard] 端点把手几何', {
+        edge,
+        bounds: { left: bounds.left, top: bounds.top },
+        world,
+        screen: {
+          from: this.endpointScreenPointOf(edge, 'from'),
+          to: this.endpointScreenPointOf(edge, 'to'),
+        },
+        sizes: {
+          from: this.hostBoundsSizeOf(edge.from),
+          to: this.hostBoundsSizeOf(edge.to),
+        },
+      });
+    }
     for (const end of ['from', 'to'] as const) {
       const handle = this.endHandles.get(end);
       if (!handle) continue;
@@ -396,6 +419,26 @@ export class ConnectController {
       },
     };
   }
+
+  /** 临时诊断用：端点在世界坐标里的位置（自由端用它的点，绑定的用锚点几何） */
+  private endpointWorldPointOf(
+    edge: { from: EdgeEndpoint; to: EdgeEndpoint },
+    end: 'from' | 'to',
+  ): Point | null {
+    const drawn = this.drawnEndpointOf?.(edge as Edge, end) ?? null;
+    if (drawn) return drawn;
+    return isFreeEndpoint(edge[end]) ? (edge[end].point ?? null) : null;
+  }
+
+  /** 临时诊断用：端点绑定的那个对象的矩形（自由端 / 找不到给 `null`） */
+  private hostBoundsSizeOf(target: EdgeEndpoint): unknown {
+    if (isFreeEndpoint(target)) return { free: true, point: target.point ?? null };
+    const rect = this.rectOfKey(this.hoveredOf(endpointAnchorKey(target)));
+    return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  }
+
+  /** 临时诊断用：上一条打过日志的线（避免同一选择刷屏） */
+  private diagnosedEdgeId: string | null = null;
 
   private hideEndHandles(): void {
     for (const handle of this.endHandles.values()) handle.setCssStyles({ display: 'none' });

@@ -10534,7 +10534,12 @@ export class BoardView extends FileView {
    * ★ 拿不到路径（端点缺矩形等）⇒ `null`，调用方退回锚点几何。
    */
   private drawnEdgeEndPointOf(edge: Edge, end: 'from' | 'to'): Point | null {
-    const path = edgePolyline(edge, {
+    // ★★ 一定要用**档案里那条完整的线**：端点重拖那条路拿到的只有 `{ id, from, to }`
+    //   （`activeEdgeForEndpointDrag`），缺 `routing` / `curve` ⇒ `edgePolyline` 会按
+    //   **直线**算，而屏幕上画的可能是智能绕行 / 弧线 —— 两端点虽然相同，但这是"两份
+    //   几何"的老毛病（同一件事算两遍，迟早不一致）。按 id 取回完整对象，几何只有一个来源。
+    const full = this.board?.edges.find((item) => item.id === edge.id) ?? edge;
+    const path = edgePolyline(full, {
       rectOf: this.cardRectLookup(),
       ...this.edgeHitOptions(),
     });
