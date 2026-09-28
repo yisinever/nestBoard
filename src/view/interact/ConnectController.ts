@@ -358,44 +358,6 @@ export class ConnectController {
       this.hideEndHandles();
       return;
     }
-    const bounds = this.hostBounds();
-    // ★ 临时诊断（定位"把手离端点远"这条，2026-09-28）：每次**换一条选中的线**打一行，
-    //   把两端的世界 / 屏幕坐标与宿主原点都写出来 —— 一眼能分出是"端点算错"还是
-    //   "往屏幕换算错"。定位完就删。
-    //   ★ 用 `warn` 而不是 `debug`：开发者工具的「Default levels」**不显示 Verbose**，
-    //     上一版用 `debug` 于是控制台一片空白（用户 2026-09-28 的截图）。
-    if (edge.id !== this.diagnosedEdgeId) {
-      this.diagnosedEdgeId = edge.id;
-      const round = (value: number): number => Math.round(value * 10) / 10;
-      const point = (value: Point | null): string =>
-        value ? `${round(value.x)},${round(value.y)}` : 'null';
-      const rectOf = (id: string): string => {
-        const rect = this.rectOfKey(this.hoveredOf(id));
-        return rect
-          ? `${round(rect.x)},${round(rect.y)} ${round(rect.width)}x${round(rect.height)}`
-          : 'null';
-      };
-      const describe = (target: EdgeEndpoint): string =>
-        isFreeEndpoint(target)
-          ? `free@${point(target.point ?? null)}`
-          : `${endpointAnchorKey(target)} side=${target.side ?? 'auto'} rect=${rectOf(endpointAnchorKey(target))}`;
-      // ★★ 打成**一行纯文本**（控制台默认把对象折叠成 `{…}`，用户复制不到内容）：
-      //   整行复制发出来即可 —— `JSON.stringify` 之后是一个字符串，不带折叠。
-      console.warn(
-        '[nestboard] 端点把手几何 ' +
-          JSON.stringify({
-            edge: edge.id,
-            from: describe(edge.from),
-            to: describe(edge.to),
-            worldFrom: point(this.endpointWorldPointOf(edge, 'from')),
-            worldTo: point(this.endpointWorldPointOf(edge, 'to')),
-            screenFrom: point(this.endpointScreenPointOf(edge, 'from')),
-            screenTo: point(this.endpointScreenPointOf(edge, 'to')),
-            hostLeftTop: `${round(bounds.left)},${round(bounds.top)}`,
-            zoom: round(this.viewport.zoom),
-          }),
-      );
-    }
     for (const end of ['from', 'to'] as const) {
       const handle = this.endHandles.get(end);
       if (!handle) continue;
@@ -404,8 +366,14 @@ export class ConnectController {
         handle.setCssStyles({ display: 'none' });
         continue;
       }
-      handle.style.left = `${screen.x - bounds.left}px`;
-      handle.style.top = `${screen.y - bounds.top}px`;
+      // ★★ 这里曾经写的是 `screen.x - bounds.left` —— 多减了一次宿主原点
+      //   （用户 2026-09-28 报了好几轮的"端点把手离端点太远"，就是它）。
+      //   `viewport.toScreen` 返回的**已经是宿主坐标**：它的逆 `toWorld` 收的是
+      //   `clientX - bounds.left`（见 `EdgeCurveController.toWorld`），而本文件
+      //   `repositionAnchors` 一直直接写 `screen.x`（所以锚点从来是准的）。
+      //   两处口径必须一致 —— 页面坐标那套在这里是错的，误差恒为宿主原点 (344, 78)。
+      handle.style.left = `${screen.x}px`;
+      handle.style.top = `${screen.y}px`;
       handle.setCssStyles({ display: '' });
     }
   }
@@ -433,19 +401,6 @@ export class ConnectController {
       },
     };
   }
-
-  /** 临时诊断用：端点在世界坐标里的位置（自由端用它的点，绑定的用锚点几何） */
-  private endpointWorldPointOf(
-    edge: { from: EdgeEndpoint; to: EdgeEndpoint },
-    end: 'from' | 'to',
-  ): Point | null {
-    const drawn = this.drawnEndpointOf?.(edge as Edge, end) ?? null;
-    if (drawn) return drawn;
-    return isFreeEndpoint(edge[end]) ? (edge[end].point ?? null) : null;
-  }
-
-  /** 临时诊断用：上一条打过日志的线（避免同一选择刷屏） */
-  private diagnosedEdgeId: string | null = null;
 
   private hideEndHandles(): void {
     for (const handle of this.endHandles.values()) handle.setCssStyles({ display: 'none' });
