@@ -529,9 +529,23 @@
 }
 
 /* 整行收起要连 header 一起收 —— 否则空标题会留一条无意义的空白条。
-   `:has()` 的降级表现只是"多一条空白条"，不会坏功能。 */
+   `:has()` 的降级表现只是"多一条空白条"，不会坏功能。
+   ★ 便签是例外（用户 2026-09-28："标题内没有内容时，标题栏可以再高一点"）：
+     那条色带就是便签的"脸"，也是双击改名的落点，收掉之后卡片顶部光秃秃、
+     入口也跟着消失。给它一个 1.5 行的最小高度：看得出"这里有一行标题"。 */
 .nestboard-card-header:has(> .nestboard-card-title.is-empty) {
   display: none;
+}
+
+.nestboard-card[data-card-type='note']
+  .nestboard-card-header:has(> .nestboard-card-title.is-empty) {
+  display: block;
+  min-height: 1.5em;
+}
+
+.nestboard-card[data-card-type='note'] .nestboard-card-title.is-empty {
+  display: block;
+  min-height: 1.2em;
 }
 
 .nestboard-card-content {
@@ -644,6 +658,10 @@
      这里再放宽一档，让文字相对卡片边框有明确的"缩进"、不贴着边读。
      ★ 只作用于**显示态**：编辑态走 `.nestboard-note-edit`（它把内边距清零、整块让给编辑器）。 */
   padding: var(--size-4-3, 12px);
+  /* 便签正文**可以选中复制**（用户 2026-09-28："卡内内容复制没支持"）：
+     卡片骨架是 `user-select: none`（拖动手势要它），但便签的正文是给人抄的 ——
+     放行给文本。拖动不受影响：拖动判据是"按下之后移动了"，不靠禁用选择。 */
+  user-select: text;
 }
 
 /* 卡片内的 Markdown 首尾不留外边距：否则首行会被顶掉半行、末行贴着边框 */
@@ -933,6 +951,13 @@
   line-height: 1.4;
   /* 长文滚动条用细样式，别在卡片里显得比内容还重 */
   scrollbar-width: thin;
+}
+
+/* 编辑态**至少 3 行**（用户 2026-09-28："如果很短的时候输入框变成 3 行…避免单行"）：
+   短便签进编辑时卡片只有一条缝。只抬**下限**，长内容照旧由内容撑开；
+   高度按 `.nestboard-mde-input` 自己的行高（1.4）×3 加上下内边距算，字号设置变了也跟着走。 */
+.nestboard-note-edit .nestboard-mde-input {
+  min-height: calc(3 * 1.4em + 16px);
 }
 
 .nestboard-mde-input::placeholder {

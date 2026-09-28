@@ -384,7 +384,10 @@ export class ConnectController {
    * ★ 绑到卡片 / 分栏 / 节点上时取**视觉**几何（栏内滚过的成员差一个偏移，T2.03）——
    *   与锚点、命中、高亮四处共用同一份（`rectOfKey`）。
    */
-  private endpointScreenPointOf(edge: { from: EdgeEndpoint; to: EdgeEndpoint }, end: 'from' | 'to'): Point | null {
+  private endpointScreenPointOf(
+    edge: { from: EdgeEndpoint; to: EdgeEndpoint },
+    end: 'from' | 'to',
+  ): Point | null {
     if (isFreeEndpoint(edge[end])) {
       const point = edge[end].point;
       if (!point) return null;

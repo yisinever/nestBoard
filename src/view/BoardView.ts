@@ -10575,6 +10575,17 @@ export class BoardView extends FileView {
 
     if (this.isEditingCard || this.isReadOnly()) return;
 
+    // ★ 卡面上**选中了文字**时，⌘C / ⌘X 归系统复制（用户 2026-09-28："卡内内容复制没
+    //   支持"）：从前选中文字按 ⌘C 抄走的是"整张卡"，用户要的是那句话。
+    //   编辑态不用管 —— 上面那句已经把按键整个还给编辑器了。
+    if (event.metaKey || event.ctrlKey) {
+      const lower = event.key.toLowerCase();
+      if (lower === 'c' || lower === 'x') {
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed) return;
+      }
+    }
+
     // ★ 卡内节点（`2.2.0` 收尾 · 用户 2026-09-23）：**键盘先归它** —— Tab 加子级、
     //   回车加同级、方向键换选中、F2 改名、Shift+Tab 提升一层、Delete 删掉它，
     //   与 `.nestmind` 视图**同一张键位表**（`mindKeyActionOf`）。
@@ -10587,6 +10598,20 @@ export class BoardView extends FileView {
     // ★ 它们与"选中了什么"无关（选区里没有卡片时也要能按），所以必须排在
     //   下面那句 `cardIds.size === 0` 的提前返回之前
     const modified = event.metaKey || event.ctrlKey;
+    // ★ 选中**一张便签**时 ⌘↵ = 编辑内容（用户 2026-09-28："要支持类似脑图的编辑内容
+    //   快捷键，command+回车"）—— 编辑态里 ⌘↵ 是提交（编辑器那侧现成的），正好一进一出。
+    //   多选 / 栏 / 其余卡型仍是"拆分成栏"（下面那条）：单选一张便签的语境里，
+    //   进编辑远比拆栏高频，而拆栏本来就是多选动作。
+    if (modified && event.key === 'Enter' && this.selection.cardIds.size === 1) {
+      const onlyId = [...this.selection.cardIds][0];
+      const only = this.board?.cards.find((card) => card.id === onlyId);
+      if (only && only.type === 'note') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.enterEditMode(only.id);
+        return;
+      }
+    }
     if (modified && event.key === 'Enter') {
       event.preventDefault();
       event.stopPropagation();

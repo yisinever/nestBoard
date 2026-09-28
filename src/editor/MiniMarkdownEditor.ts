@@ -418,14 +418,17 @@ export class MiniMarkdownEditor {
     }
   }
 
-  /** 聚焦并把光标放到末尾。延迟一轮微任务：渲染时节点还没进文档，立刻 focus 会被抢走 */
+  /**
+   * 聚焦并把光标放到**最前**（用户 2026-09-28："光标要放到最前面"）。
+   * 从前放末尾：短内容的便签一进编辑，光标在最后一行末尾，第一眼找不到光标在哪。
+   * 延迟一轮微任务的理由不变：渲染时节点还没进文档，立刻 focus 会被抢走。
+   */
   focus(): void {
     queueMicrotask(() => {
       if (this.finished) return;
       const el = this.textarea;
       el.focus();
-      const end = el.value.length;
-      el.setSelectionRange(end, end);
+      el.setSelectionRange(0, 0);
     });
   }
 

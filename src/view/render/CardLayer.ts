@@ -1072,6 +1072,11 @@ export class CardLayer {
         finish(false);
       }
     });
+    // ★ 指针事件不冒泡给画布（用户 2026-09-28："鼠标的选择，一点标题部分就会取消
+    //   标题的编辑状态"）：画布的 pointerdown 会走选中 / 拖动预备那一套，重画卡片时
+    //   输入框跟着被摘掉 ⇒ blur ⇒ "改到一半就退出"，光标也放不进去。就地拦住，
+    //   光标与文字选择都归输入框自己；失焦提交照旧（blur 只在真离开时触发）。
+    input.addEventListener('pointerdown', (event) => event.stopPropagation());
     input.addEventListener('blur', () => finish(true));
 
     input.focus();

@@ -518,13 +518,14 @@ describe('编辑会话', () => {
     expect(textarea.selectionStart).toBe(0);
   });
 
-  it('有内容时聚焦把光标放到末尾，而不是全选（全选会被随手一个字符覆盖）', async () => {
+  it('★ 有内容时聚焦把光标放到**最前**（用户 2026-09-28："光标要放到最前面"）——不是全选（全选会被随手一个字符覆盖）', async () => {
     const { textarea, editor } = mount('原文');
     expect(textarea.placeholder).toBe('');
 
     editor.focus();
     await Promise.resolve();
-    expect(textarea.selectionStart).toBe(2);
+    expect(textarea.selectionStart).toBe(0);
+    expect(textarea.selectionEnd).toBe(0);
   });
 
   it('Esc：内容没改 → 不写模型，只请求退出，且不把 Esc 传给画布', () => {
