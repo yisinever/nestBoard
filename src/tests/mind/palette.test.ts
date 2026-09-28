@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { commonTitleStyle, titleBoldOf } from '../../mind/model/palette';
+import { commonTitleStyle, deepBoxHidden, titleBoldOf } from '../../mind/model/palette';
 import type { MindNodeStyle } from '../../mind/model/schema';
 
 const node = (style?: MindNodeStyle, depth = 1) => ({ style, depth });
@@ -55,5 +55,22 @@ describe('commonTitleStyle（N2）', () => {
 
   it('空选区 ⇒ `null`（整条栏收起）', () => {
     expect(commonTitleStyle([])).toBeNull();
+  });
+});
+
+describe('deepBoxHidden（深层收盒子的共用判据）', () => {
+  it('阈值是第 4 层：三层带框、四层收起', () => {
+    expect(deepBoxHidden(1)).toBe(false);
+    expect(deepBoxHidden(3)).toBe(false);
+    expect(deepBoxHidden(4)).toBe(true);
+    expect(deepBoxHidden(9)).toBe(true);
+  });
+
+  it('★ 开关「所有层级都画框」打开后，再深也带框（用户 2026-09-28）', () => {
+    expect(deepBoxHidden(4, true)).toBe(false);
+    expect(deepBoxHidden(9, true)).toBe(false);
+    // 关着（缺席 / 显式 false）回到 2.1.4 的行为
+    expect(deepBoxHidden(4, false)).toBe(true);
+    expect(deepBoxHidden(4)).toBe(true);
   });
 });

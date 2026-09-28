@@ -260,3 +260,14 @@ describe('normalizeSettings：最近打开', () => {
     );
   });
 });
+
+describe('normalizeSettings · 脑图节点观感档（用户 2026-09-28）', () => {
+  it('★ 缺席 / 坏值一律**关**（= 与 2.1.4 逐像素一致这条回归基线不动）', () => {
+    expect(normalizeSettings({}).mindBoxAllDepths).toBe(false);
+    expect(normalizeSettings({ mindBoxAllDepths: true }).mindBoxAllDepths).toBe(true);
+    expect(normalizeSettings({ mindBoxAllDepths: false }).mindBoxAllDepths).toBe(false);
+    expect(normalizeSettings({ mindBoxAllDepths: 1 }).mindBoxAllDepths).toBe(false);
+    expect(normalizeSettings({ mindBoxAllDepths: 'yes' }).mindBoxAllDepths).toBe(false);
+    expect(DEFAULT_SETTINGS.mindBoxAllDepths).toBe(false);
+  });
+});

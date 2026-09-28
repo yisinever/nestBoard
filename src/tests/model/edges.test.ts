@@ -254,6 +254,74 @@ describe('edgeEndpoints', () => {
   });
 });
 
+/**
+ * 树连线（`F7` 折叠父子）的端点（用户 2026-09-28 报的"箭头被卡片挡住"）。
+ *
+ * 判据一句话：**端点落在"两心连线与该卡片边框的交汇处"**，而不是卡片中心 ——
+ * 树连线固定 `toEnd: 'arrow'`，箭头画在路径末端，锚中心就等于把箭头埋进卡片里。
+ */
+describe('edgeEndpoints · 树连线端点落在边框交汇处', () => {
+  /** 两张卡 + 一条树连线 */
+  function treeEdgeOf(a: Rect, b: Rect, angleOf?: (id: string) => number) {
+    const board = createBoardFile();
+    board.cards = [createCard('note', { id: 'a', ...a }), createCard('note', { id: 'b', ...b })];
+    const edge = createEdge(
+      { cardId: 'a', side: null },
+      { cardId: 'b', side: null },
+      {
+        kind: 'tree',
+        toEnd: 'arrow',
+      },
+    );
+    return { board, edge, endpoints: edgeEndpoints(edge, lookupOf(board), angleOf) };
+  }
+
+  it('横向并排：两端落在相对的两条边上（不再是卡片中心）', () => {
+    const { endpoints } = treeEdgeOf(
+      { x: 0, y: 0, width: 200, height: 100 },
+      { x: 500, y: 0, width: 200, height: 100 },
+    );
+    expect(endpoints?.from).toEqual({ x: 200, y: 50 });
+    expect(endpoints?.to).toEqual({ x: 500, y: 50 });
+  });
+
+  it('★ 斜向摆放：交点在边上（这里是下边 / 上边），与"边中点"那条普通锚点不同', () => {
+    const a = { x: 0, y: 0, width: 200, height: 100 };
+    const b = { x: 400, y: 400, width: 200, height: 100 };
+    const { board, edge, endpoints } = treeEdgeOf(a, b);
+    // 45° 射线：到上/下边的距离（50）比到左右边的（100）近 ⇒ 落在下边 / 上边
+    expect(endpoints?.from.x).toBeCloseTo(150);
+    expect(endpoints?.from.y).toBeCloseTo(100);
+    expect(endpoints?.to.x).toBeCloseTo(450);
+    expect(endpoints?.to.y).toBeCloseTo(400);
+    // 普通连线仍取四边中点（同一条线的普通版本给出的是 another 一组点）
+    const plain = edgeEndpoints({ ...edge, kind: undefined }, lookupOf(board));
+    expect(plain?.from).toEqual({ x: 200, y: 50 });
+    expect(plain?.from).not.toEqual(endpoints?.from);
+  });
+
+  it('★ 转过的卡片按旋转后的边框算（90° 的卡，半宽取的是"看起来"的一半）', () => {
+    const { endpoints } = treeEdgeOf(
+      { x: 0, y: 0, width: 200, height: 100 },
+      { x: 500, y: 0, width: 200, height: 100 },
+      (id) => (id === 'b' ? 90 : 0),
+    );
+    // b 的中心在 (600,50)，射线朝 a（向左）；未转时半宽 100 ⇒ 500；
+    // 转了 90° 之后"看起来"的半宽 = 原来的半高 50 ⇒ 550
+    expect(endpoints?.to).toEqual({ x: 550, y: 50 });
+  });
+
+  it('两心重合（两张卡叠着）→ 退回中心，不返回 NaN', () => {
+    const { endpoints } = treeEdgeOf(
+      { x: 0, y: 0, width: 200, height: 100 },
+      { x: 0, y: 0, width: 200, height: 100 },
+    );
+    expect(endpoints?.from).toEqual({ x: 100, y: 50 });
+    expect(endpoints?.to).toEqual({ x: 100, y: 50 });
+    expect(Number.isFinite(endpoints?.from.x ?? Number.NaN)).toBe(true);
+  });
+});
+
 describe('pointSegmentDistance', () => {
   it('垂足落在线段内 → 点到直线的垂距', () => {
     expect(pointSegmentDistance({ x: 5, y: 3 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBeCloseTo(3);

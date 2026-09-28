@@ -34,7 +34,7 @@ import { IDENTITY_CROP, clampCrop } from '../model/crop';
 import { mindBounds, mindNodeRects, mindPlacement } from '../mind/embed/boardGeometry';
 import { childSideOf, edgePathOf, edgeTrunkPathOf } from '../mind/layout/edges';
 import type { MindLayout } from '../mind/layout/tree';
-import { MIND_DEEP_DEPTH, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
+import { deepBoxHidden, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
 // 标题的行高与折行**与布局估算共用**：写死一份的话，"盒子按 3 行留了高度、
 // 画出来只有 1 行"就会以"标题悬在盒子上半截"的样子冒出来
 import {
@@ -727,6 +727,16 @@ export interface PngPalette {
   mutedText: string;
   fontFamily: string;
   theme: Record<ThemeColor, string>;
+  /**
+   * 脑图**所有层级都画框**（设置开关，用户 2026-09-28）。
+   *
+   * ★ 为什么这一个开关搭 `PngPalette` 的便车，而不是给每条导出路各加一个 option：
+   *   色板是**所有**光栅 / SVG 路唯一的共同输入（导出对话框、缩略图、嵌入板、
+   *   模板预览都走 `readPngPalette`）⇒ 挂在这里等于"一处读、处处跟随"。
+   * ★ 值来自 `body` 上那个类暴露的 CSS 变量（`styles.css`）—— 见 `MIND_BOX_ALL_CLASS`。
+   * ★ 可选：老调用方 / 测试夹具不带它 ⇒ `undefined` = 不画（与 `2.1.4` 一致）。
+   */
+  mindBoxAllDepths?: boolean;
 }
 
 const FALLBACK_COLOR = '#888888';
@@ -758,6 +768,8 @@ export function readPngPalette(element: Element): PngPalette {
     mutedText: fallback,
     fontFamily: read('font-family', 'sans-serif'),
     theme,
+    // 只有 `body.nestboard-mind-box-all-depths` 在场时这个变量才存在 ⇒ 缺席 = 关
+    mindBoxAllDepths: read('--nestboard-mind-deep-box', '') === '1',
   };
 }
 
@@ -1071,7 +1083,8 @@ function drawMindNodes(
 
     const depth = box.depth;
     const size = titleSizeOf(depth);
-    const deep = depth >= MIND_DEEP_DEPTH;
+    // ★ 判据与画布、SVG 导出同一份（`deepBoxHidden`）：带上"所有层级都画框"那个开关
+    const deep = deepBoxHidden(depth, palette.mindBoxAllDepths === true);
     const colors = mindPaletteOf(node.style, {
       depth,
       // 主题色在 canvas 里没有 `var()` 可用 ⇒ 用画布那一层已经解析好的十六进制

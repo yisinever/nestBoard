@@ -172,7 +172,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-23 b108';
+  readonly buildStamp = '2026-09-28 b109';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;
@@ -804,6 +804,16 @@ export default class NestboardPlugin extends Plugin {
     //   （与上面那个开关同一条：这是**已打开视图的现场状态**，不是"下次新建才生效"。）
     if (changes.alwaysFullImage !== undefined) {
       for (const view of allBoardViews(this.app)) view.applyImageQualitySetting();
+    }
+
+    // ★ 脑图节点观感档（用户 2026-09-28："四级节点之后没有标题框框了…加个开关"）：
+    //   与图片清晰度**一模一样**的一条 —— 这一档也是在"建节点元素的那一刻"写进 DOM 的，
+    //   已经画好的节点不会自己知道设置变了。白板（板上的脑图）与独立 `.nestmind` 视图
+    //   都要重画；`applyStyleMode()`（在更上面）已经把标记类写到 `body` 上了，
+    //   所以这两处的重画读到的就是新档。
+    if (changes.mindBoxAllDepths !== undefined) {
+      for (const view of allBoardViews(this.app)) view.applyMindBoxSetting();
+      for (const view of allMindViews(this.app)) view.applyMindBoxSetting();
     }
 
     // ── 索引笔记（T7.01 / `F10-09` + `F7-09`） ────────────────

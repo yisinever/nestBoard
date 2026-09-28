@@ -58,6 +58,7 @@ export class NestboardSettingTab extends PluginSettingTab {
     this.renderCanvasSection();
     this.renderMinimapSection();
     this.renderCardSection();
+    this.renderMindSection();
     this.renderAttachmentSection();
     this.renderPrivacySection();
     this.renderMapTileSettings();
@@ -345,6 +346,27 @@ export class NestboardSettingTab extends PluginSettingTab {
         toggle
           .setValue(this.settings.alwaysFullImage)
           .onChange((value) => this.patch({ alwaysFullImage: value })),
+      );
+  }
+
+  /**
+   * 脑图节点的观感（用户 2026-09-28）。
+   *
+   * ★ 单独成节而不是并进"卡片默认外观"：那一节管的都是**卡片**（颜色 / 圆角 / 字号 /
+   *   字体），而这一项说的是白板上另一种一等公民 —— 脑图节点。混在一起的话，
+   *   用户按"卡片"两个字找不到它。
+   * ★ 拨完**不需要回白板重开**：`main.ts` 会把它推给所有已打开的视图
+   *   （`applyMindBoxSetting`），与缩略图导航器 / 图片清晰度同一条分工。
+   */
+  private renderMindSection(): void {
+    this.heading('settings.section.mind');
+    new Setting(this.containerEl)
+      .setName(t('settings.mindBox.name'))
+      .setDesc(t('settings.mindBox.desc'))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.settings.mindBoxAllDepths)
+          .onChange((value) => this.patch({ mindBoxAllDepths: value })),
       );
   }
 

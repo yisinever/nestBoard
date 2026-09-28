@@ -1360,6 +1360,10 @@ const en = {
   'settings.cardFont.name': 'Card font',
   'settings.cardFont.desc': 'A CSS font-family for card text. Leave empty to follow the theme.',
   'settings.cardFont.placeholder': 'Follow the theme',
+  'settings.section.mind': 'Mind map',
+  'settings.mindBox.name': 'Show a box on every mind-map node',
+  'settings.mindBox.desc':
+    'By default the 4th level and deeper drop the box and keep only a thin line under the text (less noise when a tree gets big). Turn this on to give every level the same background and border.',
 
   // ── Sprint 10：画布默认背景（T3.25 / F11-04）────────────────────
   'settings.canvas.name': 'New board canvas',
@@ -2911,6 +2915,10 @@ const zhCn: Record<MessageKey, string> = {
   'settings.cardFont.name': '卡片字体',
   'settings.cardFont.desc': '卡片正文的 CSS font-family。留空表示跟随主题。',
   'settings.cardFont.placeholder': '跟随主题',
+  'settings.section.mind': '脑图',
+  'settings.mindBox.name': '所有层级的脑图节点都显示框',
+  'settings.mindBox.desc':
+    '默认从第 4 级起收起盒子、只留文字下面那一条托底的线（树大了不至于满屏小方块）。打开这一项后每一层都带底色与边框 —— 只换颜色与影子，字号与间距一个字节不变。',
 
   // ── Sprint 10：画布默认背景（T3.25 / F11-04）────────────────────
   'settings.canvas.name': '新建白板画布',

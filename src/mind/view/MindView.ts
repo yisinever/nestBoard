@@ -224,6 +224,7 @@ import { mindKeyActionOf, titleCommitActionOf, titleEditKeyOf } from './keys';
 import { mindMenuItems } from './mindMenu';
 import type { MindMenuActions, MindMenuItemSpec } from './mindMenu';
 import type NestboardPlugin from '../../main';
+import { mindBoxAllDepthsOf } from '../../util/mindBox';
 
 /**
  * **多选**时快捷栏上画哪几件（`N2`，用户 2026-09-16）。
@@ -3564,6 +3565,20 @@ export class MindView extends FileView {
   }
 
   /**
+   * 设置「所有层级的脑图节点都显示框」变了之后重画（用户 2026-09-28）。
+   *
+   * ★ 为什么不能只存设置：节点的配色是在**建元素**那一刻写成 CSS 变量的
+   *   （`render.ts` 的 `applyNodePalette`），已经建好的元素不会自己知道档变了。
+   * ★ 清掉 `rendered` 里那份签名 + 同步重排一次就够：那条判据（见 `paint` 的节点循环）
+   *   发现"签名对不上"就会丢掉旧元素重建 —— 与"模型换了"走的是同一条路，
+   *   不必另写一套"只改颜色"的原地更新（那种更新迟早有两处颜色不同步）。
+   */
+  applyMindBoxSetting(): void {
+    this.rendered.clear();
+    this.relayout();
+  }
+
+  /**
    * 大纲视图的键位分派（`N3-b`）。
    *
    * 返回 `true` = 这一下归大纲（调用方 `preventDefault` 并收工）。
@@ -5732,6 +5747,9 @@ export class MindView extends FileView {
       }
       if (!el) {
         el = buildNodeElement(layer.ownerDocument, node, {
+          // ★ 设置开关「所有层级都画框」（用户 2026-09-28）：从 body 上那个标记类解析
+          //   （与白板上的脑图、卡内嵌的脑图同一个来源，见 `view/themeVars.ts`）
+          boxAllDepths: mindBoxAllDepthsOf(layer.ownerDocument),
           resolveTheme: this.resolveTheme,
           forceBody: editingNote,
           doneBranch,

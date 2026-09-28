@@ -237,6 +237,24 @@ export interface NestboardSettings {
    *   才用原图）—— 那条判据本身就带 `devicePixelRatio`，所以关掉也不等于"一定会糊"。
    */
   alwaysFullImage: boolean;
+  /**
+   * **脑图节点：所有层级都画框**（用户 2026-09-28）。
+   *
+   * ── 这一项为什么是"可切的档"而不是"改掉默认" ──────────────────
+   *
+   * `D3`（用户 2026-09-18）刻意定过："支持 4 级子节点隐藏外框，只保留下方托底的线" ——
+   * 四层往上每一行还顶着"小方块 + 边框"时整片是噪声，深层退成文字更好读。
+   * 但用户 2026-09-28 又反馈"四级节点之后没有标题框框了，只剩纯文字了很难受"。
+   * 两句话不矛盾：这是**口味**（要不要那层噪声 vs 要不要那圈边界），
+   * 所以做成开关、**默认保持关**（= 与 `2.1.4` 逐像素一致这条回归基线不动）。
+   *
+   * ★ 打开它只换**颜色与影子**：`applyNodePalette` 只写那四个颜色变量、
+   *   样式表只收 `box-shadow` ⇒ 字号 / 内边距 / 盒子尺寸一个字节不改，布局不漂。
+   * ★ 三处渲染同源：画布（`mind/view/render.ts`）、PNG 导出、SVG 导出都读
+   *   `deepBoxHidden()`；canvas / SVG 那两条路通过 `body` 上的标记类暴露的
+   *   CSS 变量拿到它（见 `view/themeVars.ts` 的 `MIND_BOX_ALL_CLASS`）。
+   */
+  mindBoxAllDepths: boolean;
 }
 
 /**
@@ -272,6 +290,7 @@ export const DEFAULT_SETTINGS: NestboardSettings = {
   cardStyle: 'classic',
   defaultBackground: 'dots',
   alwaysFullImage: true,
+  mindBoxAllDepths: false,
   snapshotEnabled: true,
   snapshotLocation: 'plugin',
   minimap: false,
@@ -333,6 +352,7 @@ export function normalizeSettings(raw: unknown): NestboardSettings {
     // ★ 默认开（`A5`）：**只有显式 `false` 才算关** —— 旧数据文件里没有这个字段，
     //   升级后应当直接拿到"原图清晰度"（用户报的正是它），而写过 `false` 的人保持关闭
     alwaysFullImage: source.alwaysFullImage !== false,
+    mindBoxAllDepths: source.mindBoxAllDepths === true,
     language: normalizeLanguage(source.language),
     defaultCardColor: normalizeCardColor(source.defaultCardColor),
     cardCornerRadius: normalizeRange(

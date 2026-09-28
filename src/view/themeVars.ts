@@ -12,6 +12,7 @@
  *   只有 `applyCardStyleVariables` 需要真实元素。
  */
 
+import { MIND_BOX_ALL_CLASS } from '../util/mindBox';
 import type { NestboardSettings } from '../settings/settings';
 
 /** 三个外观变量名（与 `styles.css` 里的消费点一一对应） */
@@ -76,6 +77,11 @@ export function applyCardStyleVariables(el: HTMLElement, settings: NestboardSett
  */
 export const BOARD_STYLE_CLASS = 'nestboard-neumorph';
 
+// ★ 脑图"所有层级都画框"的标记类住在 `util/mindBox.ts`（架构约束：脑图不许依赖
+//   白板的视图层，共用的东西只能走 `util/`）—— 这里只是**顺手把它写到 body 上**，
+//   与拟物档同一个咽喉点、同一个时机（`main.ts` 的 `applyStyleMode`）。
+export { MIND_BOX_ALL_CLASS } from '../util/mindBox';
+
 /**
  * 把当前外观档写进根容器（与 {@link applyCardStyleVariables} 同一个咽喉点一起调用）。
  *
@@ -84,6 +90,10 @@ export const BOARD_STYLE_CLASS = 'nestboard-neumorph';
  */
 export function applyBoardStyleClass(el: HTMLElement, settings: NestboardSettings): void {
   el.classList.toggle(BOARD_STYLE_CLASS, settings.cardStyle === 'neumorph');
+  // ★ 脑图"所有层级都画框"（用户 2026-09-28）挂在**同一个咽喉点**上：
+  //   它要作用到白板 / 独立脑图视图 / 卡内嵌的脑图 / 设置面板预览，而 `body`
+  //   是它们唯一的共同祖先。写法与拟物档一致（一个类 = 一个开关）。
+  el.classList.toggle(MIND_BOX_ALL_CLASS, settings.mindBoxAllDepths === true);
 }
 
 /** 移除外观变量（视图卸载 / 复用到别处时清干净，别把上一个用户的偏好留下） */

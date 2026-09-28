@@ -27,6 +27,7 @@ import {
   clamp,
   rectCenter,
   rectContainsPoint,
+  rectEdgeAlongDirection,
   rotatePoint,
   roundTo,
   type Point,
@@ -177,13 +178,24 @@ export function edgeEndpoints(
 
   const fromSide = edge.from.side ?? autoAnchorSide(fromRect, toRect);
   const toSide = edge.to.side ?? autoAnchorSide(toRect, fromRect);
-  // **树连线**（`F7`）的两端锚**卡片中心**（定稿：只连中心点，中段被卡片盖住 ⇒
-  // "不与卡片重叠的部分才显示"由"连线层在卡片背后"白捡）。`side` 仍按自动选边
-  // 给出：下游（箭头方向、标签落点）认的是"方位"，中心锚只是把**点**挪进去。
+  // **树连线**（`F7`）：端点锚在"**两心连线与该卡片边框的交汇处**"。
+  //
+  // ★ 从前锚的是**卡片中心**（定稿原话："只连中心点，中段被卡片盖住 ⇒ 不与卡片
+  //   重叠的部分才显示，由'连线层在卡片背后'白捡"）。但树连线固定 `toEnd: 'arrow'`，
+  //   而箭头画在**路径末端** ⇒ 箭头正好落在卡片正中心、被卡片整个盖住
+  //   （用户 2026-09-28："箭头应该绘制在连线和卡片的交汇处，如果绘制在终点会被
+  //   卡片挡住"）。改成交汇处之后**看得见的那一截线段一个像素都没变**（卡内那截
+  //   本来就被卡片盖着），而箭头、命中测试（`pointEdgeDistance`）、标签落点
+  //   （`edgePathMidpoint`）、框选、导出全都落到了"看得见的这一头" ——
+  //   一处改、处处对（几何只有本函数与 `EdgePath` 这一个来源）。
+  // ★ 旋转照样考虑：交汇点按各自卡片的旋转角算（`rectEdgeAlongDirection`）。
+  // `side` 仍按自动选边给出：下游（箭头方向、标签落点）认的是"方位"。
   if (edge.kind === 'tree') {
+    const fromCenter = rectCenter(fromRect);
+    const toCenter = rectCenter(toRect);
     return {
-      from: rectCenter(fromRect),
-      to: rectCenter(toRect),
+      from: rectEdgeAlongDirection(fromRect, toCenter, endpointAngle(edge.from, angleOf)),
+      to: rectEdgeAlongDirection(toRect, fromCenter, endpointAngle(edge.to, angleOf)),
       fromSide,
       toSide,
     };

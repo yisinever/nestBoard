@@ -7,6 +7,7 @@ import {
   pointerAngleDeg,
   rectCenter,
   rectContainsPoint,
+  rectEdgeAlongDirection,
   rectsIntersect,
   rotatePoint,
   rotatedBoundsOf,
@@ -209,5 +210,38 @@ describe('rotatedBoundsOf', () => {
     const boxCenter = rectCenter(box);
     expect(boxCenter.x).toBeCloseTo(center.x);
     expect(boxCenter.y).toBeCloseTo(center.y);
+  });
+});
+
+/**
+ * 中心射向某点、与矩形边框的交点（`F7` 树连线的箭头要用它落在"看得见的交汇处"）。
+ */
+describe('rectEdgeAlongDirection', () => {
+  const rect = { x: 0, y: 0, width: 100, height: 20 };
+
+  it('朝正右 / 正下 → 落在右边中点 / 下边中点', () => {
+    expect(rectEdgeAlongDirection(rect, { x: 500, y: 10 })).toEqual({ x: 100, y: 10 });
+    expect(rectEdgeAlongDirection(rect, { x: 50, y: 500 })).toEqual({ x: 50, y: 20 });
+  });
+
+  it('斜向：取"先撞上"的那条边（宽扁矩形上是上/下边）', () => {
+    // 中心是 (50,10)：toward 取 (550,510) ⇒ 方向正好 45°，先撞下边（10 比 50 近）
+    const point = rectEdgeAlongDirection(rect, { x: 550, y: 510 });
+    expect(point.x).toBeCloseTo(60);
+    expect(point.y).toBeCloseTo(20);
+  });
+
+  it('★ 转过的矩形按"看起来"的边框算（转了 90° 之后半宽变成原来的半高）', () => {
+    const point = rectEdgeAlongDirection(rect, { x: 500, y: 10 }, 90);
+    expect(point.x).toBeCloseTo(60);
+    expect(point.y).toBeCloseTo(10);
+  });
+
+  it('退化情形返回中心，不返回 NaN', () => {
+    expect(rectEdgeAlongDirection(rect, { x: 50, y: 10 })).toEqual({ x: 50, y: 10 });
+    expect(rectEdgeAlongDirection({ x: 5, y: 5, width: 0, height: 0 }, { x: 99, y: 99 })).toEqual({
+      x: 5,
+      y: 5,
+    });
   });
 });

@@ -7017,6 +7017,17 @@
   box-shadow: none;
 }
 
+/* 设置开关「所有层级的脑图节点都画框」（用户 2026-09-28）
+ *
+ * 类由 `main.ts` 的 `applyStyleMode` 写在 `body` 上（见 `view/themeVars.ts`）。
+ * 这里除了当样式开关，还**对外暴露一个变量**给 canvas / SVG 导出读 ——
+ * 那两条路没有 `settings`，只有 `getComputedStyle`（`toPng.readPngPalette`）。
+ * `1` = 四层及更深也画框；变量缺席 = 不画（与 2.1.4 一致）。
+ * ─────────────────────────────────────────────────────── */
+body.nestboard-mind-box-all-depths {
+  --nestboard-mind-deep-box: 1;
+}
+
 /* ── 完成 / 激活（`N3-g`）────────────────────────────────
  *
  * 两档**分开**画、不叠加：

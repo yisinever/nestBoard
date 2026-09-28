@@ -3759,11 +3759,18 @@ export class BoardView extends FileView {
 
     this.boardSubscriptions.push(
       this.plugin.repository.on('changed', (payload) => {
-        if (payload.path === path) this.applyBoard(payload.board);
+        // ★ 认领判据读 **`this.currentPath`**，而不是闭包里的 `path`
+        //   （用户 2026-09-28 报的"新建卡片有时不立刻显示"的主修）：
+        //   `retargetPath`（改名 / 移动）换得动 `currentPath` 等五处记账，却**够不着**
+        //   这个闭包 —— 板子一改名，仓储发的事件带的全是新路径，这条过滤从此全落空
+        //   ⇒ "改动写进去了、画面不动"，要点开别的文件再点回来（重新 `onLoadFile`）
+        //   才恢复。`currentPath` 在 `detachBoard` 时置 `null`，拆板后的迟到事件照样被挡。
+        if (payload.path === this.currentPath) this.applyBoard(payload.board);
       }),
       this.plugin.repository.on('reloaded', (payload) => {
         // 外部编辑只同步背景与卡片，**不动视口** —— 别把用户的视线顶走
-        if (payload.path === path) this.applyBoard(payload.board);
+        // （认领判据同上：跟着 `currentPath` 走，改名不断线）
+        if (payload.path === this.currentPath) this.applyBoard(payload.board);
       }),
       // 文件脑图（`2.2.0`）：那一份 `.nestmind` 变了（我们改的 / 标签页改的 / 外部编辑）
       // 就要重画 —— 与卡片时代"每张卡各自 `watch`"同一个意思，只是这里一条订阅管全板
@@ -3790,6 +3797,13 @@ export class BoardView extends FileView {
         this.minimap?.syncContent();
       }),
     );
+
+    // ★ 补一次"读仓储里的最新"（同一份报障的保险之二）：订阅是在**异步读文件之后**
+    //   才挂上的 —— 读文件期间若有一笔改动落进仓储（自动保存 / 另一个视图 / 撤销），
+    //   那条 'changed' 就没人认领，画面停在旧样子。仓储里的对象与刚应用的这份
+    //   **不是同一个对象**才应用（幂等：绝大多数时候这一行什么也不做）。
+    const latest = this.plugin.repository.get(path);
+    if (latest && latest !== board) this.applyBoard(latest);
 
     // 板子已加载：面包屑此时才画（层级链要读别的板文件，早画会读到半截）。
     // `O15` 起显示名取**文件名**，不再依赖 `meta.title`
@@ -6108,8 +6122,20 @@ export class BoardView extends FileView {
     if (!changed || before === null) return changed;
 
     this.history.submit({ label, before, after: serializeContent(board), mergeKey });
+    // ★ 下一帧再同步一次（同一份报障的保险之三）：新卡的内容高度要等 DOM 量出来
+    //   （`requestCardSize` → `flushSizes` 本来就在下一帧提交），而第一帧可能碰上
+    //   "容器还没尺寸 / 字体还没就绪"，量到 0 就画成一条线，直到切文件才恢复。
+    //   `frameQueue` 一帧只跑一次，`syncCanvas()` 幂等（各层没变化直接返回），
+    //   所以这次补画几乎是免费的。
+    this.frameQueue.schedule(this.settleAfterCommit);
     return true;
   }
+
+  /** `commit` 之后的下一帧补同步（见 `commit` 尾部的说明） */
+  private readonly settleAfterCommit = (): void => {
+    this.measure();
+    this.syncCanvas();
+  };
 
   /** 批量改卡片的非几何字段（标题 / 显隐 / 配色 / 锁定），走 `commit` 记历史 */
   private patchSelection(label: string, patch: CardPatch): void {
@@ -9031,6 +9057,9 @@ export class BoardView extends FileView {
    * ★ 要换的不只是 `currentPath`。视图里一共有五处记账：
    *   - `currentPath` —— 下一次自动保存写哪儿。漏掉它的表现最糟：往**旧路径**写，
    *     轻则新建回一个"幽灵文件"，重则整段改动报错丢掉；
+   *     ★ 它同时也是**仓库订阅的认领判据**（见 `openBoard` 里那两条订阅）——
+   *     用户 2026-09-28 报的"新建卡片有时不立刻显示"正是它：从前订阅闭包里
+   *     捕获的是旧 `path`，改名之后事件全部被过滤 ⇒ "写进去了、画面不动"。
    *   - `navHistory` —— `⌘[` 跳回哪块板。漏掉它就会去打开一个不存在的文件；
    *   - `boardParentPath` —— `⌘U` 的可用态缓存；
    *   - `replayTarget` —— 回放的认领凭据，不跟着走会让下一次 `⌘[` 认错板；
@@ -11797,6 +11826,27 @@ export class BoardView extends FileView {
    */
   applyImageQualitySetting(): void {
     this.refreshCards();
+  }
+
+  /**
+   * 设置「所有层级的脑图节点都显示框」（用户 2026-09-28）改动后重画板上的脑图。
+   *
+   * ★ 节点的配色 / 影子是在**建节点元素**那一刻写下的（`mind/view/render.ts` 的
+   *   `applyNodePalette`）⇒ 换档必须让那些元素重建。`clear()` + `refreshCards()`
+   *   就是最短的一条重建路（`clear()` 摘掉全部容器、`refreshCards()` 立刻按新档重挂），
+   *   与"换板"走的是同一条，不必另写一套"只改颜色"的原地更新。
+   * ★ 选区要**补推一次**：`clear()` 会连同"哪几棵被选中"一起忘掉，而这条推
+   *   （`mindLayer.setSelection`）平时只在选区变化时发生 —— 不补的话用户会看到
+   *   "拨一下开关，选中的树掉线了"。
+   */
+  applyMindBoxSetting(): void {
+    if (!this.mindLayer) return;
+    this.mindLayer.clear();
+    this.refreshCards();
+    this.mindLayer.setSelection(this.selection.mindIds);
+    this.mindLayer.setNodeSelection(this.selection.mindNodeKeys);
+    // 缩略图里那几格是照着同一棵树画的 ⇒ 也要跟着换档
+    this.minimap?.syncContent();
   }
 
   // ── 卡片属性面板（`B1`，用户 2026-09-18）──────────────────────

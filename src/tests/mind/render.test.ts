@@ -106,6 +106,26 @@ describe('buildNodeElement', () => {
     );
   });
 
+  it('★ 设置「所有层级都画框」打开：四层及更深照旧带底色（用户 2026-09-28）', () => {
+    const node = createMindNode({ text: '甲', style: { color: '#4c8dff' } });
+    const palette = mindPaletteOf(node.style);
+
+    const deep = asEl(buildNodeElement(doc(), node, { depth: 4, boxAllDepths: true }));
+    expect(deep.classList.contains('is-deep')).toBe(false);
+    expect(deep.style.getPropertyValue('--nestboard-mind-title-bg')).toBe(palette.title);
+    expect(deep.style.getPropertyValue('--nestboard-mind-body-bg')).toBe(palette.body);
+
+    // ★ 打开它**只换颜色与影子**：字号与间距一个字节不改，否则布局会漂
+    const plain = asEl(buildNodeElement(doc(), node, { depth: 4 }));
+    expect(deep.style.getPropertyValue('--nestboard-mind-title-size')).toBe(
+      plain.style.getPropertyValue('--nestboard-mind-title-size'),
+    );
+
+    // 关着（缺席）= 与 2.1.4 逐像素一致：四层照样收盒子
+    const off = asEl(buildNodeElement(doc(), node, { depth: 4 }));
+    expect(off.classList.contains('is-deep')).toBe(true);
+  });
+
   it('标题是纯文本一行；没有内容时**不建内容块**（空块会白占一行高）', () => {
     const el = asEl(buildNodeElement(doc(), createMindNode({ text: '甲', note: '' })));
 

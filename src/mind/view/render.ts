@@ -43,7 +43,7 @@ export {
   edgeTrunkPathOf,
 };
 import {
-  MIND_DEEP_DEPTH,
+  deepBoxHidden,
   mindPaletteOf,
   titleBoldOf,
   titleSizeOf,
@@ -363,7 +363,8 @@ export function applyNodePalette(
   //   transparent` 都不会生效（这是最容易"改完没反应"的一处）。
   // ★ 只动**颜色**：字号 / 内边距 / 盒子尺寸一个字节不改 —— 那些数在
   //   `palette.ts` 与布局估算里各有一份，改一处就会让布局漂（见下面那段说明）。
-  const deep = (options.depth ?? 1) >= MIND_DEEP_DEPTH;
+  // ★ 判据走 `deepBoxHidden`（与两个导出同一份）：带上设置开关"所有层级都画框"
+  const deep = deepBoxHidden(options.depth ?? 1, options.boxAllDepths === true);
   el.classList.toggle('is-deep', deep);
 
   el.style.setProperty('--nestboard-mind-title-bg', deep ? 'transparent' : palette.title);

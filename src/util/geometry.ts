@@ -86,6 +86,36 @@ export function rectCenter(rect: Rect): Point {
 }
 
 /**
+ * 从矩形**中心**朝 `toward` 走，与矩形**边框**的交点。
+ *
+ * ★ 用途（`F7` 树连线的箭头，用户 2026-09-28）：树连线的两端锚的是"卡片中心"
+ *   （中段被卡片盖住 ⇒ 只露卡外的那一截，见 `model/edges.ts` 的 tree 分支），
+ *   于是画在路径末端的箭头正好落进卡片里、**看不见**。要让它落在"看得见的
+ *   交汇处"，就得把端点算到"中心 → 对方中心"这条射线与边框的交点上。
+ * ★ `deg` 是矩形自身的旋转角（卡片 T7.06 会转）：做法是"把方向**转进矩形的局部
+ *   坐标系**求交，再转回来"—— 在局部系里矩形永远轴对齐，交点只有两行公式
+ *   （`halfW / |ux|` 与 `halfH / |uy|` 取小者）。
+ * ★ 退化情形一律返回中心，绝不返回 `NaN`：两心重合（方向长度 0）、自由端那种
+ *   零尺寸矩形（`edges.endpointRect` 造的"退化成点的卡片"）都在此列。
+ */
+export function rectEdgeAlongDirection(rect: Rect, toward: Point, deg = 0): Point {
+  const center = rectCenter(rect);
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length === 0) return center;
+  const ux = dx / length;
+  const uy = dy / length;
+  // 只转**方向向量**：绕原点转 `-deg`，于是局部系里的矩形是轴对齐的
+  const local = deg === 0 ? { x: ux, y: uy } : rotatePoint({ x: ux, y: uy }, { x: 0, y: 0 }, -deg);
+  const sx = Math.abs(local.x) < 1e-9 ? Infinity : rect.width / 2 / Math.abs(local.x);
+  const sy = Math.abs(local.y) < 1e-9 ? Infinity : rect.height / 2 / Math.abs(local.y);
+  const distance = Math.min(sx, sy);
+  if (!Number.isFinite(distance)) return center;
+  return { x: center.x + ux * distance, y: center.y + uy * distance };
+}
+
+/**
  * 角度归一化到 `(-180, 180]`（度）。
  *
  * ★ 卡片旋转（T7.06）存的就说这个区间的值：不归一化的话，同一个方向可以有

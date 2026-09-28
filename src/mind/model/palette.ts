@@ -110,6 +110,23 @@ export const MIND_TITLE_SIZES: readonly number[] = [30, 18, 14];
  */
 export const MIND_DEEP_DEPTH = 4;
 
+/**
+ * 这个深度的节点这一帧**要不要收起盒子**（= 走 `D3` 那套"深层只剩文字"的观感）。
+ *
+ * ★ 判据只此一处：画布（`mind/view/render.ts`）与两个导出（`export/toSvg.ts` /
+ *   `export/toPng.ts`）三处各写一遍 `depth >= MIND_DEEP_DEPTH` 的话，迟早有一处
+ *   忘了跟着新开关走 —— 那处的表现是"画布上有框、导出的图里没有"。
+ *
+ * ★ `boxAllDepths` 来自设置里的开关（用户 2026-09-28："四级节点之后没有标题框框了，
+ *   只剩纯文字了很难受，可以在设置里添加一个显示框框的开关，开了之后所有脑图节点
+ *   都显示框框"）。默认 `false` = 与 `2.1.4` 逐像素一致。
+ * ★ 打开它**只换颜色与影子**（`applyNodePalette` 只写那四个颜色变量、样式表只收
+ *   `box-shadow`）⇒ 字号 / 内边距 / 盒子尺寸一个字节不改，布局不会漂。
+ */
+export function deepBoxHidden(depth: number, boxAllDepths = false): boolean {
+  return !boxAllDepths && depth >= MIND_DEEP_DEPTH;
+}
+
 /** 某个深度的标题字号（越界取最后一个 —— 那是"后续所有层级"） */
 export function titleSizeOf(depth: number): number {
   const index = Math.min(Math.max(0, Math.floor(depth)), MIND_TITLE_SIZES.length - 1);
@@ -145,6 +162,15 @@ export interface MindPaletteOptions {
    *   于是所有既有调用（含单测）行为不变。
    */
   depth?: number;
+  /**
+   * **所有层级都画盒子**（设置开关，用户 2026-09-28）：打开之后四层及更深也带
+   * 底色 / 边框 / 影子。缺席 = 关（与 `2.1.4` 一致）。
+   *
+   * ★ 由**视图侧**解析后传进来（画布是 `EmbedMind` / `MindView` 从 body 上的
+   *   标记类读，见 `view/themeVars.ts`）—— 本文件与 `render.ts` 保持纯逻辑，
+   *   不碰 DOM，单测里那 125 条既有断言才不用改一行。
+   */
+  boxAllDepths?: boolean;
   /**
    * 主题色编号 → 具体色号。**渲染层注入**（读一次 CSS 变量即可）。
    * 不传 = 用 {@link THEME_COLOR_FALLBACK} 的近似值。

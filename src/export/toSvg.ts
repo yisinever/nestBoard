@@ -39,7 +39,7 @@ import { isThemeColor } from '../model/schema';
 import type { BoardBackground, BoardFile, Card, CardColor } from '../model/schema';
 import { mindNodeRects, mindPlacement } from '../mind/embed/boardGeometry';
 import { childSideOf, edgePathOf, edgeTrunkPathOf } from '../mind/layout/edges';
-import { MIND_DEEP_DEPTH, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
+import { deepBoxHidden, mindPaletteOf, titleBoldOf, titleSizeOf } from '../mind/model/palette';
 import type { MindFile } from '../mind/model/schema';
 import { nodeEndpointKey } from '../model/schema';
 import { normalizeHex } from '../util/color';
@@ -661,7 +661,8 @@ function mindElements(
       if (!node) continue;
       const depth = box.depth;
       const size = titleSizeOf(depth);
-      const deep = depth >= MIND_DEEP_DEPTH;
+      // ★ 与画布 / PNG 导出同一份判据（含"所有层级都画框"那个开关）
+      const deep = deepBoxHidden(depth, palette.mindBoxAllDepths === true);
       const colors = mindPaletteOf(node.style, {
         depth,
         resolveTheme: (color) => resolveColor(color, palette),

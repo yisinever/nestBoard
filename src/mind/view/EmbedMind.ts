@@ -43,6 +43,7 @@
 
 import type { Point, Rect, Size } from '../../util/geometry';
 import { roundTo } from '../../util/geometry';
+import { mindBoxAllDepthsOf } from '../../util/mindBox';
 import { EMBED_PADDING } from '../embed/embedGeometry';
 import { estimateNodeSize } from '../layout/measure';
 import {
@@ -414,6 +415,10 @@ export class EmbedMind {
       const el = buildNodeElement(this.doc, node, {
         // 字号 / 配色按**层级**定（根 30px 加粗、一层 18、其余 14）—— 与画布上同一套
         depth: layout.boxes.get(node.id)?.depth ?? 1,
+        // ★ 设置开关「所有层级都画框」（用户 2026-09-28）：本类拿不到 `settings`
+        //   （它在卡片 / 白板 / 独立视图三处都被复用），所以从 body 上那个标记类解析 ——
+        //   三处的文档不同，但类是三处共用的（`main.ts` 统一维护）
+        boxAllDepths: mindBoxAllDepthsOf(this.doc),
         resolveResource: this.options.resolveResource,
         refMissing: this.options.refMissing,
         renderMarkdown: this.options.renderMarkdown,
