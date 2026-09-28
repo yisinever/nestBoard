@@ -43,7 +43,9 @@ import {
   type Column,
   type EdgeEndpoint,
 } from '../../model/schema';
+import { edgeEndpoints } from '../../model/edges';
 import { rectContainsPoint, type Point, type Rect } from '../../util/geometry';
+import { AutoScroller, type ScreenPoint } from './AutoScroller';
 import type { OverlayLayer } from '../render/OverlayLayer';
 import type { Viewport } from '../../canvas/Viewport';
 import { hitTest, resolveEndpoint, type EndpointKind } from './HitTest';
@@ -206,6 +208,13 @@ export class ConnectController {
 
   /** 唯一一组锚点，按 {@link ANCHOR_SIDES} 顺序 */
   private readonly anchors = new Map<AnchorSide, HTMLElement>();
+  /**
+   * 拖动中的**贴边自动滚屏**（用户 2026-09-28："线拖出屏幕时候，屏幕应该会滚动"）。
+   * 会话开始（`onPointerMove` 里见到会话）就启动，松手 / 取消就停。
+   */
+  private readonly autoScroll = new AutoScroller();
+  /** 指针此刻的屏幕位置（`onPointerMove` 持续喂给自动滚屏） */
+  private pointerScreenPoint: ScreenPoint | null = null;
   /** 端点重拖的两个手柄（`2.2.0` · O1）；本视图不给 `activeEdge` 时永远隐藏 */
   private readonly endHandles = new Map<'from' | 'to', HTMLElement>();
   private readonly endHandleBindings: Array<{ handle: HTMLElement; listener: EventListener }> = [];
@@ -296,6 +305,7 @@ export class ConnectController {
 
   dispose(): void {
     this.cancel();
+    this.autoScroll.stop();
     for (const { type, listener } of this.bound) this.host.removeEventListener(type, listener);
     this.bound.length = 0;
     for (const { anchor, listener } of this.anchorBindings) {
@@ -333,7 +343,7 @@ export class ConnectController {
     for (const end of ['from', 'to'] as const) {
       const handle = this.endHandles.get(end);
       if (!handle) continue;
-      const screen = this.endpointScreenPointOf(edge[end]);
+      const screen = this.endpointScreenPointOf(edge, end);
       if (!screen) {
         handle.setCssStyles({ display: 'none' });
         continue;
@@ -342,6 +352,26 @@ export class ConnectController {
       handle.style.top = `${screen.y - bounds.top}px`;
       handle.setCssStyles({ display: '' });
     }
+  }
+
+  /**
+   * 自动滚屏的宿主（见 {@link AutoScroller}）。
+   *
+   * ★ `panBy` 收**世界**位移：屏幕像素除以 zoom。它自己会 notify ⇒ 画布重画免费。
+   */
+  private autoScrollHost() {
+    return {
+      pointerScreen: () => this.pointerScreenPoint,
+      viewportBounds: () => {
+        const bounds = this.hostBounds();
+        return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom };
+      },
+      active: () => this.session !== null,
+      panByScreen: (dx: number, dy: number) => {
+        const zoom = this.viewport.zoom > 0 ? this.viewport.zoom : 1;
+        this.viewport.panBy(dx / zoom, dy / zoom);
+      },
+    };
   }
 
   private hideEndHandles(): void {
@@ -354,17 +384,19 @@ export class ConnectController {
    * ★ 绑到卡片 / 分栏 / 节点上时取**视觉**几何（栏内滚过的成员差一个偏移，T2.03）——
    *   与锚点、命中、高亮四处共用同一份（`rectOfKey`）。
    */
-  private endpointScreenPointOf(endpoint: EdgeEndpoint): Point | null {
-    if (isFreeEndpoint(endpoint)) {
-      const point = endpoint.point;
+  private endpointScreenPointOf(edge: { from: EdgeEndpoint; to: EdgeEndpoint }, end: 'from' | 'to'): Point | null {
+    if (isFreeEndpoint(edge[end])) {
+      const point = edge[end].point;
       if (!point) return null;
       return this.viewport.toScreen({ x: point.x, y: point.y });
     }
-    const key = endpointAnchorKey(endpoint);
-    const rect = key ? this.rectOfKey(this.hoveredOf(key)) : null;
-    if (!rect) return null;
-    const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    return this.viewport.toScreen(centre);
+    // ★ 把手对准**画出来的那个锚点**（用户 2026-09-28："调整把手距离起点和终点
+    //   位置都太远了"）：从前取的是端点矩形的**中心** —— 卡片一大，中心离边框上的
+    //   锚点就有几十上百 px，把手看起来"飘在卡中间"。锚点几何只有
+    //   `edgeEndpoints` 一个来源（与画线 / 命中同一份），转过的卡片也一起对齐。
+    const endpoints = edgeEndpoints(edge, (key) => this.rectOfKey(this.hoveredOf(key)));
+    if (!endpoints) return null;
+    return this.viewport.toScreen(end === 'from' ? endpoints.from : endpoints.to);
   }
 
   /**
@@ -408,7 +440,11 @@ export class ConnectController {
   }
 
   private onPointerMove(event: PointerEvent): void {
+    // 指针位置随时记着：自动滚屏的循环每一帧都要问（拖出画布的事件坐标照旧有效）
+    this.pointerScreenPoint = { x: event.clientX, y: event.clientY };
     if (this.session) {
+      // 贴边自动滚屏（用户 2026-09-28）：会话中途启动一次即可，循环每帧自问自答
+      this.autoScroll.start(this.autoScrollHost());
       this.updatePreview(event);
       return;
     }
@@ -474,6 +510,7 @@ export class ConnectController {
     // 松手点下面那个端点（**不排除**起点）：用来把"落在空白"与"落回自己"分开
     const under = this.endpointAtPoint(world, null);
     this.session = null;
+    this.autoScroll.stop();
     this.overlay.clear();
     this.stateMachine.escape();
 

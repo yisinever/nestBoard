@@ -168,7 +168,10 @@ function endpointRect(endpoint: EdgeEndpoint, rectOf: RectLookup): Rect | null {
  * 绕得过去）。
  */
 export function edgeEndpoints(
-  edge: Edge,
+  // ★ 只收**用到的字段**（两端 + 树连线标记）：视图层有时手里只有"半成品"
+  //   （端点重拖手柄那里只有一条线首尾的引用），为了摆一个把手去凑一整条
+  //   `Edge` 是本末倒置 —— 结构子类型让两边都不用改。
+  edge: Pick<Edge, 'from' | 'to'> & { kind?: Edge['kind'] },
   rectOf: RectLookup,
   angleOf?: AngleLookup,
 ): EdgeEndpoints | null {
