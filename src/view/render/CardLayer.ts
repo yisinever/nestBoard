@@ -53,6 +53,27 @@ import { t } from '../../util/i18n';
 import type { Viewport } from '../../canvas/Viewport';
 
 /**
+ * **正文编辑态**的卡片临时的 `z-index`。
+ *
+ * ★ 编辑态要把卡片抬到最前（下面 `applyCard` 里写）：用户 2026-09-28 报的是
+ *   "卡比标题行还矮时，编辑内容被挡到"；这一版的做法是**编辑时把卡片撑高**，
+ *   撑高之后它会盖住旁边的卡 —— 而 `z-index` 是按 `card.z` 逐个内联写的，
+ *   光靠 CSS 类提不动，只能在这儿换一个更大的值。
+ * ★ 退出编辑后下一帧照旧写回 `card.z`，所以不需要任何"恢复"代码。
+ */
+const EDITING_CARD_Z = 999999;
+
+/**
+ * **正文编辑态**至少把卡片撑到这么高（世界 px；约 5 行正文 + 标题行）。
+ *
+ * ★ 为什么改卡片的高，而不是让内容槽溢出卡片：溢出那一路要**整条祖先链**都
+ *   `overflow: visible` 才看得见（上一版就是这么写的，用户实测"感觉没突出"）。
+ *   撑高之后编辑区始终在卡片**里面**：一个字不会被裁，也不需要任何浮层。
+ * ★ 只改**这一帧**写下去的 `style.height`，模型里一个字节不动（`03 §2.7` 的字段表
+ *   是定稿的，不该为一个"正在编辑"的瞬时状态加字段）。
+ */
+const EDITING_CARD_MIN_HEIGHT = 180;
+/**
  * 8 个尺寸手柄的方位（T1.37）：四角 + 四边。
  *
  * 方位名就是 CSS 里的定位名（`nw` = 左上），拖动控制器按它决定"现在哪条边在动"。
@@ -626,6 +647,7 @@ export class CardLayer {
       'is-selected',
       'is-sole-selected',
       'is-editing-title',
+      'is-editing-content',
       'has-accent',
       // 过滤 / 编组标记也必须清掉（T3.14 / T3.17）：池里复用的节点带着上一次的
       // 状态，下一张卡会在完全无关的时候变淡、或者莫名显示成"编组成员"
@@ -794,8 +816,18 @@ export class CardLayer {
     style.width = `${card.width}px`;
     // ★ `O31`：收起时只有标题行那么高。`cardDisplayHeight` 是**唯一**口径 ——
     //   几何那边（`cardRect` / `BoardView.toCardRect`）用的是同一个函数
-    style.height = `${cardDisplayHeight(card)}px`;
-    style.zIndex = String(card.z);
+    // ★★ 正文**编辑态**（用户 2026-09-28："便签卡，当卡片的尺寸内容框高度小于标题框
+    //   高度时，此时编辑内容要避免输入的内容被挡到"）——三件事一起做，缺一件就白做：
+    //   1. 外壳加 `is-editing-content`（样式表据此收掉"编辑态内容槽"那几条）；
+    //   2. **抬到本层最前**：`z-index` 是按 `card.z` 逐个内联写的，光靠 CSS 类提不动；
+    //   3. **把卡片临时撑到能写字的高**（`EDITING_CARD_MIN_HEIGHT`）。
+    //   ★ 只改这一帧写下去的 `style.height`，模型一个字不动；退出编辑下一帧照旧写回。
+    const editing = this.options.modeOf(card) === 'edit';
+    element.classList.toggle('is-editing-content', editing);
+    style.height = `${
+      editing ? Math.max(cardDisplayHeight(card), EDITING_CARD_MIN_HEIGHT) : cardDisplayHeight(card)
+    }px`;
+    style.zIndex = String(editing ? EDITING_CARD_Z : card.z);
 
     // 旋转（T7.06 / `F2-00-10`）：绕**自身中心**转，`left/top/width/height` 一个都不动
     //（见 `schema.CardBase.rotation`）。`transform-origin` 由样式表钉成 `center`。
