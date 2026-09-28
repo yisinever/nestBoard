@@ -178,6 +178,8 @@ export function renderNoteEditor(
     value: md,
     onSubmit: (value) => (submit ? submit(value) : ctx.updateContent({ md: value })),
     onExit: () => ctx.setMode('display'),
+    // ★ ⌘C / ⌘X 的落点（用户 2026-09-28：卡内输入框拷不出东西）：与粘贴图走同一条注入
+    copyText: (text) => void ctx.clipboard?.writeText(text),
     // 截图直接粘进正文（`F5`）：落盘规则由视图给，卡片只转交
     pasteImage: ctx.pasteImage,
     suggestLinks: ctx.suggestLinks,

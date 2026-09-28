@@ -204,6 +204,13 @@ export interface CardLayerOptions {
   registry: CardTypeRegistry;
   /** 每张卡此刻的呈现模式。参与指纹，因此模式一变就会重绘 */
   modeOf: (card: Card) => CardViewMode;
+  /**
+   * 把一段文字写进系统剪贴板（标题框里的 ⌘C / ⌘X 用）。
+   *
+   * ★ 与 `MiniMarkdownEditor` 的同名端口一条口径：渲染层不 import `obsidian`，
+   *   写剪贴板这件事由视图注入（`BoardView.clipboardBridge`）。
+   */
+  copyText?: (text: string) => void;
   /** 为本卡构造渲染上下文（视图注入 app / 路径 / Markdown 渲染器等能力） */
   createContext: (card: Card, contentEl: HTMLElement) => CardRenderContext;
   /**

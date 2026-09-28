@@ -360,6 +360,15 @@ export interface MiniMarkdownEditorOptions {
    * ★ 不注入 = 不做补全（`[[` 就是普通文本，照旧）。
    */
   suggestLinks?: (query: string) => readonly LinkCandidate[];
+  /**
+   * 把一段文字写进系统剪贴板（⌘C / ⌘X 用）。
+   *
+   * ★ 为什么由外面注入：编辑器是**共享层**（不许 import `obsidian`），而"写剪贴板"
+   *   在桌面端有平台差异（`navigator.clipboard` vs `execCommand`）——
+   *   那条路已经有一个 `ClipboardBridge`（`integration/ObsidianClipboardBridge`）。
+   * ★ 不给就退回原生行为：那时 ⌘C 能不能用取决于宿主（见文件头那条）。
+   */
+  copyText?: (text: string) => void;
 }
 
 /**
@@ -402,6 +411,9 @@ export class MiniMarkdownEditor {
       this.pasteImage = options.pasteImage;
       textarea.addEventListener('paste', this.onPaste);
     }
+    // ★ 与 `pasteImage` 不同：它**不在 `if` 里** —— 复制是独立的一件事，
+    //   不给粘贴端口也该能复制（见选项表 `copyText`）
+    this.copyText = options.copyText;
     if (options.suggestLinks) {
       this.suggestLinks = options.suggestLinks;
       textarea.addEventListener('input', this.onInput);
@@ -457,6 +469,24 @@ export class MiniMarkdownEditor {
     if (event.isComposing || event.keyCode === 229) return;
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
     const lower = event.key.toLowerCase();
+    // ★★ 复制 / 剪切**自己来**（用户 2026-09-28："便签卡内，内容输入框内，command+c
+    //   拷贝不出任何东西"）：与 ⌘B / ⌘I 同一个理由 —— Obsidian 的内置热键先一步
+    //   `preventDefault()`，原生复制于是没有下文。窗口**捕获**阶段抢下这一下，
+    //   把选中的那段写进剪贴板（`copyText` 由卡片上下文注入，见 `cards/note.ts`），
+    //   然后 `preventDefault` + `stopPropagation`：一次按键只处理一次。
+    if (lower === 'c' || lower === 'x') {
+      const el = this.textarea;
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      if (end <= start) return;
+      const text = el.value.slice(start, end);
+      event.preventDefault();
+      event.stopPropagation();
+      this.copyText?.(text);
+      // 剪切：选中的那段删掉（走 `replaceRange` ⇒ 与别处的改写同一条路，浏览器可撤销）
+      if (lower === 'x') this.replaceRange(start, end, '');
+      return;
+    }
     const marker = lower === 'b' ? '**' : lower === 'i' ? '*' : null;
     if (marker === null) return;
     // 抢在 Obsidian 的内置热键之前把这一下收掉（否则它先 preventDefault 就没有下文了）
@@ -467,6 +497,9 @@ export class MiniMarkdownEditor {
 
   /** 落盘端口（未注入时为 `undefined`，见 `MiniMarkdownEditorOptions.pasteImage`） */
   private pasteImage?: (file: File) => Promise<string | null>;
+
+  /** 见选项表：⌘C / ⌘X 走它写剪贴板（由卡片上下文注入） */
+  private copyText?: (text: string) => void;
 
   // ── `[[` 补全（`F5`）───────────────────────────────────────
 

@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../util/i18n';
 import { createCard, createColumn, createEdge } from '../../model/factories';
 import type { CardMenuItemKey } from '../../cards/registry';
 import {
@@ -43,6 +44,8 @@ function makeActions(overrides: Partial<CardMenuActions> = {}): CardMenuActions 
     bringToFront: vi.fn(),
     sendToBack: vi.fn(),
     copy: vi.fn(),
+
+    copyText: vi.fn(),
     cut: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
@@ -927,5 +930,42 @@ describe('buildCardMenuSpec · 排列与编组（C2）', () => {
       .find((item) => item.id === 'arrange')
       ?.children?.find((item) => item.id === 'split-into-columns');
     expect(split?.disabled).toBe(true);
+  });
+});
+
+/**
+ * 卡内**选中文字**时的「复制」（用户 2026-09-28："右键，复制，实际上是复制出的这个对象。
+ * 应该是，如果有选中文本，则复制出选中的文本"）。
+ *
+ * 两条一起钉：① 有选中 ⇒ 第一项是「复制文字」且绑的是那段文字；
+ * ② 原来的「复制整张卡」**不消失**，只是改名为「复制卡片」。
+ */
+describe('buildCardMenuSpec × 选中文字时的复制（2026-09-28）', () => {
+  const target = createCard('note');
+
+  it('★ 有选中文字：给「复制文字」，run 带上那段文字', () => {
+    const actions = makeActions();
+    const spec = buildCardMenuSpec({
+      selection: [target],
+      target,
+      actions,
+      textSelection: '被选中的那句话',
+    });
+    const item = spec.find((entry) => entry.id === 'copy-text');
+    expect(item?.title).toBe(t('menu.card.copyText'));
+    item?.run?.();
+    expect(actions.copyText).toHaveBeenCalledWith('被选中的那句话');
+    // 「复制整张卡」还在，只是换了名字 —— 两件事各有各的入口
+    expect(spec.find((entry) => entry.id === 'copy-card')?.title).toBe(t('menu.card.copyCard'));
+  });
+
+  it('没有选中文字：老样子（一项「复制」= 整张卡）', () => {
+    const actions = makeActions();
+    const spec = buildCardMenuSpec({ selection: [target], target, actions });
+    expect(spec.find((entry) => entry.id === 'copy-text')).toBeUndefined();
+    const item = spec.find((entry) => entry.id === 'copy');
+    expect(item?.title).toBe(t('menu.card.copy'));
+    item?.run?.();
+    expect(actions.copy).toHaveBeenCalled();
   });
 });

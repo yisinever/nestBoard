@@ -121,6 +121,11 @@ export interface CardMenuActions {
   bringToFront(): void;
   sendToBack(): void;
   /**
+   * 把一段**选中的文字**写进系统剪贴板（用户 2026-09-28：卡内选中文字后右键
+   * "复制"应当复制这段文字，而不是整张卡片）。
+   */
+  copyText(text: string): void;
+  /**
    * 复制进**系统剪贴板**（T4.15 / `F7-07`）。
    *
    * ★ 与 {@link duplicate} 是两件事：那个是"原地再拉一张出来"（不出这块板），
@@ -396,6 +401,14 @@ export interface CardMenuInput {
   selection: readonly Card[];
   /** 被右击的那张 —— 单选时等于 `selection[0]`，多选时是"主目标" */
   target: Card;
+  /**
+   * 此刻卡内**选中的文字**（没有选中就是 `null`）。
+   *
+   * ★ 有选中时，菜单里的「复制」= 复制这段文字（用户 2026-09-28 的原话：
+   *   "右键，复制，实际上是复制出的这个对象。应该是，如果有选中文本，则复制出选中的文本"），
+   *   而"复制整张卡片"另立一项、明确写成「复制卡片」—— 两件事都还在，只是各有名字。
+   */
+  textSelection?: string | null;
   actions: CardMenuActions;
   /** 卡片类型提供的菜单项（引用卡的"打开源笔记""重新链接"…） */
   typeItems?: readonly TypeMenuInput[];
@@ -683,9 +696,21 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
    * ★ 先定义成变量再入数组，是为了给只读判定留一份**引用**（见下面的 `safe`）：
    *   **复制不写模型**，归档板上照样该能用；剪切会删卡，得跟着写操作一起置灰。
    */
+  const textSelection = input.textSelection ?? null;
+  /** 卡内选中了文字 ⇒ 「复制」先给文字（见 `CardMenuInput.textSelection` 的说明） */
+  const copyTextItem: MenuItemSpec | null = textSelection
+    ? {
+        id: 'copy-text',
+        title: t('menu.card.copyText'),
+        icon: 'copy',
+        run: () => actions.copyText(textSelection),
+      }
+    : null;
   const copyItem: MenuItemSpec = {
-    id: 'copy',
-    title: t('menu.card.copy'),
+    // 有选中文字时这一项退成「复制卡片」：不这样的话用户看到的还是「复制」，
+    // 点下去又拿到对象 —— 正是他报的那件事
+    id: textSelection ? 'copy-card' : 'copy',
+    title: t(textSelection ? 'menu.card.copyCard' : 'menu.card.copy'),
     icon: 'copy',
     run: () => actions.copy(),
   };
@@ -857,6 +882,7 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
           },
         ]
       : []),
+    ...(copyTextItem ? [copyTextItem] : []),
     copyItem,
     cutItem,
     {

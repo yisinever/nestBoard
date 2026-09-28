@@ -3064,6 +3064,9 @@ export class BoardView extends FileView {
     this.cardLayer = new CardLayer(world, {
       registry: this.cardRegistry,
       modeOf: (card) => this.modeOf(card),
+      // ★ 标题框里的 ⌘C / ⌘X 由渲染层自己处理，写剪贴板这一个动作从这儿注入
+      //   （渲染层不 import `obsidian`）——与卡片上下文里的 `clipboard` 是同一个桥
+      copyText: (text) => void this.clipboardBridge.writeText(text),
       createContext: (card, contentEl) => this.createCardContext(card, contentEl),
       releaseContent: (contentEl) => this.releaseCardContent(contentEl),
       commitTitle: (cardId, title) => this.setCardTitle(cardId, title),
@@ -10009,10 +10012,34 @@ export class BoardView extends FileView {
    *   分成两份实现的话，右键与长按迟早会漏掉彼此后来加的一项。
    */
   private openCardMenu(cardId: string, at: MouseEvent | { x: number; y: number }): void {
-    const items = this.prepareCardMenu(cardId);
+    // ★ 卡内**选了文字**时，「复制」该给这段文字（用户 2026-09-28）——右击那一刻
+    //   选区还在，正好取一次；点式入口（长按 / 菜单键）没有指针目标，取 `null`。
+    const items = this.prepareCardMenu(
+      cardId,
+      at instanceof MouseEvent ? this.selectedTextAt(at.target) : null,
+    );
     if (items === null) return;
     if (at instanceof MouseEvent) showMenuAtMouse(at, items);
     else showMenuAtPoint(at, items);
+  }
+
+  /**
+   * 这一刻**卡内**选中的文字（没有 / 不在卡里就给 `null`）。
+   *
+   * ★ 判据两条，缺一不可：选区非空，且**锚点就在这张卡的元素里** ——
+   *   否则"在卡片 A 里选了字、去右击卡片 B"会让 B 的菜单冒出一项"复制文字"，
+   *   点下去复制的却是 A 里的那句话。
+   * ★ 只认 `window.getSelection()`（显示态的渲染文字）：编辑态里选中的那段由
+   *   textarea 自己管（`⌘C` 由编辑器接管，见 `MiniMarkdownEditor`）。
+   */
+  private selectedTextAt(target: EventTarget | null): string | null {
+    if (!(target instanceof HTMLElement)) return null;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.anchorNode) return null;
+    const card = target.closest(`[${CARD_ID_ATTR}]`);
+    if (!card || !card.contains(selection.anchorNode)) return null;
+    const text = selection.toString();
+    return text.trim().length > 0 ? text : null;
   }
 
   /**
@@ -10025,7 +10052,10 @@ export class BoardView extends FileView {
    *
    * @returns 菜单项；`null` = 没有这张卡（调用方什么都不做）
    */
-  private prepareCardMenu(cardId: string): MenuItemSpec[] | null {
+  private prepareCardMenu(
+    cardId: string,
+    textSelection: string | null = null,
+  ): MenuItemSpec[] | null {
     const board = this.board;
     if (!board) return null;
     const card = board.cards.find((item) => item.id === cardId);
@@ -10036,6 +10066,7 @@ export class BoardView extends FileView {
     const selection = board.cards.filter((item) => ids.has(item.id));
 
     return buildCardMenuSpec({
+      textSelection,
       selection,
       target: card,
       actions: this.cardMenuActions(),
@@ -10118,6 +10149,7 @@ export class BoardView extends FileView {
       bringToFront: () => this.bringSelectionToFront(),
       sendToBack: () => this.sendSelectionToBack(),
       copy: () => void this.copySelection(),
+      copyText: (text) => void this.clipboardBridge.writeText(text),
       cut: () => void this.cutSelection(),
       duplicate: () => this.duplicateSelection(),
       remove: () => this.deleteSelection(),
