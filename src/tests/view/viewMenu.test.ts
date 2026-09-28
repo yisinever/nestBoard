@@ -32,6 +32,7 @@ function makeActions(record?: ViewMenuAction[]): ViewMenuActions {
     record?.push(action);
   };
   return {
+    findReplace: tap('findReplace'),
     exportPng: tap('exportPng'),
     exportSvg: tap('exportSvg'),
     exportPdf: tap('exportPdf'),
@@ -64,9 +65,11 @@ function disabledIds(state: Partial<ViewMenuState> = {}): string[] {
 }
 
 describe('viewMenuItems × 分组', () => {
-  it('顺序：导出四件套 → 复制链接 → Home / 适应内容，三组各带一条分隔线', () => {
+  it('顺序：查找替换 → 导出四件套 → 复制链接 → Home / 适应内容，四组各带一条分隔线', () => {
+    // 查找替换（用户 2026-09-28）单独一组、放最前：它是"在这块板里找东西"，
+    // 与后面三组的"导出 / 我在哪儿"不同向
     expect(layout()).toBe(
-      'exportPng exportSvg exportPdf exportMarkdown | copyBoardLink | openHome fitContent',
+      'findReplace | exportPng exportSvg exportPdf exportMarkdown | copyBoardLink | openHome fitContent',
     );
   });
 
@@ -76,8 +79,10 @@ describe('viewMenuItems × 分组', () => {
 
   it('分隔线只出现在每组第一项之前：一组之内再画线就把一件事拆成了两件', () => {
     const list = items();
+    // 四组：查找替换（1 项）→ 导出四件套（4 项）→ 复制链接（1 项）→ Home / 适应内容（2 项）
     expect(list.map((item) => item.separatorBefore === true)).toEqual([
       false,
+      true,
       false,
       false,
       false,
@@ -162,6 +167,7 @@ describe('viewMenuItems × 措辞', () => {
 
   it('标题直接复用命令面板的键：从菜单点与从命令面板敲，读到的词一模一样', () => {
     const titles = new Map(items().map((item) => [item.id, item.title]));
+    expect(titles.get('findReplace')).toBe(t('command.findReplace.name'));
     expect(titles.get('exportPng')).toBe(t('command.exportPng.name'));
     expect(titles.get('exportMarkdown')).toBe(t('command.exportMarkdown.name'));
     expect(titles.get('copyBoardLink')).toBe(t('command.copyBoardLink.name'));

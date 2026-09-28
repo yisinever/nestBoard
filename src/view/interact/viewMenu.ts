@@ -24,6 +24,7 @@ import type { MenuItemSpec } from './cardMenu';
  *   （`Record<ViewMenuAction, () => void>`），而不是"渲染时才发现少了一项"。
  */
 export type ViewMenuAction =
+  | 'findReplace'
   | 'exportPng'
   | 'exportSvg'
   | 'exportPdf'
@@ -59,6 +60,11 @@ type Seed = {
  */
 export function viewMenuItems(actions: ViewMenuActions, state: ViewMenuState): MenuItemSpec[] {
   const groups: readonly (readonly Seed[])[] = [
+    // ★ 查找与替换（用户 2026-09-28："替换和查找功能，应该注入右上角的…菜单当中"）：
+    //   单独一组、放最前 —— 它是"在这块板里找东西"，与后面三组的"导出 / 我在哪儿"不同向，
+    //   混进任何一组都会把那一组的语义搅浑（读者会问"查找和导出有什么关系"）。
+    //   标题复用 `command.findReplace.name` ⇒ 与命令面板措辞永远一致（本文件的纪律）。
+    [{ action: 'findReplace', titleKey: 'command.findReplace.name', icon: 'search' }],
     [
       { action: 'exportPng', titleKey: 'command.exportPng.name', icon: 'image' },
       { action: 'exportSvg', titleKey: 'command.exportSvg.name', icon: 'pen-tool' },

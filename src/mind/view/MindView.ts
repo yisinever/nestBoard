@@ -909,6 +909,7 @@ export class MindView extends FileView {
    */
   private mindMenuItems(): MindMenuItemSpec[] {
     const actions: MindMenuActions = {
+      findReplace: () => this.openFindReplace(),
       exportPng: () => void this.exportAs('png'),
       exportSvg: () => void this.exportAs('svg'),
       exportOutlineMarkdown: () => void this.exportAs('outlineMarkdown'),

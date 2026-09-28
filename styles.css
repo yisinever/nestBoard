@@ -7821,6 +7821,28 @@ body.nestboard-mind-box-all-depths {
   display: flex;
 }
 
+/* ★ 滚动条只留**一层**（用户 2026-09-28："切换到复古游戏机之后，显示了两层滚动条"）：
+ *   这个弹层自己有 `max-height: 300px; overflow: auto`，而里面的"页"
+ *   （`.nestboard-emoji-panel`）也有 `max-height: 52vh; overflow-y: auto`
+ *   —— 两层都超了就是两根条。规矩定成：**外层不滚（标签页留在原位）、里层滚**。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-mind-toolbar__popover {
+  overflow: hidden;
+}
+
+.nestboard-mind-toolbar__panels {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 里层的高度按"弹层最大高 - 标签行 - 内边距"给一个确定值：
+   百分比高度在 flex 子项上各家实现不一致，写死更好预测 */
+.nestboard-mind-toolbar__panels > .nestboard-emoji-panel {
+  max-height: 220px;
+}
+
 /* 标记弹层里的两"页"（传统 emoji / 复古游戏机，用户 2026-09-28）：
  * ★ 为什么必须写这一条：`.is-hidden` 在本仓是**逐构件**定义的（各弹层各写一条），
  *   这个弹层从前只有一页、没有这个概念 ⇒ 补上两页之后两页会**一起**显示，
@@ -8453,6 +8475,9 @@ body.nestboard-mind-box-all-depths {
  *   整片网格的对齐立刻看得出歪。
  * ───────────────────────────────────────────────────────── */
 
+/* ★ 滚动条只留**这一层**（用户 2026-09-28：切到像素图标那页出现两根条）：
+ *   网格自己滚（上面的标签页 / 搜索框留在原位），外面那层不滚 —— 见下面
+ *   `.nestboard-icon-grid-host` 那一条。 */
 .nestboard-emoji-panel {
   display: flex;
   flex-direction: column;
@@ -8460,6 +8485,13 @@ body.nestboard-mind-box-all-depths {
   max-height: 52vh;
   padding-right: var(--size-4-1, 4px);
   overflow-y: auto;
+}
+
+/* 选择器弹窗里装网格的那一格：**不滚**（滚动交给 `.nestboard-emoji-panel`），
+   于是无论哪一页都只有一根滚动条 */
+.nestboard-icon-grid-host {
+  max-height: 60vh;
+  overflow: hidden;
 }
 
 .nestboard-emoji-group-title {

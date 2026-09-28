@@ -17,6 +17,7 @@ import { t } from '../../util/i18n';
 
 /** 菜单能触发的动作（`Record` 形式的动作表 ⇒ 视图那边少写一项就编译不过） */
 export type MindMenuAction =
+  | 'findReplace'
   | 'exportPng'
   | 'exportSvg'
   | 'exportOutlineMarkdown'
@@ -65,6 +66,9 @@ export function mindMenuItems(actions: MindMenuActions, state: MindMenuState): M
     // 导入单独一组、放最前（用户 2026-09-28："在脑图右上角菜单中，注入一个导入 .xmind
     // 格式的功能"）：它是"从别处来"的第一步，与后面那些"把这张图发出去"不同向
     [{ action: 'importXmind', titleKey: 'command.mindImportXmind.name', icon: 'file-input' }],
+    // ★ 查找与替换（用户 2026-09-28："替换和查找功能，应该注入右上角的…菜单当中"）：
+    //   脑图这边同样单独一组（同一张浮条、同一条通路 —— 见 `MindView.openFindReplace`）。
+    [{ action: 'findReplace', titleKey: 'command.findReplace.name', icon: 'search' }],
     [
       { action: 'exportPng', titleKey: 'command.mindExportPng.name', icon: 'image' },
       { action: 'exportSvg', titleKey: 'command.mindExportSvg.name', icon: 'pen-tool' },

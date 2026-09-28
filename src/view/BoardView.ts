@@ -10941,6 +10941,7 @@ export class BoardView extends FileView {
    */
   private viewMenuItems(): readonly MenuItemSpec[] {
     const actions: ViewMenuActions = {
+      findReplace: () => this.openFindReplace(),
       exportPng: () => this.exportPng(),
       exportSvg: () => this.exportSvg(),
       exportPdf: () => this.exportPdf(),
