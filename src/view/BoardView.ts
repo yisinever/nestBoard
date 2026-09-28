@@ -271,6 +271,7 @@ import {
   addEdges,
   edgeById,
   edgeEndpoints,
+  edgePolyline,
   edgesIntersecting,
   hitTestEdge,
   normalizeEdgeCurve,
@@ -3319,6 +3320,13 @@ export class BoardView extends FileView {
         !this.navigationController?.isPanning && !this.isReadOnly() && !this.presentation?.active,
       // 锚点 / 落点判定 / 目标高亮都按**看到的位置**算（栏内滚动的成员差一个偏移，T2.03）
       rectOf: (card) => this.visualRectOf(card),
+      // ★ 端点重拖手柄摆到"**画出来的那一端**"（用户 2026-09-28："要放到端点附近"）：
+      //   锚点是卡片边框上的中点，而智能路由会让线先抬头 20px（`ROUTE_STUB`）再绕
+      //   ⇒ 线头在锚点外面一段，把手钉在锚点上就飘着。走**同一条**路径几何
+      //   （`edgePolyline`：与画线 / 命中 / 框选同一个来源），曲线与绕行都自动对上。
+      drawnEndpointOf: (edge, end) => this.drawnEdgeEndPointOf(edge, end),
+      // 退路上算锚点要用的旋转角（从前漏了这一项，转过的卡片上把手会偏出去）
+      angleOf: (cardId) => this.angleOfCard(cardId),
       // ★ 分栏也是端点（`O21`）：它的几何与卡片同出一辙，只是来源不同 ——
       //   折叠态的高度、以及"拖动中的临时矩形"都在这一个函数里收口
       columnRectOf: (column) => this.visualColumnRectOf(column),
@@ -10515,6 +10523,27 @@ export class BoardView extends FileView {
    */
   private curveEndpointsOf(edge: Edge): EdgeEndpoints | null {
     return edgeEndpoints(edge, this.cardRectLookup(), (cardId) => this.angleOfCard(cardId));
+  }
+
+  /**
+   * 一条线**画出来的**那一端（世界坐标）—— 端点重拖手柄摆在这儿。
+   *
+   * ★ 与"画线"必须是同一份几何：`edgePolyline` 正是渲染器画路径用的那个函数，
+   *   输入也照抄 `edgeHitOptions()`（旋转 + 智能路由的障碍表）—— 于是"看到的线头"
+   *   与"把手的圆心"永远是同一个点，缩放 / 曲线 / 绕行都不例外。
+   * ★ 拿不到路径（端点缺矩形等）⇒ `null`，调用方退回锚点几何。
+   */
+  private drawnEdgeEndPointOf(edge: Edge, end: 'from' | 'to'): Point | null {
+    const path = edgePolyline(edge, {
+      rectOf: this.cardRectLookup(),
+      ...this.edgeHitOptions(),
+    });
+    if (!path) return null;
+    // `EdgePath.points` 就是描边要走的点（弧线是 3 个：起点 / 控制点 / 终点；
+    // 折线是折点序列）—— 两端就是本条线的**可见线头**
+    const points = path.points;
+    if (points.length === 0) return null;
+    return end === 'from' ? points[0] : points[points.length - 1];
   }
 
   /** 卡片此刻的旋转角（度）：拖动预览覆盖模型值（T7.06） */

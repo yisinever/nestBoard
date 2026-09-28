@@ -176,7 +176,7 @@ export default class NestboardPlugin extends Plugin {
    *   `document.body.dataset.nestboardBuild` 读的是同一个值。
    * ★★ **每次构建时手工更新它**（与 `06 §11.55` 里记的产物一起）。
    */
-  readonly buildStamp = '2026-09-28 b122';
+  readonly buildStamp = '2026-09-28 b123';
 
   vaultIO!: VaultIO;
   repository!: BoardRepository;

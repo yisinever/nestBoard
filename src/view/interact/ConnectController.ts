@@ -41,6 +41,7 @@ import {
   type BoardFile,
   type Card,
   type Column,
+  type Edge,
   type EdgeEndpoint,
 } from '../../model/schema';
 import { edgeEndpoints } from '../../model/edges';
@@ -106,6 +107,18 @@ export interface ConnectControllerOptions {
     fromSide: AnchorSide,
     to: { key: string } | { key: null; point: Point },
   ) => void;
+  /**
+   * 一条线**画出来的**那一端（世界坐标，`end` = 起点 / 终点侧）。
+   *
+   * ★ 端点重拖手柄摆在这儿（用户 2026-09-28："要放到端点附近"）：锚点与线头之间
+   *   隔着智能路由的"抬头"段（`ROUTE_STUB`），钉在锚点上就飘在线外面。
+   * ★ 为什么由视图给而不是在这里算：算它要一整套输入（视觉矩形、旋转、障碍物、
+   *   曲线覆盖），那全是视图的知识 —— 本控制器只认识"一个 id 换一个矩形"。
+   * ★ 返回 `null`（或没给这个回调）⇒ 退回锚点几何，绝不显示不出来。
+   */
+  drawnEndpointOf?: (edge: Edge, end: 'from' | 'to') => Point | null;
+  /** 卡片此刻的旋转角（度）。只用在上面那条退路上（渲染器一直带着它算）。 */
+  angleOf?: (cardId: string) => number;
   /** 此刻是否允许起手（平移中 / 只读态返回 `false`） */
   canStart?: () => boolean;
   /**
@@ -220,6 +233,10 @@ export class ConnectController {
   private readonly endHandleBindings: Array<{ handle: HTMLElement; listener: EventListener }> = [];
   private readonly activeEdge: ConnectControllerOptions['activeEdge'];
   private readonly onReconnect: ConnectControllerOptions['onReconnect'];
+  /** 见选项表：端点重拖手柄要摆在"画出来的那一端" */
+  private readonly drawnEndpointOf: ((edge: Edge, end: 'from' | 'to') => Point | null) | null;
+  /** 见选项表：退路上算锚点要用的旋转角 */
+  private readonly angleOf: ((cardId: string) => number) | null;
   /** 锚点当前贴着哪个端点（卡片 / 分栏 / 脑图节点）；`null` = 隐藏 */
   private hovered: HoveredTarget | null = null;
   private session: ConnectSession | null = null;
@@ -244,6 +261,8 @@ export class ConnectController {
     this.nodeSource = options.nodes ?? null;
     this.activeEdge = options.activeEdge;
     this.onReconnect = options.onReconnect;
+    this.drawnEndpointOf = options.drawnEndpointOf ?? null;
+    this.angleOf = options.angleOf ?? null;
 
     for (const side of ANCHOR_SIDES) {
       const anchor = document.createElement('div');
@@ -397,11 +416,23 @@ export class ConnectController {
       if (!point) return null;
       return this.viewport.toScreen({ x: point.x, y: point.y });
     }
-    // ★ 把手对准**画出来的那个锚点**（用户 2026-09-28："调整把手距离起点和终点
-    //   位置都太远了"）：从前取的是端点矩形的**中心** —— 卡片一大，中心离边框上的
-    //   锚点就有几十上百 px，把手看起来"飘在卡中间"。锚点几何只有
-    //   `edgeEndpoints` 一个来源（与画线 / 命中同一份），转过的卡片也一起对齐。
-    const endpoints = edgeEndpoints(edge, (key) => this.rectOfKey(this.hoveredOf(key)));
+    // ★★ 优先问"**画出来的那一端**"（用户 2026-09-28："连线的端点控制把手距离端点
+    //   太远，要放到端点附近"）。
+    //
+    //   锚点 ≠ 画出来的线头：智能路由会先让线**抬头**一小段再绕
+    //   （`model/edgeRouting.ROUTE_STUB` = 20 世界 px），于是屏幕上看到的线头
+    //   离卡片边框有 20×zoom 那么远，而把手钉在锚点上就"飘在线外面"。
+    //   几何由视图给（它才有路由的全部输入：视觉矩形、旋转、障碍物、曲线覆盖）——
+    //   本控制器不认识路由，只拿一个点。
+    const drawn = this.drawnEndpointOf?.(edge as Edge, end) ?? null;
+    if (drawn) return this.viewport.toScreen(drawn);
+    // 退路（视图没给回调 / 路径算不出来时）：锚点几何。★ 从前这一句**少传了旋转角**
+    // ⇒ 转过的卡片上把手会偏出去一截（渲染器那边一直是带着 `angleOf` 算的）。
+    const endpoints = edgeEndpoints(
+      edge,
+      (key) => this.rectOfKey(this.hoveredOf(key)),
+      this.angleOf ?? undefined,
+    );
     if (!endpoints) return null;
     return this.viewport.toScreen(end === 'from' ? endpoints.from : endpoints.to);
   }

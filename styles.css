@@ -556,6 +556,32 @@
   color: var(--text-muted);
 }
 
+/* ★ 编辑正文时，内容槽允许**凸出卡片**（用户 2026-09-28："便签卡，当卡片的尺寸内容框
+ * 高度小于标题框高度时，此时编辑内容，整个内容框要突出，超出卡片，避免输入的内容被挡到"）。
+ *
+ * 做法 = 三件事一起，少一件都不成立：
+ *   1. 内容槽在编辑态给一个**能写字的下限高度**（不然它可能只有几像素，字被自己裁掉）；
+ *   2. 内容槽自己 `overflow: visible`（它默认是 `hidden`）⇒ 凸出去的那一截才露得出来；
+ *   3. 凸出去的部分要有**底 + 一圈影子**，看起来像"浮在卡片上的输入框"，而不是漏出来的字。
+ *
+ * ★ 颜色走 `var(--background-primary)` 而不是写死白色：**深色便签**那条规则
+ *   （`.nestboard-card[data-card-type='note']:has(> .is-dark)`）把一整套背景变量
+ *   **重定义在卡片元素上**，后代自动跟随 —— 写死颜色会让黑卡里冒出一块白。
+ * ★ 只对**便签的编辑器**生效（`.nestboard-note-edit`）：别的类型的编辑态各有各的形
+ *   （图片卡编辑时是另一套 UI），一刀切会把它们也顶出卡片。
+ * ★ 卡片外壳本来就是 `overflow: visible`（连线锚点手柄要露在框外），所以不必再动它；
+ *   把这张卡抬到最前由 `CardLayer` 内联写 `z-index`（凸出去的截要压住旁边的卡）。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-card.is-editing-content > .nestboard-card-content.nestboard-note-edit {
+  position: relative;
+  z-index: 1;
+  min-height: var(--nestboard-note-edit-min-height, 112px);
+  overflow: visible;
+  border-radius: var(--nestboard-card-radius, var(--nestboard-radius-lg));
+  background-color: var(--background-primary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+}
+
 /* ── 卡片收起 / 展开（`O31`） ──────────────────────────────
  *
  * 与分栏的折叠同一套语义：收起后**只留标题那一行**。两件事必须一起做 ——
