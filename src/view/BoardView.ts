@@ -405,6 +405,7 @@ import {
   findPresentTarget,
   type PresentTarget,
 } from '../model/presentation';
+import { countBoardMatches, replaceInBoard } from '../model/findReplace';
 import { describeError } from '../util/errors';
 import { normalizeIcon } from '../util/emoji';
 import { joinPath, sanitizeFileName, splitName, uniquePath } from '../util/fileName';
@@ -436,6 +437,7 @@ import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR, VIEW_TYPE_PRESENT_PATH } from '
 // 卡片属性面板（`B1`）：住在右侧边栏，本视图负责把它打开并代它写回
 import { CardInspectorPanelView } from '../ui/CardInspectorPanel';
 import { PresentPathPanelView, type PresentPathHost } from '../ui/PresentPathPanel';
+import { FindReplaceModal } from '../ui/modals/FindReplaceModal';
 import { InkBar } from '../ui/InkBar';
 import { CardFilterBar } from '../ui/CardFilterBar';
 import { openHomeBoard } from '../ui/homeActions';
@@ -11943,6 +11945,25 @@ export class BoardView extends FileView {
         console.warn('[nestboard] 打开演示路径面板失败', error);
       });
     this.focusCanvas();
+  }
+
+  // ── 查找与替换（用户 2026-09-28 §8.5）────────────────────
+  // 判定全在 `model/findReplace.ts`（纯函数、可单测）；这里只喂宿主。
+  // 走 `commit` ⇒ **全部替换也是一步撤销**。
+
+  /** 打开「查找与替换」弹窗（当前块板为范围；白板上的脑图节点一并参与）。 */
+  openFindReplace(): void {
+    new FindReplaceModal(this.app, {
+      count: (query, matchCase) =>
+        this.board ? countBoardMatches(this.board, query, { matchCase }) : 0,
+      replaceAll: (query, replacement, matchCase) => {
+        const board = this.board;
+        if (!board) return false;
+        return this.commit(t('history.findReplace'), (draft) =>
+          replaceInBoard(draft, query, replacement, { matchCase }),
+        );
+      },
+    });
   }
 
   /** 面板的窄接口：路径现在长什么样、怎么改（全部走 `commit`，一步撤销） */

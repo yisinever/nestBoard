@@ -403,6 +403,7 @@ export const RECENT_BOARDS_LIMIT = 20;
 export const COMMAND_IDS = {
   createBoard: 'create-new-board',
   presentPath: 'present-path',
+  findReplace: 'find-replace',
   zoomIn: 'zoom-in',
   zoomOut: 'zoom-out',
   zoomReset: 'zoom-reset',

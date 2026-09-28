@@ -52,6 +52,13 @@ export function registerCommands(plugin: NestboardPlugin): void {
     nameKey: 'command.presentPath.name',
     run: (view) => view.openPresentPathPanel(),
   });
+  // 查找与替换（用户 2026-09-28 §8.5）：当前块板内检索 + 全部替换
+  registerViewCommand(plugin, {
+    id: COMMAND_IDS.findReplace,
+    nameKey: 'command.findReplace.name',
+    hotkeys: [{ modifiers: ['Mod', 'Alt'], key: 'f' }],
+    run: (view) => view.openFindReplace(),
+  });
 
   // 画布导航（F1-03 / F1-04；默认键位见 02 §4.3）
   registerViewCommand(plugin, {
