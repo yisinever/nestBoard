@@ -25,6 +25,7 @@
 
 import { t, type MessageKey } from '../util/i18n';
 import { EMOJI_GROUPS, type EmojiGroupKey } from '../util/emoji';
+import { renderIconInto } from '../util/iconValue';
 import { THEME_COLOR_OPTIONS } from '../util/color';
 import { themeColorPreviewOf } from '../mind/model/palette';
 import type { CardColor, HexColor, ThemeColor } from '../model/schema';
@@ -365,7 +366,8 @@ export function buildNodeToolbar(doc: Document, options: NodeToolbarOptions): No
     bold.classList.toggle('is-active', node?.bold === true);
     italic.classList.toggle('is-active', node?.italic === true);
     underline.classList.toggle('is-active', node?.underline === true);
-    icon.textContent = node && node.icon.length > 0 ? node.icon : '🙂';
+    // ★ 标记按钮的图：走同一个解析口 —— 像素图标在这里是一枚小 SVG（用户 2026-09-28）
+    renderIconInto(icon, node && node.icon.length > 0 ? node.icon : '🙂');
     ink.classList.toggle('has-value', Boolean(node?.ink));
     highlight.classList.toggle('has-value', Boolean(node?.highlight));
     color.classList.toggle('has-value', Boolean(node?.color));

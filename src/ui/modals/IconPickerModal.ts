@@ -1,41 +1,30 @@
 /**
- * 卡面图标选择器（`O10`；`C3` 从"一列清单"改成"按组网格"）。
+ * 卡面图标选择器（`O10`；`C3` 网格化；用户 2026-09-28：**第二种图标类型**）。
  *
- * 给白板卡挑一个 emoji，画在标题行左边 —— 一眼认出"这是哪块板"。
+ * ── 两个标签页 ──────────────────────────────────────────────
  *
- * ── `C3` 改了什么（用户 2026-09-18："标记调整，支持目前的 emoji，界面美化"）──
+ * ① **Emoji**（原有那份 `EMOJI_GROUPS`，一个字节没动）；
+ * ② **复古游戏机**（像素图标包，96 个 / 10 组，`ui/pixelIconGrid.ts`）——
+ *    选中的值以 `nb:0101` 这种前缀串存进原来的 `icon` 字段（`util/iconValue.ts`），
+ *    老文件零迁移；卡面 / 快捷操作栏经同一个解析口渲染。
  *
- * 从前是 `SuggestModal`：一列文字，找一个 `🔵` 要在一列里扫；而**同一份** `EMOJI_GROUPS`
- * 在脑图的快捷操作栏里却是按类分组的（`08 §3.1`）—— 同一个东西两种待遇。
- * 现在换成 `Modal` + 输入框 + 网格（`ui/emojiGrid.ts` 那份纯构件），两处呈现终于同源。
- *
- * ★ 输入框保留**两种含义**（与 `emojiSuggestions` 同一条口径）：
- *   打 / 粘一个 emoji ⇒ 最前面钉一格"就是它"（系统表情面板挑出来的必须选得中）；
- *   打文字 ⇒ 按分组标题筛（"时间""办公"）。
- * ★ 不 import 视图、不认识白板：它只把选中的 emoji 通过 `onDone` 交回去。
- * ★ 取消（`Esc` / 点外面）不回调 —— 与从前那条约定一致："清除图标"在右键菜单里有自己的一项。
+ * ★ 输入框的两种含义不变（打 / 粘一个 emoji ⇒ 钉一格"就是它"；打文字 ⇒ 按组名 /
+ *   图标名过滤）。★ 取消（`Esc` / 点外面）不回调 —— 「清除图标」在右键菜单里有自己的一项。
  */
 
 import { Modal, type App } from 'obsidian';
 
 import { buildEmojiGrid, type EmojiGridHandle } from '../emojiGrid';
+import { buildPixelIconGrid, type PixelIconGridHandle } from '../pixelIconGrid';
 import { t, type MessageKey } from '../../util/i18n';
 import type { EmojiGroupKey } from '../../util/emoji';
 
-/**
- * 分组标题的 i18n 键。
- *
- * ★ 由 `EmojiGroupKey` **推出来**（`mind.emojiGroup.<key>`），不另立一张映射表：
- *   那 10 条键本来就是按分组键命名的，另写一张表只会多一处会与 `EMOJI_GROUPS` 漂的对。
- * ★ 那几条键是脑图那边先立的（`ui/QuickBar.ts`），这里只是复用 —— 同一个分组
- *   在两处必须叫同一个名字。
- */
-function groupTitleKey(key: EmojiGroupKey): MessageKey {
-  return `mind.emojiGroup.${key}` as MessageKey;
-}
+type Tab = 'emoji' | 'pixel';
 
 export class IconPickerModal extends Modal {
-  private grid: EmojiGridHandle | null = null;
+  private grid: EmojiGridHandle | PixelIconGridHandle | null = null;
+  private tab: Tab = 'emoji';
+  private query = '';
 
   constructor(
     app: App,
@@ -51,11 +40,63 @@ export class IconPickerModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
+    // ── 标签页 ──
+    const tabs = contentEl.createDiv({ cls: 'nestboard-icon-tabs' });
+    const buttons: Array<{ tab: Tab; label: string }> = [
+      { tab: 'emoji', label: t('modal.iconPicker.tab.emoji') },
+      { tab: 'pixel', label: t('modal.iconPicker.tab.pixel') },
+    ];
+    const tabButtons = new Map<Tab, HTMLElement>();
+    for (const entry of buttons) {
+      const button = tabs.createEl('button', { text: entry.label });
+      button.classList.toggle('is-active', entry.tab === this.tab);
+      button.addEventListener('click', () => {
+        this.tab = entry.tab;
+        for (const [tab, element] of tabButtons)
+          element.classList.toggle('is-active', tab === this.tab);
+        this.renderGrid();
+      });
+      tabButtons.set(entry.tab, button);
+    }
+
     const search = contentEl.createEl('input', { cls: 'nestboard-emoji-search' });
     search.type = 'text';
     search.placeholder = t('modal.iconPicker.desc');
+    search.addEventListener('input', () => {
+      this.query = search.value;
+      this.grid?.filter(this.query);
+    });
 
-    this.grid = buildEmojiGrid(contentEl.ownerDocument, {
+    const container = contentEl.createDiv();
+    this.renderGridInto(container);
+
+    search.focus();
+  }
+
+  /** 按当前标签页重造网格（切换标签页时整块换掉；搜索词保留并立即生效） */
+  private renderGrid(): void {
+    const container = this.contentEl.querySelector('.nestboard-icon-grid-host');
+    if (container) container.empty();
+    this.renderGridInto(container as HTMLElement);
+  }
+
+  private renderGridInto(container: HTMLElement): void {
+    container.empty();
+    this.grid = null;
+    if (this.tab === 'pixel') {
+      const grid = buildPixelIconGrid(container.ownerDocument, {
+        current: this.current,
+        onPick: (value) => {
+          this.onDone(value);
+          this.close();
+        },
+      });
+      grid.filter(this.query);
+      container.appendChild(grid.element);
+      this.grid = grid;
+      return;
+    }
+    const grid = buildEmojiGrid(container.ownerDocument, {
       current: this.current,
       titleOf: (key) => t(groupTitleKey(key)),
       onPick: (icon) => {
@@ -63,15 +104,23 @@ export class IconPickerModal extends Modal {
         this.close();
       },
     });
-    contentEl.appendChild(this.grid.element);
-
-    search.addEventListener('input', () => this.grid?.filter(search.value));
-    // 焦点给输入框：想从系统表情面板粘一个的时候，这里就是落点
-    search.focus();
+    grid.filter(this.query);
+    container.appendChild(grid.element);
+    this.grid = grid;
   }
 
   override onClose(): void {
     this.grid = null;
     this.contentEl.empty();
   }
+}
+
+/**
+ * 分组标题的 i18n 键。
+ *
+ * ★ 由 `EmojiGroupKey` **推出来**（`mind.emojiGroup.<key>`），不另立一张映射表：
+ *   那 10 条键本来就是按分组键命名的，另写一张表只会多一处会与 `EMOJI_GROUPS` 漂的对。
+ */
+function groupTitleKey(key: EmojiGroupKey): MessageKey {
+  return `mind.emojiGroup.${key}` as MessageKey;
 }

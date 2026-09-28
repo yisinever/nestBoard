@@ -225,6 +225,8 @@ import { mindMenuItems } from './mindMenu';
 import type { MindMenuActions, MindMenuItemSpec } from './mindMenu';
 import type NestboardPlugin from '../../main';
 import { mindBoxAllDepthsOf } from '../../util/mindBox';
+import { FindReplaceModal } from '../../ui/modals/FindReplaceModal';
+import { countMindMatches, replaceInMind } from '../../model/findReplace';
 
 /**
  * **多选**时快捷栏上画哪几件（`N2`，用户 2026-09-16）。
@@ -3562,6 +3564,21 @@ export class MindView extends FileView {
   /** 设置变更后由 `main.ts` 推过来（与白板那份同签名，`main.ts` 可以一视同仁地推） */
   applyMinimapSetting(visible: boolean): void {
     this.showMinimap(visible);
+  }
+
+  // ── 查找与替换（用户 2026-09-28 §8.5）────────────────────
+  // 与白板同一个弹窗、同一对纯函数（`model/findReplace.ts`）—— 改的只是宿主：
+  // 这里走 `edit()` ⇒ **全部替换也是一步撤销**（与白板的 commit 同一条纪律）。
+
+  /** 打开「查找与替换」弹窗（范围 = 这份 `.nestmind` 的全部节点文字）。 */
+  openFindReplace(): void {
+    new FindReplaceModal(this.app, {
+      count: (query, matchCase) => countMindMatches(this.mind?.nodes ?? [], query, { matchCase }),
+      replaceAll: (query, replacement, matchCase) =>
+        this.edit(t('history.findReplace'), (draft) =>
+          replaceInMind(draft.nodes, query, replacement, { matchCase }),
+        ) === true,
+    });
   }
 
   /**

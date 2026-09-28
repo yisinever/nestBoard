@@ -24,6 +24,7 @@
  */
 
 import { cardIconOf } from '../cards/cardIcon';
+import { iconExportText } from '../util/iconValue';
 import { columnDisplayHeight } from '../model/columns';
 import { IDENTITY_CROP, clampCrop } from '../model/crop';
 // 白板级脑图（`2.2.0` 批 4）：导出这一侧**自己再画一遍**（canvas 读不到 DOM 样式），
@@ -1551,7 +1552,7 @@ function drawCards(
       // 标记（`O38`）：跟着标题一起画在最前面（屏幕上它在标题行最前、跟着标题字号）
       // ★ 走 `cardIconOf`：白板卡的标记在**内容**里（`BoardRefContent.icon`），
       //   读卡级那个键会漏掉它（屏幕上画着、导出图里没有）
-      const mark = cardIconOf(card);
+      const mark = iconExportText(cardIconOf(card));
       const titleText = mark.length > 0 ? `${mark} ${card.title}` : card.title;
       const clipped = wrapText((text) => ctx.measureText(text).width, titleText, titleWidth).slice(
         0,

@@ -27,6 +27,7 @@
 
 import type { CardTitleStyle } from '../model/schema';
 import type { Size } from '../util/geometry';
+import { renderIconInto } from '../util/iconValue';
 import { t } from '../util/i18n';
 import type { CardRenderContext, CardTypeDefinition } from './registry';
 
@@ -84,7 +85,8 @@ export const titleCard: CardTypeDefinition<'titleCard'> = {
     if (icon.length > 0) {
       const mark = doc.createElement('span');
       mark.className = 'nestboard-title-card-icon';
-      mark.textContent = icon;
+      // ★ 像素图标在这里变成一行 SVG（`renderIconInto` 认不出时清空，与"没设"一致）
+      renderIconInto(mark, icon);
       row.appendChild(mark);
     }
 

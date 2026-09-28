@@ -34,6 +34,7 @@ import { openBoardListPanel } from './ui/BoardListPanel';
 import { openBoardSearchPanel } from './ui/BoardSearchPanel';
 import { openTemplateLibrary } from './ui/templateActions';
 import { getActiveBoardView, openBoardView } from './view/BoardViewHost';
+import { getActiveMindView } from './mind/view/host';
 import type NestboardPlugin from './main';
 
 export function registerCommands(plugin: NestboardPlugin): void {
@@ -52,12 +53,21 @@ export function registerCommands(plugin: NestboardPlugin): void {
     nameKey: 'command.presentPath.name',
     run: (view) => view.openPresentPathPanel(),
   });
-  // 查找与替换（用户 2026-09-28 §8.5）：当前块板内检索 + 全部替换
-  registerViewCommand(plugin, {
+  // 查找与替换（用户 2026-09-28 §8.5）：当前块板（含板上的脑图）或当前 `.nestmind`
+  // ★ 两类视图接的是同一个弹窗（宿主不同：白板走 `commit`、脑图走 `edit`，都是一步撤销）
+  plugin.addCommand({
     id: COMMAND_IDS.findReplace,
-    nameKey: 'command.findReplace.name',
+    name: t('command.findReplace.name'),
     hotkeys: [{ modifiers: ['Mod', 'Alt'], key: 'f' }],
-    run: (view) => view.openFindReplace(),
+    checkCallback: (checking) => {
+      const board = getActiveBoardView(plugin.app);
+      const mind = getActiveMindView(plugin.app);
+      if (!board && !mind) return false;
+      if (checking) return true;
+      if (board) board.openFindReplace();
+      else mind?.openFindReplace();
+      return true;
+    },
   });
 
   // 画布导航（F1-03 / F1-04；默认键位见 02 §4.3）

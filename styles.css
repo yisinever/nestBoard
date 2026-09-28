@@ -9693,3 +9693,37 @@ body.theme-dark.nestboard-neumorph .nestboard-card {
      侧壁 —— 8.10.2/8.10.3 的教训）。深浅主题各自动跟（颜色取自主题那对中性暗）。 */
   background: color-mix(in srgb, var(--nestboard-neu-dark) 12%, transparent);
 }
+
+/* ── 第二种图标：复古游戏机像素图标（用户 2026-09-28） ─────────
+ * SVG 由 `util/iconValue.renderIconInto` 拼出来，`pixelated` 保证放大后
+ * 仍是硬边像素而不是糊成一片；尺寸跟所在格子 / 标题行的字号走（1em）。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-pixel-icon {
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  vertical-align: -0.125em;
+  image-rendering: pixelated;
+}
+
+/* 选择器的两个标签页（Emoji / 复古游戏机） */
+.nestboard-icon-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.nestboard-icon-tabs button {
+  padding: 2px 10px;
+  border-radius: var(--nestboard-radius);
+  border: 1px solid var(--background-modifier-border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.nestboard-icon-tabs button.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}

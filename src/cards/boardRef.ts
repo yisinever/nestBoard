@@ -63,6 +63,7 @@ import { planBoardWindow, paintBoardThumbnail } from '../export/boardThumb';
 import { readPngPalette } from '../export/toPng';
 import type { BoardFile, BoardRefContent, CardOfType } from '../model/schema';
 import { normalizeIcon } from '../util/emoji';
+import { renderIconInto } from '../util/iconValue';
 import { newBoardRefContent } from '../model/factories';
 import { describeError } from '../util/errors';
 import type { Size } from '../util/geometry';
@@ -277,7 +278,8 @@ export const boardRefCard: CardTypeDefinition<'boardRef'> = {
     const emoji = normalizeIcon(card.content.icon);
     if (emoji.length > 0) {
       icon.classList.add('is-emoji');
-      icon.textContent = emoji;
+      // ★ 画的是**归一之后**的值（脏值在门口就拦掉，别把控制字符带进 DOM）
+      renderIconInto(icon, emoji);
     }
 
     const title = doc.createElement('span');
@@ -501,6 +503,7 @@ function paintSummary(
 function createMiniMark(doc: Document, icon: string | undefined): HTMLElement {
   const el = doc.createElement('span');
   el.className = 'nestboard-board-ref-mini-icon';
+  renderIconInto(el, normalizeIcon(icon));
   const emoji = normalizeIcon(icon);
   if (emoji.length > 0) {
     el.classList.add('is-emoji');
