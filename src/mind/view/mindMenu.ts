@@ -23,6 +23,7 @@ export type MindMenuAction =
   | 'exportMarkdown'
   | 'exportFreeMind'
   | 'exportXmind'
+  | 'importXmind'
   | 'fit'
   | 'toggleOutline';
 
@@ -61,6 +62,9 @@ type Seed = {
  */
 export function mindMenuItems(actions: MindMenuActions, state: MindMenuState): MindMenuItemSpec[] {
   const groups: readonly (readonly Seed[])[] = [
+    // 导入单独一组、放最前（用户 2026-09-28："在脑图右上角菜单中，注入一个导入 .xmind
+    // 格式的功能"）：它是"从别处来"的第一步，与后面那些"把这张图发出去"不同向
+    [{ action: 'importXmind', titleKey: 'command.mindImportXmind.name', icon: 'file-input' }],
     [
       { action: 'exportPng', titleKey: 'command.mindExportPng.name', icon: 'image' },
       { action: 'exportSvg', titleKey: 'command.mindExportSvg.name', icon: 'pen-tool' },

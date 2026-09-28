@@ -225,6 +225,10 @@ import { mindMenuItems } from './mindMenu';
 import type { MindMenuActions, MindMenuItemSpec } from './mindMenu';
 import type NestboardPlugin from '../../main';
 import { mindBoxAllDepthsOf } from '../../util/mindBox';
+import { ImportXmindModal } from './ImportXmindModal';
+import { unzipTextEntries } from '../io/unzip';
+import { importXmindEntries } from '../io/fromXmind';
+
 import { FindBar } from '../../ui/FindBar';
 import { applyFindHighlight, clearFindHighlight } from '../../ui/findHighlight';
 import { findMindMatches, replaceInMind, replaceMindMatch } from '../../model/findReplace';
@@ -914,8 +918,48 @@ export class MindView extends FileView {
       exportXmind: () => void this.exportAs('xmind'),
       toggleOutline: () => this.toggleOutline(),
       fit: () => this.fitContent(),
+      importXmind: () => this.importXmind(),
     };
     return mindMenuItems(actions, { loaded: this.mindLoaded });
+  }
+
+  /**
+   * 导入 `.xmind`（用户 2026-09-28："导入的话，会直接替换当前脑图内容"）。
+   *
+   * ★ 走 `edit()` ⇒ **导入也是一步撤销**（与其它改动同一条纪律）—— 用户点错了不必手忙脚乱。
+   * ★ 只取标题 / 层级 / 备注（与导出的裁剪口径对称，见 `io/fromXmind.ts`）；
+   *   老格式（`content.xml`）与坏文件都给**明确的提示**，不猜着解析。
+   */
+  private importXmind(): void {
+    new ImportXmindModal(this.app, (file) => {
+      if (file) void this.applyXmindFile(file);
+    }).open();
+  }
+
+  private async applyXmindFile(file: TFile): Promise<void> {
+    try {
+      const buffer = await this.app.vault.readBinary(file);
+      const entries = await unzipTextEntries(buffer);
+      const result = importXmindEntries(entries);
+      if (!result.ok) {
+        new Notice(
+          result.reason === 'no-content' ? t('notice.xmindNoContent') : t('notice.xmindBadFile'),
+        );
+        return;
+      }
+      const applied = this.edit(t('history.mindImportXmind'), (draft) => {
+        draft.nodes = result.nodes;
+        draft.rootId = result.rootId;
+        return true;
+      });
+      if (applied === true) {
+        // 导入之后旧选中已经不存在（节点表整体换了）⇒ 选中新的中心主题
+        this.selectNode(result.rootId);
+        new Notice(t('notice.xmindImported', { count: result.nodes.length }));
+      }
+    } catch (error) {
+      new Notice(t('notice.xmindImportFailed', { error: describeError(error) }));
+    }
   }
 
   addChildToSelection(): void {
