@@ -1772,6 +1772,18 @@ export class BoardView extends FileView {
    * @returns 真的写进剪贴板了才返回 `true`（`cutSelection` 靠它决定要不要删源卡）
    */
   async copySelection(): Promise<boolean> {
+    // ★★ **有选中的文字就先复制文字**（用户 2026-09-28："快捷键复制，如果选中文本，
+    //   就不要复制对象，而是复制文本"）。
+    //
+    //   为什么守在这里：`⌘C` 是**命令**（`commands.ts` 的 `COMMAND_IDS.copySelection`，
+    //   热键 `Mod+C`），而 Obsidian 的热键管理器**在输入框里照样触发它** ——
+    //   标题框里按 `⌘C` 于是同时发生两件事：本视图写的文本 vs 命令写的卡片对象，
+    //   后写进剪贴板的那个赢（命令那次是异步的，所以赢的是**对象**）。
+    //   与其在四条入口（命令 / 右键 / 快捷键 / 编辑器）各判一遍，不如守在
+    //   "复制对象"这个**唯一出口**上。
+    const selectedText = this.selectedTextForCopy();
+    if (selectedText !== null) return this.clipboardBridge.writeText(selectedText);
+
     const board = this.board;
     const ids = [...this.selection.cardIds];
     // ★ 整棵脑图也能进剪贴板（`2.2.0` 批 4 五）：载荷里多一个 `minds`
@@ -1825,6 +1837,34 @@ export class BoardView extends FileView {
   }
 
   /**
+   * 此刻"用户选中的文字"（没有就 `null`）。
+   *
+   * ★ 两个来源都要看：
+   *   1. **焦点元素**（`input` / `textarea`）的选区 —— 标题框、卡内编辑器、查找框都在这一档；
+   *      它们的选区**不会**出现在 `window.getSelection()` 里（textarea 的选区不走文档选区）。
+   *   2. **文档选区** —— 显示态里渲染出来的文字（拖选卡片正文那一路）。
+   * ★ 判据是"有没有选中文字"，不关心选在哪儿：这与用户的口径一致
+   *   （"如果选中文本，就不要复制对象"）。
+   */
+  private selectedTextForCopy(): string | null {
+    const active = this.containerEl.ownerDocument.activeElement;
+    if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) {
+      const start = active.selectionStart ?? 0;
+      const end = active.selectionEnd ?? 0;
+      if (end > start) {
+        const text = active.value.slice(start, end);
+        if (text.length > 0) return text;
+      }
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      const text = selection.toString();
+      if (text.trim().length > 0) return text;
+    }
+    return null;
+  }
+
+  /**
    * `⌘X`：复制到剪贴板后**从当前板删掉**。
    *
    * ★ 删除照旧走 `commit`，所以这是一次**可 `⌘Z` 撤销**的操作 —— 剪切之后又不想粘了，
@@ -1833,6 +1873,14 @@ export class BoardView extends FileView {
    * ★ 写剪贴板失败就**不删**：不能让用户的一次剪切把卡片弄丢（见 `copySelection`）。
    */
   async cutSelection(): Promise<void> {
+    // ★ 有选中文字时**只复制、不删卡**（同一条口径）：否则在标题框里按 `⌘X`
+    //   会"剪走了文字、顺带删掉卡片" —— 那是数据事故。
+    const selectedText = this.selectedTextForCopy();
+    if (selectedText !== null) {
+      await this.clipboardBridge.writeText(selectedText);
+      return;
+    }
+
     const copied = await this.copySelection();
     // `await` 期间用户可能已经切走 / 板子被改成只读：重新验一次再删
     if (!copied || this.isReadOnly()) return;
