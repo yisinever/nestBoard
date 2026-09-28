@@ -33,6 +33,14 @@ export interface EmojiGridOptions {
   /** 分组标题（**已经翻译过**的）。标题由调用方给，本文件不认识 i18n */
   titleOf: (key: EmojiGroupKey) => string;
   onPick: (emoji: string) => void;
+  /**
+   * 每建一格登记一次（`QuickBar` 用它记"当前值"的照表，不查 DOM）—— 与
+   * `pixelIconGrid` 的同名回调一条口径。
+   *
+   * ★ 只登记**有意义的值**：钉在最前面那一格建的时候是空的（它随输入框变），
+   *   登记一个空串只会让"当前值"的照表里多一条永远匹配不上的记录。
+   */
+  register?: (cell: HTMLElement, value: string) => void;
 }
 
 export interface EmojiGridHandle {
@@ -129,6 +137,7 @@ function buildCell(doc: Document, emoji: string, options: EmojiGridOptions): HTM
   cell.type = 'button';
   cell.className = 'nestboard-emoji-cell';
   applyCell(cell, emoji, options.current);
+  if (emoji.length > 0) options.register?.(cell, emoji);
   cell.addEventListener('pointerdown', (event: Event) => event.stopPropagation());
   cell.addEventListener('click', (event: Event) => {
     event.stopPropagation();

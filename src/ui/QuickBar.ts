@@ -24,8 +24,8 @@
  */
 
 import { t, type MessageKey } from '../util/i18n';
-import { EMOJI_GROUPS, type EmojiGroupKey } from '../util/emoji';
-import { buildPixelIconGrid } from './pixelIconGrid';
+import { type EmojiGroupKey } from '../util/emoji';
+import { buildIconPickerPanel } from './iconPickerPanel';
 import { renderIconInto } from '../util/iconValue';
 import { THEME_COLOR_OPTIONS } from '../util/color';
 import { themeColorPreviewOf } from '../mind/model/palette';
@@ -413,81 +413,23 @@ function buildIconPopover(
   afterPick: () => void,
   register: (element: HTMLElement, value: string) => void,
 ): void {
-  // ★ 两个标签页（用户 2026-09-28："没有看到图标选择器两个标签页"）：
-  //   白板卡的标记走 `IconPickerModal`（那里本来就有两页），而**脑图节点**的标记
-  //   一直用这条自建的弹层 —— 顺手把它也补上同一套两页，两处口径就一致了。
-  const tabs = doc.createElement('div');
-  tabs.className = 'nestboard-icon-tabs';
-  const panels = doc.createElement('div');
-  panels.className = 'nestboard-mind-toolbar__panels';
-
-  const groups = doc.createElement('div');
-  groups.className = 'nestboard-mind-toolbar__groups';
-
-  const emojiTab = doc.createElement('button');
-  emojiTab.type = 'button';
-  emojiTab.textContent = t('modal.iconPicker.tab.emoji');
-  emojiTab.classList.add('is-active');
-  const pixelTab = doc.createElement('button');
-  pixelTab.type = 'button';
-  pixelTab.textContent = t('modal.iconPicker.tab.pixel');
-
-  const pixelPanel = doc.createElement('div');
-  const pixelGrid = buildPixelIconGrid(doc, {
+  // ★ 与白板卡的标记选择器**同一个构件**（`iconPickerPanel`）：两页、固定高的视口、
+  //   每页自己滚、滚轮归面板 —— 用户 2026-09-28 对这条弹层的原话是"整个组件最好规划一下
+  //   重写"，而重写的落点就是"两处合成一处"（从前这里自己搭标签页 + 分组行）。
+  const panel = buildIconPickerPanel(doc, {
+    tabLabels: {
+      emoji: t('modal.iconPicker.tab.emoji'),
+      pixel: t('modal.iconPicker.tab.pixel'),
+    },
+    searchPlaceholder: t('modal.iconPicker.desc'),
+    emojiTitleOf: (key) => t(GROUP_LABEL_KEYS[key]),
     onPick: (value) => {
       options.onIcon(value);
       afterPick();
     },
     register,
   });
-  pixelPanel.appendChild(pixelGrid.element);
-  pixelPanel.classList.add('is-hidden');
-
-  const selectTab = (pixel: boolean): void => {
-    emojiTab.classList.toggle('is-active', !pixel);
-    pixelTab.classList.toggle('is-active', pixel);
-    groups.classList.toggle('is-hidden', pixel);
-    pixelPanel.classList.toggle('is-hidden', !pixel);
-  };
-  emojiTab.addEventListener('click', () => selectTab(false));
-  pixelTab.addEventListener('click', () => selectTab(true));
-
-  tabs.appendChild(emojiTab);
-  tabs.appendChild(pixelTab);
-  popover.appendChild(tabs);
-  panels.appendChild(groups);
-  panels.appendChild(pixelPanel);
-
-  for (const group of EMOJI_GROUPS) {
-    const row = doc.createElement('div');
-    row.className = 'nestboard-mind-toolbar__group';
-
-    const label = doc.createElement('span');
-    label.className = 'nestboard-mind-toolbar__group-label';
-    // ★ 键写成**字面量映射**而不是模板串：`t()` 的键是联合类型，
-    //   拼出来的字符串过不了类型（也就少了"加了分组忘了加文案"这种错）
-    label.textContent = t(GROUP_LABEL_KEYS[group.key]);
-    row.appendChild(label);
-
-    const strip = doc.createElement('div');
-    strip.className = 'nestboard-mind-toolbar__strip';
-    for (const emoji of group.emojis) {
-      const button = doc.createElement('button');
-      button.type = 'button';
-      button.className = 'nestboard-mind-toolbar__emoji';
-      button.textContent = emoji;
-      button.title = emoji;
-      button.addEventListener('click', () => {
-        options.onIcon(emoji);
-        afterPick();
-      });
-      register(button, emoji);
-      strip.appendChild(button);
-    }
-    row.appendChild(strip);
-    groups.appendChild(row);
-  }
-  popover.appendChild(panels);
+  popover.appendChild(panel.element);
 
   popover.appendChild(
     clearButton(doc, t('mind.toolbar.clearMark'), () => {

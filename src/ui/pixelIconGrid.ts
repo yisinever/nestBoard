@@ -1,12 +1,13 @@
 /**
  * **像素图标**的分组网格（用户 2026-09-28 第二种图标）。
  *
- * ★ 与 `emojiGrid` 同一套样式类（`.nestboard-emoji-*`）⇒ 观感天然一致；
- *   单独一个构件而不去改造 emoji 那份，是因为两边的"格子内容"不同
- *   （emoji 是一个字符、像素图标是一枚 SVG + 一个 `nb:` 值）—— 硬塞同一个构件
- *   要加三条可选回调，不如各自五十行。
+ * ★ 与 `emojiGrid` 分工相同（各画一页、都交给 `iconPickerPanel` 搭骨架），但**样式类
+ *   自成一套**（`.nestboard-iconpicker__pixels` / `__pixel`）：像素图标要的是
+ *   "**每行 8 个正方形底框**"（用户 2026-09-28 明确要求），与 emoji 那种"一个字符一格"
+ *   的排法不是同一张网格 —— 共用一套类名的话，改这边的列数会连带改坏那边。
  * ★ 过滤口径：组标题命中 ⇒ 整组显隐；否则按**格子**的搜索文本（名字 + 组名）；
  *   都没命中 ⇒ 照旧显示全部（与 emojiGrid 第 2 条同一条人情味）。
+ * ★ 滚轮 / 滚动条**不归本文件**：页自己滚、滚轮归面板，见 `iconPickerPanel`。
  */
 
 import { PIXEL_ICON_GROUPS, type PixelIcon } from './icons/pixelIcons';
@@ -33,7 +34,7 @@ export function buildPixelIconGrid(
   options: PixelIconGridOptions,
 ): PixelIconGridHandle {
   const root = doc.createElement('div');
-  root.className = 'nestboard-emoji-panel';
+  root.className = 'nestboard-pixel-panel';
 
   interface GroupView {
     section: HTMLElement;
@@ -48,7 +49,7 @@ export function buildPixelIconGrid(
   ): { cell: HTMLElement; search: string } => {
     const cell = doc.createElement('button');
     cell.type = 'button';
-    cell.className = 'nestboard-emoji-cell';
+    cell.className = 'nestboard-iconpicker__pixel';
     const value = pixelIconValue(icon);
     cell.dataset.value = value;
     renderIconInto(cell, value);
@@ -65,13 +66,13 @@ export function buildPixelIconGrid(
 
   for (const group of PIXEL_ICON_GROUPS) {
     const section = doc.createElement('section');
-    section.className = 'nestboard-emoji-section';
+    section.className = 'nestboard-pixel-section';
     const heading = doc.createElement('div');
-    heading.className = 'nestboard-emoji-group-title';
+    heading.className = 'nestboard-pixel-group-title';
     heading.textContent = group.title;
     section.appendChild(heading);
     const grid = doc.createElement('div');
-    grid.className = 'nestboard-emoji-grid';
+    grid.className = 'nestboard-iconpicker__pixels';
     const cells = group.icons.map((icon) => {
       const entry = buildCell(icon, group.title);
       grid.appendChild(entry.cell);

@@ -130,9 +130,8 @@ describe('按钮集（`features`）', () => {
     expect(toolbar.openIconPicker()).toBe(true);
     const popover = mustFind(root, 'nestboard-mind-toolbar__popover');
     expect(popover.classList.contains('is-open')).toBe(true);
-    expect(findAllByClass(popover, 'nestboard-mind-toolbar__group')).toHaveLength(
-      EMOJI_GROUPS.length,
-    );
+    // 弹层里就是那套**分组网格**（与点按钮打开的是同一个构件）
+    expect(findAllByClass(popover, 'nestboard-emoji-section')).toHaveLength(EMOJI_GROUPS.length);
   });
 
   it('★ 多选那一组（`MULTI_NODE_FEATURES`）：**没有**连线那一格', () => {
@@ -210,12 +209,18 @@ describe('快捷操作栏', () => {
     const popover = mustFind(root, 'nestboard-mind-toolbar__popover');
     expect(popover.classList.contains('is-open')).toBe(true);
 
-    const emojis = findAllByClass(popover, 'nestboard-mind-toolbar__emoji');
+    // ★ 格子从**分节**里取（`nestboard-emoji-cell` 也包括"钉在最前面那一格"，
+    //   而它随输入框变、此刻是空的 —— 按分节取就自然排除了它）
+    const sections = findAllByClass(popover, 'nestboard-emoji-section');
+    const emojis = sections.flatMap((section) => findAllByClass(section, 'nestboard-emoji-cell'));
     // 每一组的候选都在（顺序 = `EMOJI_GROUPS` 的顺序）——这一条把"数据只有一份"钉住
     expect(emojis.map((button) => button.textContent)).toEqual([...EMOJI_CHOICES]);
-    expect(findAllByClass(popover, 'nestboard-mind-toolbar__group')).toHaveLength(
-      EMOJI_GROUPS.length,
-    );
+    expect(sections).toHaveLength(EMOJI_GROUPS.length);
+    // ★ 两页（用户 2026-09-28："第一个标签页支持传统 emoji，第二个标签页全部是复古游戏机"）：
+    //   这条弹层与白板卡的标记选择器**同一个构件** ⇒ "两处各写一遍"在结构上不存在了
+    expect(
+      findAllByClass(popover, 'nestboard-iconpicker__tab').map((button) => button.textContent),
+    ).toEqual([t('modal.iconPicker.tab.emoji'), t('modal.iconPicker.tab.pixel')]);
     // ★ 断言走 `t()` 而不是写死中文：文案是**语言相关**的，钉住中文会让英文环境下
     //   这条用例莫名其妙地红（而它要钉的是"有个清除项"，不是那句话怎么写）
     expect(mustFind(popover, 'nestboard-mind-toolbar__clear').textContent).toBe(
@@ -228,8 +233,12 @@ describe('快捷操作栏', () => {
     setState({ node: NODE, writable: true });
     mustFind(root, 'is-icon').emit('click', {});
 
-    const first = findAllByClass(root, 'nestboard-mind-toolbar__emoji')[0];
-    first?.emit('click', {});
+    const first = findAllByClass(
+      findAllByClass(root, 'nestboard-emoji-section')[0],
+      'nestboard-emoji-cell',
+    )[0];
+    // 格子的点击处理里有 `stopPropagation`（浮层挂在画布上，别让点击冒泡去取消选中）
+    first?.emit('click', { stopPropagation: () => undefined });
 
     // ★ 断言"清单里的第一个"而不是写死某个 emoji：分组是按用途排的，
     //   哪天调整顺序（或换一套清单），这条用例不该跟着红 —— 它要钉的是
@@ -303,9 +312,9 @@ describe('快捷操作栏', () => {
     setState({ node: NODE, writable: true });
 
     mustFind(root, 'is-icon').emit('click', {});
-    expect(findAllByClass(root, 'nestboard-mind-toolbar__emoji').length).toBeGreaterThan(0);
+    expect(findAllByClass(root, 'nestboard-iconpicker').length).toBeGreaterThan(0);
     mustFind(root, 'is-icon').emit('click', {});
-    expect(findAllByClass(root, 'nestboard-mind-toolbar__emoji')).toHaveLength(0);
+    expect(findAllByClass(root, 'nestboard-iconpicker')).toHaveLength(0);
   });
 
   it('`closePopovers` 由外面叫也能收（点画布别处走这一条）', () => {

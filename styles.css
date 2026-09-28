@@ -7807,8 +7807,10 @@ body.nestboard-mind-box-all-depths {
   flex-direction: column;
   gap: 6px;
   max-width: min(560px, 90vw);
-  max-height: 300px;
-  overflow: auto;
+  /* ★ 要装得下图标面板那块**固定高**的视口（≤360px）+ 标签行 + 搜索框；
+     这里不滚（滚动归面板里的页，见 `.nestboard-iconpicker__page`） */
+  max-height: min(72vh, 480px);
+  overflow: hidden;
   padding: 8px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--nestboard-radius);
@@ -7821,28 +7823,8 @@ body.nestboard-mind-box-all-depths {
   display: flex;
 }
 
-/* ★ 滚动条只留**一层**（用户 2026-09-28："切换到复古游戏机之后，显示了两层滚动条"）：
- *   这个弹层自己有 `max-height: 300px; overflow: auto`，而里面的"页"
- *   （`.nestboard-emoji-panel`）也有 `max-height: 52vh; overflow-y: auto`
- *   —— 两层都超了就是两根条。规矩定成：**外层不滚（标签页留在原位）、里层滚**。
- * ─────────────────────────────────────────────────────── */
-.nestboard-mind-toolbar__popover {
-  overflow: hidden;
-}
-
-.nestboard-mind-toolbar__panels {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
 /* 里层的高度按"弹层最大高 - 标签行 - 内边距"给一个确定值：
    百分比高度在 flex 子项上各家实现不一致，写死更好预测 */
-.nestboard-mind-toolbar__panels > .nestboard-emoji-panel {
-  max-height: 220px;
-}
-
 /* 标记弹层里的两"页"（传统 emoji / 复古游戏机，用户 2026-09-28）：
  * ★ 为什么必须写这一条：`.is-hidden` 在本仓是**逐构件**定义的（各弹层各写一条），
  *   这个弹层从前只有一页、没有这个概念 ⇒ 补上两页之后两页会**一起**显示，
@@ -7850,10 +7832,6 @@ body.nestboard-mind-box-all-depths {
  * ★ 只对**直接子元素**生效：`groups` 与像素页都是 `__panels` 的子元素，
  *   不会误伤页内自己的元素。
  * ─────────────────────────────────────────────────────── */
-.nestboard-mind-toolbar__panels > .is-hidden {
-  display: none;
-}
-
 .nestboard-mind-toolbar__group {
   display: flex;
   align-items: center;
@@ -8475,23 +8453,12 @@ body.nestboard-mind-box-all-depths {
  *   整片网格的对齐立刻看得出歪。
  * ───────────────────────────────────────────────────────── */
 
-/* ★ 滚动条只留**这一层**（用户 2026-09-28：切到像素图标那页出现两根条）：
- *   网格自己滚（上面的标签页 / 搜索框留在原位），外面那层不滚 —— 见下面
- *   `.nestboard-icon-grid-host` 那一条。 */
+/* ★ 本面板**不滚**：滚动归装它的那一页（`.nestboard-iconpicker__page`）——
+ *   于是同一个视口里永远只有一根滚动条，而且切页时它自己不会跳（见面板那段注释）。 */
 .nestboard-emoji-panel {
   display: flex;
   flex-direction: column;
   gap: var(--size-4-2, 8px);
-  max-height: 52vh;
-  padding-right: var(--size-4-1, 4px);
-  overflow-y: auto;
-}
-
-/* 选择器弹窗里装网格的那一格：**不滚**（滚动交给 `.nestboard-emoji-panel`），
-   于是无论哪一页都只有一根滚动条 */
-.nestboard-icon-grid-host {
-  max-height: 60vh;
-  overflow: hidden;
 }
 
 .nestboard-emoji-group-title {
@@ -9752,26 +9719,117 @@ body.theme-dark.nestboard-neumorph .nestboard-card {
   image-rendering: pixelated;
 }
 
-/* 选择器的两个标签页（Emoji / 复古游戏机） */
-.nestboard-icon-tabs {
+/* ── 图标选择面板（两页：传统 emoji / 复古游戏机）─────────────────────────
+ * 用户 2026-09-28："这里的整个组件最好规划一下重写"。这一版只做四件事，每件对应一条具体报障：
+ *
+ *  1. **视口高度固定**（`__viewport`）：两页共用一块固定高的窗口 ⇒ 切页时整个 UI 尺寸不变
+ *     （从前是"哪一页高就长成哪一页"，切过去要跳一下）；
+ *  2. **每页自己滚**（`__page` 绝对定位铺满视口 + `overflow-y: auto`）：任何时刻只有
+ *     **一根**滚动条，两页各记各的滚动位置；`overscroll-behavior: contain` 保证
+ *     "滚到头继续滚"不外溢（从前是弹层 + 页两条并行，滚到底还能滚出框外）；
+ *  3. **滚轮归面板**：页上带 `data-nestboard-wheel-scroll`，画布那层
+ *     （`BoardView.scrollBodyUnder`）会把滚轮让给它 ⇒ 在面板上滚轮不缩放 / 不平移画布；
+ *  4. **像素图标每行 8 个正方形底框**（用户明确要求）。
+ * 两个调用方（白板卡的标记选择器 / 脑图工具栏的标记弹层）共用这一份。
+ * ─────────────────────────────────────────────────────── */
+.nestboard-iconpicker {
   display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
+  flex-direction: column;
+  gap: 8px;
+  /* ★ 给一个**下限宽度**：脑图工具栏那条弹层是"按内容定宽"的，而像素网格用的是
+      `1fr` 列 —— 没有下限时"内容要多少宽"就成了循环依赖，八列会缩成一条细带。 */
+  min-width: 320px;
 }
 
-.nestboard-icon-tabs button {
+.nestboard-iconpicker__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.nestboard-iconpicker__tab {
   padding: 2px 10px;
-  border-radius: var(--nestboard-radius);
   border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nestboard-radius);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
 }
 
-.nestboard-icon-tabs button.is-active {
+.nestboard-iconpicker__tab.is-active {
   background: var(--interactive-accent);
   border-color: var(--interactive-accent);
   color: var(--text-on-accent);
+}
+
+.nestboard-iconpicker__search {
+  width: 100%;
+}
+
+/* 固定高的视口：两页**同一块窗口**，切换不跳尺寸 */
+.nestboard-iconpicker__viewport {
+  position: relative;
+  height: min(46vh, 360px);
+}
+
+/* 一页：铺满视口、自己滚（`absolute` 才有确定高度，百分比高度在 flex 里不可靠） */
+.nestboard-iconpicker__page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.nestboard-iconpicker__page.is-hidden {
+  display: none;
+}
+
+/* 像素图标：一行 8 个，正方形底框 */
+.nestboard-iconpicker__pixels {
+  display: grid;
+  /* 一行 8 个；`minmax(0, 1fr)` 是防"格子里的 SVG 把列撑宽"（否则窄窗口下会横向溢出） */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.nestboard-iconpicker__pixel {
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  padding: 5px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--nestboard-radius);
+  background-color: var(--background-secondary);
+  cursor: pointer;
+}
+
+.nestboard-iconpicker__pixel:hover {
+  border-color: var(--interactive-accent);
+  background-color: var(--background-modifier-hover);
+}
+
+.nestboard-iconpicker__pixel.is-current {
+  border-color: var(--interactive-accent);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.nestboard-iconpicker__pixel > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.nestboard-pixel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nestboard-pixel-group-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 11px);
 }
 
 /* ── 查找 / 替换浮条 + 命中高亮（用户 2026-09-28："参考 obsidian 原生"）─────

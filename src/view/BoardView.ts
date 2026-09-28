@@ -440,6 +440,7 @@ import { CARD_ID_ATTR, VIEW_TYPE_CARD_INSPECTOR, VIEW_TYPE_PRESENT_PATH } from '
 import { CardInspectorPanelView } from '../ui/CardInspectorPanel';
 import type { PresentPathHost } from '../ui/PresentPathPanel';
 import { FindBar } from '../ui/FindBar';
+import { WHEEL_SCROLL_ATTR } from '../ui/iconPickerPanel';
 import { applyFindHighlight, clearFindHighlight, selectMatchInTextarea } from '../ui/findHighlight';
 import { InkBar } from '../ui/InkBar';
 import { CardFilterBar } from '../ui/CardFilterBar';
@@ -7089,6 +7090,12 @@ export class BoardView extends FileView {
    *   两者唯一的共同祖先是画布，所以只能拿指针位置回头问模型"这是哪一栏"。
    */
   private scrollBodyUnder(event: WheelEvent): HTMLElement | null {
+    // ★ 先问"指针底下那个浮层要不要这次滚轮"（用户 2026-09-28：在图标选择面板上滚轮
+    //   应该滚 UI 自己的滚动条，而不是缩放 / 平移画布）。
+    //   这一条必须排在最前：浮层比任何栏都贴脸，而且它可能就悬在某一栏上面。
+    const overlay = wheelScrollHostOf(event.target);
+    if (overlay) return overlay;
+
     const canvas = this.canvasEl;
     const board = this.board;
     if (!canvas || !board) return null;
@@ -12489,6 +12496,17 @@ const TRAIL_DEPTH_LIMIT = 12;
 const EDGE_HIT_TOLERANCE_PX = 8;
 
 /** 卡片 → 拖动控制器的矩形入参（只取几何，不带卡片引用） */
+/**
+ * 指针路径上第一个"自报要接滚轮"的容器（属性见 `iconPickerPanel.WHEEL_SCROLL_ATTR`）。
+ *
+ * ★ 为什么用**属性自报**而不是在画布这边列一张类名清单：浮层是别人搭的，画布不该
+ *   认识它的内部结构（改一次类名就要回来改这里）。谁想自己滚，谁挂这个属性。
+ */
+function wheelScrollHostOf(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  return target.closest<HTMLElement>(`[${WHEEL_SCROLL_ATTR}]`);
+}
+
 /** 这一下按键是不是落在"自己在用键"的元素上（输入框 / 按钮 / 可编辑块） */
 function isInteractiveKeyTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
