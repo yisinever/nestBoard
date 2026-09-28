@@ -362,13 +362,15 @@ export class ConnectController {
     // ★ 临时诊断（定位"把手离端点远"这条，2026-09-28）：每次**换一条选中的线**打一行，
     //   把两端的世界 / 屏幕坐标与宿主原点都写出来 —— 一眼能分出是"端点算错"还是
     //   "往屏幕换算错"。定位完就删。
+    //   ★ 用 `warn` 而不是 `debug`：开发者工具的「Default levels」**不显示 Verbose**，
+    //     上一版用 `debug` 于是控制台一片空白（用户 2026-09-28 的截图）。
     if (edge.id !== this.diagnosedEdgeId) {
       this.diagnosedEdgeId = edge.id;
       const world = {
         from: this.endpointWorldPointOf(edge, 'from'),
         to: this.endpointWorldPointOf(edge, 'to'),
       };
-      console.debug('[nestboard] 端点把手几何', {
+      console.warn('[nestboard] 端点把手几何', {
         edge,
         bounds: { left: bounds.left, top: bounds.top },
         world,
