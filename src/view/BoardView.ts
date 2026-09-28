@@ -10543,13 +10543,11 @@ export class BoardView extends FileView {
     // 折线是折点序列）—— 两端就是本条线的**端点**（落在卡片边框上）
     const points = path.points;
     if (points.length === 0) return null;
-    // ★ 端点在**卡片边框上**，把手圆心对着它意味着一半压进卡里，不好抓也看不清 ——
-    //   按用户 2026-09-28 的口径"**只要偏个十几像素即可**"：沿**线的方向**往外挪
-    //   `EDGE_HANDLE_OFFSET`，它贴着线头、又整颗落在卡片外面。
-    // ★ 用"沿着线"而不是"沿锚点法线"：斜着连的线上，法线方向会把把手推离线身。
-    const tip = end === 'from' ? points[0] : points[points.length - 1];
-    const next = end === 'from' ? points[1] : points[points.length - 2];
-    return next ? advanceToward(tip, next, EDGE_HANDLE_OFFSET) : tip;
+    // ★★ 就摆在**端点正上**（用户 2026-09-28："要放到端点附近"）。
+    //   曾经试过"沿线的方向外移十几像素"（`b124`）：在部分路径几何下方向算歪，
+    //   把手飞到了离线和卡片都很远的地方（用户截图）⇒ **不做任何偏移** ——
+    //   `path.points` 的两端就是端点的世界坐标，零偏移是唯一不会算错的做法。
+    return end === 'from' ? points[0] : points[points.length - 1];
   }
 
   /** 卡片此刻的旋转角（度）：拖动预览覆盖模型值（T7.06） */
@@ -12529,25 +12527,6 @@ const TRAIL_DEPTH_LIMIT = 12;
  *   靠连线看清板子结构。
  */
 const EDGE_HIT_TOLERANCE_PX = 8;
-
-/**
- * 端点重拖把手离端点的距离（世界 px）。
- *
- * 用户 2026-09-28："**只要偏个十几像素即可**" —— 端点落在卡片边框上，把手圆心对着它
- * 就有一半压在卡里（不好抓、也看不清）；沿**线的方向**外移这十几像素，整颗把手落在
- * 卡片外、又紧贴着线头。取值 14：肉眼是"贴着端点"，同时完全离开卡片边缘。
- */
-const EDGE_HANDLE_OFFSET = 14;
-
-/** 从 `from` 朝 `to` 走 `distance`（不够就走到 `to`；两点重合原样返回） */
-function advanceToward(from: Point, to: Point, distance: number): Point {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const length = Math.hypot(dx, dy);
-  if (!Number.isFinite(length) || length === 0) return from;
-  const step = Math.min(distance, length);
-  return { x: from.x + (dx / length) * step, y: from.y + (dy / length) * step };
-}
 
 /** 卡片 → 拖动控制器的矩形入参（只取几何，不带卡片引用） */
 /**
