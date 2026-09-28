@@ -10072,6 +10072,24 @@ export class BoardView extends FileView {
   }
 
   /**
+   * 这张卡**正文**的纯文字（没有正文就给 `null`）。
+   *
+   * ★ 走卡片类型自己的 `toMarkdown`（注册表收口）—— 便签是 `content.md`、待办是各条文本、
+   *   引用卡是文件内容……**每种类型的"正文"由它自己回答**，视图这一层不该再写一遍
+   *   switch（那必然会漏掉后加的卡型）。
+   */
+  private copyableTextOf(card: Card): string | null {
+    const text = this.cardRegistry.toMarkdown(card, { sourcePath: this.currentPath ?? '' }).trim();
+    return text.length > 0 ? text : null;
+  }
+
+  /** 这张卡**标题**那一行（用户写过的优先，空则问类型 —— 与收起态同一口径） */
+  private copyableTitleOf(card: Card): string | null {
+    const title = this.cardRegistry.collapsedTitle(card).trim();
+    return title.length > 0 ? title : null;
+  }
+
+  /**
    * 这一刻**卡内**选中的文字（没有 / 不在卡里就给 `null`）。
    *
    * ★ 判据两条，缺一不可：选区非空，且**锚点就在这张卡的元素里** ——
@@ -10102,7 +10120,7 @@ export class BoardView extends FileView {
    */
   private prepareCardMenu(
     cardId: string,
-    textSelection: string | null = null,
+    selectionText: string | null = null,
   ): MenuItemSpec[] | null {
     const board = this.board;
     if (!board) return null;
@@ -10114,7 +10132,9 @@ export class BoardView extends FileView {
     const selection = board.cards.filter((item) => ids.has(item.id));
 
     return buildCardMenuSpec({
-      textSelection,
+      // 「复制文字」：**选了哪段就复制哪段**，没选就复制这张卡的正文
+      copyText: selectionText ?? this.copyableTextOf(card),
+      copyTitle: this.copyableTitleOf(card),
       selection,
       target: card,
       actions: this.cardMenuActions(),

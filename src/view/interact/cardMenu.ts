@@ -402,13 +402,16 @@ export interface CardMenuInput {
   /** 被右击的那张 —— 单选时等于 `selection[0]`，多选时是"主目标" */
   target: Card;
   /**
-   * 此刻卡内**选中的文字**（没有选中就是 `null`）。
+   * 「复制文字」要复制的那一段（没有就给 `null`，那一项不出现）。
    *
-   * ★ 有选中时，菜单里的「复制」= 复制这段文字（用户 2026-09-28 的原话：
-   *   "右键，复制，实际上是复制出的这个对象。应该是，如果有选中文本，则复制出选中的文本"），
-   *   而"复制整张卡片"另立一项、明确写成「复制卡片」—— 两件事都还在，只是各有名字。
+   * ★ 由调用方算好：**卡内选了文字就是那段文字**，没选就是这张卡的正文
+   *   （用户 2026-09-28："复制对象，复制文本，复制标题确实可以做成菜单中的 3 个不同选项"）。
+   * ★ 规格层不认识"正文是什么"（那是卡片类型的事）—— 与 `inlineEdit` / `hiddenItems`
+   *   同一条约定：判断留在视图，这里只要一个字符串。
    */
-  textSelection?: string | null;
+  copyText?: string | null;
+  /** 「复制标题」要复制的那一行（没有标题 ⇒ `null`，那一项不出现） */
+  copyTitle?: string | null;
   actions: CardMenuActions;
   /** 卡片类型提供的菜单项（引用卡的"打开源笔记""重新链接"…） */
   typeItems?: readonly TypeMenuInput[];
@@ -696,24 +699,37 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
    * ★ 先定义成变量再入数组，是为了给只读判定留一份**引用**（见下面的 `safe`）：
    *   **复制不写模型**，归档板上照样该能用；剪切会删卡，得跟着写操作一起置灰。
    */
-  const textSelection = input.textSelection ?? null;
-  /** 卡内选中了文字 ⇒ 「复制」先给文字（见 `CardMenuInput.textSelection` 的说明） */
-  const copyTextItem: MenuItemSpec | null = textSelection
-    ? {
-        id: 'copy-text',
-        title: t('menu.card.copyText'),
-        icon: 'copy',
-        run: () => actions.copyText(textSelection),
-      }
-    : null;
+  // ★★ 复制做成**三个各管一件事**的项（用户 2026-09-28）：
+  //   「复制卡片」= 对象（能粘回白板）/「复制文字」= 正文文字 /「复制标题」= 那一行名字。
+  //   从前只有一项「复制」，它复制的是**对象** —— 用户想拿一句话时拿到的却是一张卡。
+  //   ★ 三项**都是常设**（不再是"有选中文字时改名字"）：菜单项的含义不该随选区变。
+  //   后两项只在这张卡确实有那段文字时出现（没有就没有，不置灰 —— 见 `menuItems` 的说明）。
   const copyItem: MenuItemSpec = {
-    // 有选中文字时这一项退成「复制卡片」：不这样的话用户看到的还是「复制」，
-    // 点下去又拿到对象 —— 正是他报的那件事
-    id: textSelection ? 'copy-card' : 'copy',
-    title: t(textSelection ? 'menu.card.copyCard' : 'menu.card.copy'),
+    id: 'copy',
+    title: t('menu.card.copyCard'),
     icon: 'copy',
     run: () => actions.copy(),
   };
+  const copyText = (input.copyText ?? '').trim();
+  const copyTextItem: MenuItemSpec | null =
+    copyText.length > 0
+      ? {
+          id: 'copy-text',
+          title: t('menu.card.copyText'),
+          icon: 'clipboard',
+          run: () => actions.copyText(copyText),
+        }
+      : null;
+  const copyTitle = (input.copyTitle ?? '').trim();
+  const copyTitleItem: MenuItemSpec | null =
+    copyTitle.length > 0
+      ? {
+          id: 'copy-title',
+          title: t('menu.card.copyTitle'),
+          icon: 'heading',
+          run: () => actions.copyText(copyTitle),
+        }
+      : null;
   const cutItem: MenuItemSpec = {
     id: 'cut',
     title: t('menu.card.cut'),
@@ -882,8 +898,9 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
           },
         ]
       : []),
-    ...(copyTextItem ? [copyTextItem] : []),
     copyItem,
+    ...(copyTextItem ? [copyTextItem] : []),
+    ...(copyTitleItem ? [copyTitleItem] : []),
     cutItem,
     {
       id: 'duplicate',
@@ -1076,6 +1093,9 @@ export function buildCardMenuSpec(input: CardMenuInput): MenuItemSpec[] {
 
   // 「复制」是纯读动作（写的是系统剪贴板，不碰 `.nboard`），与上面三个同一档
   safe.add(copyItem);
+  // 「复制文字」/「复制标题」同样**不写模型**（归档板上也该能拷出内容）
+  if (copyTextItem) safe.add(copyTextItem);
+  if (copyTitleItem) safe.add(copyTitleItem);
 
   if (!readOnly) return items;
 

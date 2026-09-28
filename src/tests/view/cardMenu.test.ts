@@ -934,38 +934,43 @@ describe('buildCardMenuSpec · 排列与编组（C2）', () => {
 });
 
 /**
- * 卡内**选中文字**时的「复制」（用户 2026-09-28："右键，复制，实际上是复制出的这个对象。
- * 应该是，如果有选中文本，则复制出选中的文本"）。
+ * 复制的**三项**（用户 2026-09-28："复制对象，复制文本，复制标题确实可以做成菜单中的
+ * 3 个不同选项"）。
  *
- * 两条一起钉：① 有选中 ⇒ 第一项是「复制文字」且绑的是那段文字；
- * ② 原来的「复制整张卡」**不消失**，只是改名为「复制卡片」。
+ * 三条一起钉：① 三项各自独立、含义不随选区变；② 「复制文字」拿到的是**传进来的那段**
+ * （视图已经算好"选区优先、否则正文"）；③ 没有正文 / 没有标题时对应项**不出现**。
  */
-describe('buildCardMenuSpec × 选中文字时的复制（2026-09-28）', () => {
+describe('buildCardMenuSpec × 复制的三项（2026-09-28）', () => {
   const target = createCard('note');
 
-  it('★ 有选中文字：给「复制文字」，run 带上那段文字', () => {
+  it('★ 三项：复制卡片 / 复制文字 / 复制标题，各自的 run 落对地方', () => {
     const actions = makeActions();
     const spec = buildCardMenuSpec({
       selection: [target],
       target,
       actions,
-      textSelection: '被选中的那句话',
+      copyText: '这段话',
+      copyTitle: '这个标题',
     });
-    const item = spec.find((entry) => entry.id === 'copy-text');
-    expect(item?.title).toBe(t('menu.card.copyText'));
-    item?.run?.();
-    expect(actions.copyText).toHaveBeenCalledWith('被选中的那句话');
-    // 「复制整张卡」还在，只是换了名字 —— 两件事各有各的入口
-    expect(spec.find((entry) => entry.id === 'copy-card')?.title).toBe(t('menu.card.copyCard'));
+    expect(spec.find((entry) => entry.id === 'copy')?.title).toBe(t('menu.card.copyCard'));
+    const textItem = spec.find((entry) => entry.id === 'copy-text');
+    const titleItem = spec.find((entry) => entry.id === 'copy-title');
+    expect(textItem?.title).toBe(t('menu.card.copyText'));
+    expect(titleItem?.title).toBe(t('menu.card.copyTitle'));
+
+    spec.find((entry) => entry.id === 'copy')?.run?.();
+    textItem?.run?.();
+    titleItem?.run?.();
+    expect(actions.copy).toHaveBeenCalledTimes(1);
+    expect(actions.copyText).toHaveBeenNthCalledWith(1, '这段话');
+    expect(actions.copyText).toHaveBeenNthCalledWith(2, '这个标题');
   });
 
-  it('没有选中文字：老样子（一项「复制」= 整张卡）', () => {
-    const actions = makeActions();
-    const spec = buildCardMenuSpec({ selection: [target], target, actions });
+  it('没有正文 / 没有标题：那两项不出现（不是置灰 —— 这张卡上确实没有这件事）', () => {
+    const spec = buildCardMenuSpec({ selection: [target], target, actions: makeActions() });
     expect(spec.find((entry) => entry.id === 'copy-text')).toBeUndefined();
-    const item = spec.find((entry) => entry.id === 'copy');
-    expect(item?.title).toBe(t('menu.card.copy'));
-    item?.run?.();
-    expect(actions.copy).toHaveBeenCalled();
+    expect(spec.find((entry) => entry.id === 'copy-title')).toBeUndefined();
+    // 「复制卡片」永远都在
+    expect(spec.find((entry) => entry.id === 'copy')?.title).toBe(t('menu.card.copyCard'));
   });
 });
