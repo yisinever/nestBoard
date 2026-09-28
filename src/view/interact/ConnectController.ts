@@ -378,7 +378,7 @@ export class ConnectController {
       const describe = (target: EdgeEndpoint): string =>
         isFreeEndpoint(target)
           ? `free@${point(target.point ?? null)}`
-          : `${target.key} side=${target.side ?? 'auto'} rect=${rectOf(endpointAnchorKey(target))}`;
+          : `${endpointAnchorKey(target)} side=${target.side ?? 'auto'} rect=${rectOf(endpointAnchorKey(target))}`;
       // ★★ 打成**一行纯文本**（控制台默认把对象折叠成 `{…}`，用户复制不到内容）：
       //   整行复制发出来即可 —— `JSON.stringify` 之后是一个字符串，不带折叠。
       console.warn(
@@ -395,7 +395,6 @@ export class ConnectController {
             zoom: round(this.viewport.zoom),
           }),
       );
-    }
     }
     for (const end of ['from', 'to'] as const) {
       const handle = this.endHandles.get(end);
@@ -443,13 +442,6 @@ export class ConnectController {
     const drawn = this.drawnEndpointOf?.(edge as Edge, end) ?? null;
     if (drawn) return drawn;
     return isFreeEndpoint(edge[end]) ? (edge[end].point ?? null) : null;
-  }
-
-  /** 临时诊断用：端点绑定的那个对象的矩形（自由端 / 找不到给 `null`） */
-  private hostBoundsSizeOf(target: EdgeEndpoint): unknown {
-    if (isFreeEndpoint(target)) return { free: true, point: target.point ?? null };
-    const rect = this.rectOfKey(this.hoveredOf(endpointAnchorKey(target)));
-    return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
   }
 
   /** 临时诊断用：上一条打过日志的线（避免同一选择刷屏） */
